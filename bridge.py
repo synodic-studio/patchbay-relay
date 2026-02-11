@@ -15,6 +15,7 @@ import logging
 import os
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -38,15 +39,18 @@ if _raw.strip():
 
 CLAUDE_PATH = os.environ.get("CLAUDE_PATH", "/opt/homebrew/bin/claude")
 WORKING_DIR = os.environ.get("CLAUDE_WORKING_DIR", os.path.expanduser("~/Developer"))
-CLAUDE_TIMEOUT = int(os.environ.get("CLAUDE_TIMEOUT", "300"))
 PA_MCP_CONFIG = os.environ.get(
     "PA_MCP_CONFIG",
     os.path.expanduser("~/Developer/claude-pa/.mcp.json"),
 )
 SESSION_EXPIRY = int(os.environ.get("SESSION_EXPIRY", "7200"))  # 2 hours
+MAX_TIMEOUT = int(os.environ.get("MAX_TIMEOUT", "1800"))  # 30 min safety valve
 
 SESSION_DIR = Path(__file__).parent / "sessions"
 SESSION_DIR.mkdir(exist_ok=True)
+
+# Single worker = messages processed sequentially, no session conflicts
+_executor = ThreadPoolExecutor(max_workers=1)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -55,6 +59,7 @@ logging.basicConfig(
 logger = logging.getLogger("bridge")
 
 TELEGRAM_MSG_LIMIT = 4096
+TYPING_INTERVAL = 4  # seconds between typing indicators
 
 
 def get_session_id(chat_id: int) -> str | None:
@@ -85,8 +90,34 @@ def clear_session(chat_id: int) -> None:
         session_file.unlink()
 
 
+def parse_claude_response(stdout: str, chat_id: int) -> str:
+    """Extract text and session_id from claude JSON output."""
+    try:
+        events = json.loads(stdout)
+        result_event = next(
+            (e for e in reversed(events) if e.get("type") == "result"), None
+        )
+        if result_event:
+            new_session_id = result_event.get("session_id")
+            if new_session_id:
+                save_session_id(chat_id, new_session_id)
+                logger.info(
+                    "Saved session %s for chat %d", new_session_id[:12], chat_id
+                )
+            return result_event.get("result", "(no result text)")
+        for e in reversed(events):
+            if e.get("type") == "assistant":
+                content = e.get("message", {}).get("content", [])
+                texts = [c["text"] for c in content if c.get("type") == "text"]
+                if texts:
+                    return "\n".join(texts)
+        return "(no parseable response)"
+    except (json.JSONDecodeError, TypeError):
+        return stdout
+
+
 def run_claude(message: str, chat_id: int) -> str:
-    """Invoke claude CLI and return its output. Resumes session if one exists."""
+    """Invoke claude CLI via Popen. Does not kill on timeout."""
     session_id = get_session_id(chat_id)
 
     cmd = [
@@ -110,45 +141,43 @@ def run_claude(message: str, chat_id: int) -> str:
         cmd.extend(["--resume", session_id])
         logger.info("Resuming session %s", session_id[:12])
 
-    result = subprocess.run(
+    proc = subprocess.Popen(
         cmd,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        timeout=CLAUDE_TIMEOUT,
         cwd=WORKING_DIR,
     )
 
-    stdout = result.stdout.strip()
+    # Wait for completion — no kill. Safety valve at MAX_TIMEOUT.
+    try:
+        stdout, stderr = proc.communicate(timeout=MAX_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        return f"Claude hit the {MAX_TIMEOUT // 60} minute safety limit. The work may be partially saved — check git status."
+
+    stdout = stdout.strip()
     if not stdout:
-        if result.stderr:
-            return f"(no output. stderr: {result.stderr[:500]})"
+        if stderr:
+            return f"(no output. stderr: {stderr[:500]})"
         return "(no output)"
 
-    # Parse JSON response: output is a list of events.
-    # Last element (type "result") has the text and session_id.
-    try:
-        events = json.loads(stdout)
-        result_event = next(
-            (e for e in reversed(events) if e.get("type") == "result"), None
-        )
-        if result_event:
-            new_session_id = result_event.get("session_id")
-            if new_session_id:
-                save_session_id(chat_id, new_session_id)
-                logger.info(
-                    "Saved session %s for chat %d", new_session_id[:12], chat_id
-                )
-            return result_event.get("result", "(no result text)")
-        # No result event found — return raw text of last assistant message
-        for e in reversed(events):
-            if e.get("type") == "assistant":
-                content = e.get("message", {}).get("content", [])
-                texts = [c["text"] for c in content if c.get("type") == "text"]
-                if texts:
-                    return "\n".join(texts)
-        return "(no parseable response)"
-    except (json.JSONDecodeError, TypeError):
-        return stdout
+    return parse_claude_response(stdout, chat_id)
+
+
+async def keep_typing(chat_id: int, stop_event: asyncio.Event, bot) -> None:
+    """Send typing indicator every few seconds until stop_event is set."""
+    while not stop_event.is_set():
+        try:
+            await bot.send_chat_action(chat_id=chat_id, action="typing")
+        except Exception:
+            pass
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=TYPING_INTERVAL)
+            return
+        except asyncio.TimeoutError:
+            continue
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -164,16 +193,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     chat_id = update.effective_chat.id
     logger.info("From %d: %s", user_id, text[:80])
-    await update.message.chat.send_action("typing")
+
+    # Start persistent typing indicator
+    stop_typing = asyncio.Event()
+    typing_task = asyncio.create_task(
+        keep_typing(chat_id, stop_typing, context.bot)
+    )
 
     try:
         loop = asyncio.get_running_loop()
-        response = await loop.run_in_executor(None, run_claude, text, chat_id)
-    except subprocess.TimeoutExpired:
-        response = f"Claude timed out after {CLAUDE_TIMEOUT}s."
+        response = await loop.run_in_executor(_executor, run_claude, text, chat_id)
     except Exception as e:
         logger.error("Error running claude: %s", e)
         response = f"Error: {e}"
+    finally:
+        stop_typing.set()
+        await typing_task
 
     for i in range(0, len(response), TELEGRAM_MSG_LIMIT):
         await update.message.reply_text(response[i : i + TELEGRAM_MSG_LIMIT])
