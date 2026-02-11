@@ -33,6 +33,10 @@ if _raw.strip():
 CLAUDE_PATH = os.environ.get("CLAUDE_PATH", "/opt/homebrew/bin/claude")
 WORKING_DIR = os.environ.get("CLAUDE_WORKING_DIR", os.path.expanduser("~/Developer"))
 CLAUDE_TIMEOUT = int(os.environ.get("CLAUDE_TIMEOUT", "300"))
+PA_MCP_CONFIG = os.environ.get(
+    "PA_MCP_CONFIG",
+    os.path.expanduser("~/Developer/claude-pa/.mcp.json"),
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -53,6 +57,8 @@ def run_claude(message: str) -> str:
             "--output-format",
             "text",
             "--dangerously-skip-permissions",
+            "--mcp-config",
+            PA_MCP_CONFIG,
             "--append-system-prompt",
             (
                 "Bryan is messaging you via Telegram from his phone. "
