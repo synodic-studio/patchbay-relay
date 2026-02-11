@@ -124,16 +124,30 @@ def run_claude(message: str, chat_id: int) -> str:
             return f"(no output. stderr: {result.stderr[:500]})"
         return "(no output)"
 
-    # Parse JSON response to extract session_id and text
+    # Parse JSON response: output is a list of events.
+    # Last element (type "result") has the text and session_id.
     try:
-        data = json.loads(stdout)
-        new_session_id = data.get("session_id")
-        if new_session_id:
-            save_session_id(chat_id, new_session_id)
-            logger.info("Saved session %s for chat %d", new_session_id[:12], chat_id)
-        return data.get("result", stdout)
-    except json.JSONDecodeError:
-        # Fallback: treat as plain text
+        events = json.loads(stdout)
+        result_event = next(
+            (e for e in reversed(events) if e.get("type") == "result"), None
+        )
+        if result_event:
+            new_session_id = result_event.get("session_id")
+            if new_session_id:
+                save_session_id(chat_id, new_session_id)
+                logger.info(
+                    "Saved session %s for chat %d", new_session_id[:12], chat_id
+                )
+            return result_event.get("result", "(no result text)")
+        # No result event found — return raw text of last assistant message
+        for e in reversed(events):
+            if e.get("type") == "assistant":
+                content = e.get("message", {}).get("content", [])
+                texts = [c["text"] for c in content if c.get("type") == "text"]
+                if texts:
+                    return "\n".join(texts)
+        return "(no parseable response)"
+    except (json.JSONDecodeError, TypeError):
         return stdout
 
 
