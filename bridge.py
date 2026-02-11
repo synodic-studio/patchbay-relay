@@ -39,9 +39,9 @@ if _raw.strip():
 
 CLAUDE_PATH = os.environ.get("CLAUDE_PATH", "/opt/homebrew/bin/claude")
 WORKING_DIR = os.environ.get("CLAUDE_WORKING_DIR", os.path.expanduser("~/Developer"))
-PA_MCP_CONFIG = os.environ.get(
-    "PA_MCP_CONFIG",
-    os.path.expanduser("~/Developer/claude-pa/.mcp.json"),
+PA_PLUGIN_DIR = os.environ.get(
+    "PA_PLUGIN_DIR",
+    os.path.expanduser("~/Developer/claude-pa"),
 )
 SESSION_EXPIRY = int(os.environ.get("SESSION_EXPIRY", "7200"))  # 2 hours
 MAX_TIMEOUT = int(os.environ.get("MAX_TIMEOUT", "1800"))  # 30 min safety valve
@@ -127,18 +127,10 @@ def run_claude(message: str, chat_id: int) -> str:
         "--output-format",
         "json",
         "--dangerously-skip-permissions",
-        "--mcp-config",
-        PA_MCP_CONFIG,
+        "--plugin-dir",
+        PA_PLUGIN_DIR,
         "--append-system-prompt",
-        (
-            "Bryan is messaging you via Telegram from his phone. "
-            "Keep responses concise - he's on mobile. "
-            "You have full access to all your MCP tools and can do real work. "
-            "For email access, use the himalaya CLI: "
-            "'himalaya envelope list --account icloud' or '--account gmail' to list emails, "
-            "'himalaya message read <id> --account <account>' to read them. "
-            "Bryan's accounts: iCloud (REDACTED@example.com) and Gmail (REDACTED@example.com)."
-        ),
+        "Bryan is messaging you via Telegram from his phone. Keep responses concise - he's on mobile.",
     ]
 
     if session_id:
