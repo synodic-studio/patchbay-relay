@@ -133,7 +133,11 @@ def run_claude(message: str, chat_id: int) -> str:
         (
             "Bryan is messaging you via Telegram from his phone. "
             "Keep responses concise - he's on mobile. "
-            "You have full access to all your MCP tools and can do real work."
+            "You have full access to all your MCP tools and can do real work. "
+            "For email access, use the himalaya CLI: "
+            "'himalaya envelope list --account icloud' or '--account gmail' to list emails, "
+            "'himalaya message read <id> --account <account>' to read them. "
+            "Bryan's accounts: iCloud (REDACTED@example.com) and Gmail (REDACTED@example.com)."
         ),
     ]
 
