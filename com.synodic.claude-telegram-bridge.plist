@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.synodic.claude-telegram-bridge</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/bryancostanza/Developer/claude-telegram-bridge/run.sh</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/Users/bryancostanza/Developer/claude-telegram-bridge/logs/bridge.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/bryancostanza/Developer/claude-telegram-bridge/logs/bridge.err</string>
+    <key>WorkingDirectory</key>
+    <string>/Users/bryancostanza/Developer/claude-telegram-bridge</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+</dict>
+</plist>

@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.synodic.claude-email-triage</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/bryancostanza/Developer/claude-telegram-bridge/email-triage.sh</string>
+    </array>
+    <key>StartInterval</key>
+    <integer>1500</integer>
+    <key>RunAtLoad</key>
+    <false/>
+    <key>StandardOutPath</key>
+    <string>/Users/bryancostanza/Developer/claude-telegram-bridge/logs/email-triage.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/bryancostanza/Developer/claude-telegram-bridge/logs/email-triage.err</string>
+    <key>WorkingDirectory</key>
+    <string>/Users/bryancostanza/Developer</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>/Users/bryancostanza</string>
+    </dict>
+</dict>
+</plist>
