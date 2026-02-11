@@ -200,8 +200,21 @@ async def cmd_ping(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("pong")
 
 
+async def post_init(app: Application) -> None:
+    """Register bot commands so they appear in Telegram's UI menu."""
+    from telegram import BotCommand
+
+    await app.bot.set_my_commands(
+        [
+            BotCommand("new", "Start a fresh conversation"),
+            BotCommand("ping", "Check if bridge is alive"),
+        ]
+    )
+    logger.info("Bot commands registered with Telegram")
+
+
 def main() -> None:
-    app = Application.builder().token(BOT_TOKEN).build()
+    app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("new", cmd_new))
     app.add_handler(CommandHandler("ping", cmd_ping))
