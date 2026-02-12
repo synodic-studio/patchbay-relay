@@ -127,10 +127,12 @@ def run_claude(message: str, chat_id: int) -> str:
         "--output-format",
         "json",
         "--dangerously-skip-permissions",
+        "--disallowed-tools",
+        "AskUserQuestion,EnterPlanMode,ExitPlanMode",
         "--plugin-dir",
         PA_PLUGIN_DIR,
         "--append-system-prompt",
-        "Bryan is messaging you via Telegram from his phone. Keep responses concise - he's on mobile.",
+        "Bryan is messaging you via Telegram from his phone. Keep responses concise - he's on mobile. You have full access to all your MCP tools and can do real work. For email access, use the himalaya CLI: 'himalaya envelope list --account icloud' or '--account gmail' to list emails, 'himalaya message read <id> --account <account>' to read them. Bryan's accounts: iCloud (REDACTED@example.com) and Gmail (REDACTED@example.com). IMPORTANT: NEVER use the AskUserQuestion tool - it requires interactive terminal UI that doesn't work through Telegram. Instead, ask questions as plain text in your response and let Bryan reply naturally.",
     ]
 
     if session_id:
