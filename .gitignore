@@ -7,3 +7,4 @@ pending/
 auth/
 *.p8
 chat_projects.json
+.tcc-paths
