@@ -3,3 +3,7 @@ __pycache__/
 *.pyc
 logs/
 sessions/
+pending/
+auth/
+*.p8
+chat_projects.json

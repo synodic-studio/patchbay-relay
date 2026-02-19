@@ -3,10 +3,11 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.synodic.claude-telegram-bridge</string>
+    <string>dev.kj6.auth-bridge</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/bryancostanza/Developer/claude-telegram-bridge/run.sh</string>
+        <string>/bin/bash</string>
+        <string>/Users/bryancostanza/Developer/claude-telegram-bridge/run_auth.sh</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
@@ -15,12 +16,12 @@
         <key>SuccessfulExit</key>
         <false/>
     </dict>
-    <key>StandardOutPath</key>
-    <string>/Users/bryancostanza/Developer/claude-telegram-bridge/logs/bridge.log</string>
-    <key>StandardErrorPath</key>
-    <string>/Users/bryancostanza/Developer/claude-telegram-bridge/logs/bridge.err</string>
     <key>WorkingDirectory</key>
     <string>/Users/bryancostanza/Developer/claude-telegram-bridge</string>
+    <key>StandardOutPath</key>
+    <string>/Users/bryancostanza/Developer/claude-telegram-bridge/logs/auth-bridge.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/bryancostanza/Developer/claude-telegram-bridge/logs/auth-bridge.err</string>
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>

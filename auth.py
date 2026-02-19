@@ -1,0 +1,212 @@
+"""Authentication state management for the Telegram bridge.
+
+Manages Sign in with Apple sessions: creation, validation, expiry,
+IP change detection, and manual lock/unlock.
+"""
+
+import json
+import logging
+import time
+from pathlib import Path
+
+logger = logging.getLogger("bridge.auth")
+
+AUTH_DIR = Path(__file__).parent / "auth"
+AUTH_DIR.mkdir(exist_ok=True)
+AUTH_STATE_FILE = AUTH_DIR / "sessions.json"
+AUTH_LOG_FILE = AUTH_DIR / "auth_log.jsonl"
+
+# 30-day session expiry (can tighten to 7 days if moving to VPS)
+SESSION_EXPIRY_SECONDS = 30 * 24 * 60 * 60
+
+# Optional async callback for auth event notifications (set by bridge.py)
+_notify_callback = None
+
+
+def set_notify_callback(callback) -> None:
+    """Set an async callback for auth event notifications.
+
+    callback(event_type: str, telegram_user_id: int, details: str) -> None
+    """
+    global _notify_callback
+    _notify_callback = callback
+
+
+def _notify(event_type: str, telegram_user_id: int, details: str = "") -> None:
+    """Fire notification callback if set. Non-blocking."""
+    if _notify_callback:
+        try:
+            import asyncio
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(_notify_callback(event_type, telegram_user_id, details))
+            else:
+                loop.run_until_complete(_notify_callback(event_type, telegram_user_id, details))
+        except Exception:
+            logger.debug("Failed to send auth notification", exc_info=True)
+
+
+def _load_state() -> dict:
+    if AUTH_STATE_FILE.exists():
+        try:
+            return json.loads(AUTH_STATE_FILE.read_text())
+        except (json.JSONDecodeError, TypeError):
+            return {}
+    return {}
+
+
+def _save_state(state: dict) -> None:
+    AUTH_STATE_FILE.write_text(json.dumps(state, indent=2) + "\n")
+
+
+def _log_event(event_type: str, telegram_user_id: int, details: str = "") -> None:
+    entry = {
+        "timestamp": time.time(),
+        "event": event_type,
+        "telegram_user_id": telegram_user_id,
+        "details": details,
+    }
+    with open(AUTH_LOG_FILE, "a") as f:
+        f.write(json.dumps(entry) + "\n")
+    logger.info("Auth event: %s for user %d %s", event_type, telegram_user_id, details)
+
+
+def create_session(telegram_user_id: int, apple_subject: str, ip_address: str) -> None:
+    """Create an authenticated session after successful Apple sign-in."""
+    state = _load_state()
+    state[str(telegram_user_id)] = {
+        "apple_subject": apple_subject,
+        "authenticated_at": time.time(),
+        "last_seen": time.time(),
+        "ip_address": ip_address,
+        "locked": False,
+    }
+    _save_state(state)
+    _log_event("authenticated", telegram_user_id, f"ip={ip_address}")
+    _notify("authenticated", telegram_user_id, f"IP: {ip_address}")
+
+
+def is_authenticated(telegram_user_id: int) -> bool:
+    """Check if a Telegram user has a valid, non-expired, non-locked session."""
+    state = _load_state()
+    session = state.get(str(telegram_user_id))
+    if not session:
+        return False
+    if session.get("locked", False):
+        return False
+    elapsed = time.time() - session["authenticated_at"]
+    if elapsed > SESSION_EXPIRY_SECONDS:
+        _log_event("expired", telegram_user_id)
+        return False
+    return True
+
+
+def check_ip(telegram_user_id: int, current_ip: str) -> bool:
+    """Check if IP matches the authenticated session. Returns False if IP changed."""
+    state = _load_state()
+    session = state.get(str(telegram_user_id))
+    if not session:
+        return False
+    stored_ip = session.get("ip_address")
+    if stored_ip and stored_ip != current_ip:
+        _log_event("ip_changed", telegram_user_id, f"from={stored_ip} to={current_ip}")
+        # Lock the session on IP change
+        session["locked"] = True
+        session["lock_reason"] = f"IP changed: {stored_ip} -> {current_ip}"
+        _save_state(state)
+        _notify("ip_changed", telegram_user_id, f"IP changed: {stored_ip} -> {current_ip} -- session locked")
+        return False
+    # Update last_seen
+    session["last_seen"] = time.time()
+    _save_state(state)
+    return True
+
+
+def lock_all_sessions() -> int:
+    """Lock all active sessions. Returns count of sessions locked."""
+    state = _load_state()
+    count = 0
+    for uid, session in state.items():
+        if not session.get("locked", False):
+            session["locked"] = True
+            session["lock_reason"] = "manual_lock"
+            _log_event("locked", int(uid), "manual lock all")
+            count += 1
+    _save_state(state)
+    return count
+
+
+def lock_session(telegram_user_id: int) -> bool:
+    """Lock a specific user's session. Returns True if session existed."""
+    state = _load_state()
+    session = state.get(str(telegram_user_id))
+    if not session:
+        return False
+    session["locked"] = True
+    session["lock_reason"] = "manual_lock"
+    _save_state(state)
+    _log_event("locked", telegram_user_id, "manual lock")
+    return True
+
+
+def get_session_info(telegram_user_id: int) -> dict | None:
+    """Get session details for a user."""
+    state = _load_state()
+    return state.get(str(telegram_user_id))
+
+
+def generate_auth_token(telegram_user_id: int) -> str:
+    """Generate a one-time token linking Telegram user to auth flow.
+
+    The token is stored and verified when Apple callback completes,
+    ensuring the Apple sign-in maps to the correct Telegram user.
+    """
+    import secrets
+
+    token = secrets.token_urlsafe(32)
+    state = _load_state()
+    # Store pending auth tokens separately
+    pending = state.get("_pending_tokens", {})
+    pending[token] = {
+        "telegram_user_id": telegram_user_id,
+        "created_at": time.time(),
+    }
+    # Clean expired pending tokens (15 min lifetime)
+    pending = {
+        k: v
+        for k, v in pending.items()
+        if time.time() - v["created_at"] < 900
+    }
+    state["_pending_tokens"] = pending
+    _save_state(state)
+    return token
+
+
+def check_auth_token(token: str) -> int | None:
+    """Check if a pending auth token is valid without consuming it."""
+    state = _load_state()
+    pending = state.get("_pending_tokens", {})
+    entry = pending.get(token)
+    if not entry:
+        return None
+    if time.time() - entry["created_at"] > 900:
+        return None
+    return entry["telegram_user_id"]
+
+
+def consume_auth_token(token: str) -> int | None:
+    """Verify and consume a pending auth token. Returns Telegram user ID or None."""
+    state = _load_state()
+    pending = state.get("_pending_tokens", {})
+    entry = pending.get(token)
+    if not entry:
+        return None
+    if time.time() - entry["created_at"] > 900:  # 15 min expiry
+        del pending[token]
+        _save_state(state)
+        return None
+    telegram_user_id = entry["telegram_user_id"]
+    del pending[token]
+    state["_pending_tokens"] = pending
+    _save_state(state)
+    return telegram_user_id
