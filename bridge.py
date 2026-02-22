@@ -156,6 +156,17 @@ TELEGRAM_MSG_LIMIT = 4096
 TYPING_INTERVAL = 4  # seconds between typing indicators
 PHOTO_DIR = Path(tempfile.gettempdir()) / "claude-telegram-photos"
 PHOTO_DIR.mkdir(exist_ok=True)
+ACTIVITY_LOG = Path(__file__).parent / "activity.jsonl"
+
+
+def _log_activity(event: str, **kwargs) -> None:
+    """Append a structured JSON-lines entry to the activity log."""
+    entry = {"ts": time.time(), "event": event, **kwargs}
+    try:
+        with open(ACTIVITY_LOG, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except OSError:
+        logger.debug("Failed to write activity log")
 
 
 def _session_key(chat_id: int, thread_id: int | None) -> str:
@@ -353,6 +364,14 @@ def run_claude(message: str, session_key: str) -> str:
         logger.info("Resuming session %s for %s", session_id[:12], session_key)
 
     logger.info("Launching claude in %s for %s", chat_cwd, session_key)
+    invoke_start = time.time()
+    _log_activity(
+        "claude_invoke",
+        session_key=session_key,
+        cwd=chat_cwd,
+        model=model or "default",
+        resume=bool(session_id),
+    )
 
     proc = subprocess.Popen(
         cmd,
@@ -369,11 +388,13 @@ def run_claude(message: str, session_key: str) -> str:
     except subprocess.TimeoutExpired:
         proc.kill()
         proc.wait()
+        _log_activity("claude_timeout", session_key=session_key, pid=proc.pid, duration=time.time() - invoke_start)
         return f"Claude hit the {MAX_TIMEOUT // 60} minute safety limit. The work may be partially saved — check git status."
     finally:
         _active_procs.pop(session_key, None)
         _proc_last_active.pop(session_key, None)
 
+    duration = time.time() - invoke_start
     stdout = stdout.strip()
     if not stdout:
         # Stale session: Claude couldn't find the conversation. Clear and retry.
@@ -381,10 +402,12 @@ def run_claude(message: str, session_key: str) -> str:
             logger.warning("Stale session %s for %s, retrying fresh", session_id[:12], session_key)
             clear_session(session_key)
             return run_claude(message, session_key)
+        _log_activity("claude_error", session_key=session_key, duration=duration, error=stderr[:200] if stderr else "no output")
         if stderr:
             return f"(no output. stderr: {stderr[:500]})"
         return "(no output)"
 
+    _log_activity("claude_complete", session_key=session_key, duration=duration, exit_code=proc.returncode, response_len=len(stdout))
     return parse_claude_response(stdout, session_key)
 
 
@@ -507,6 +530,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     thread_id = update.message.message_thread_id
     key = _session_key(chat_id, thread_id)
     logger.info("From %d [%s]: %s", user_id, key, text[:80])
+    _log_activity("message", user_id=user_id, session_key=key, text_len=len(text))
 
     # Debounce: if Claude is already processing for this session, queue the message
     if key in _processing_sessions:
@@ -514,6 +538,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         depth = len(_queued_messages[key])
         await update.message.reply_text(f"Queued ({depth}) — will send when current response finishes.")
         logger.info("Queued message for %s (depth: %d)", key, depth)
+        _log_activity("message_queued", session_key=key, depth=depth)
         return
 
     _processing_sessions.add(key)
@@ -582,6 +607,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     local_path = PHOTO_DIR / f"{photo.file_unique_id}.jpg"
     await tg_file.download_to_drive(local_path)
     logger.info("Downloaded photo to %s for %s", local_path, key)
+    _log_activity("photo", user_id=user_id, session_key=key, caption_len=len(caption))
 
     prompt = (
         f"{caption}\n\n"
@@ -814,6 +840,7 @@ async def cmd_kill(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         proc.terminate()
         await update.message.reply_text("Killed active Claude process. Session preserved — next message resumes.")
         logger.info("User %d killed Claude process for %s (pid %d)", user_id, key, proc.pid)
+        _log_activity("process_kill", session_key=key, pid=proc.pid, user_id=user_id, reason="manual")
     else:
         await update.message.reply_text("No active Claude process in this chat.")
 
@@ -1030,6 +1057,7 @@ async def _stall_detector() -> None:
                 )
                 proc.kill()
                 _proc_last_active.pop(key, None)
+                _log_activity("process_kill", session_key=key, pid=proc.pid, reason="stalled", idle_seconds=stall_duration)
                 if _bot_instance:
                     try:
                         parts = key.split("_", 1)
