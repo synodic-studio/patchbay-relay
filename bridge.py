@@ -136,6 +136,10 @@ _executor = ThreadPoolExecutor(max_workers=MAX_WORKERS)
 # Track active Claude subprocesses per session key so /kill can terminate them
 _active_procs: dict[str, subprocess.Popen] = {}
 
+# Message debounce: batch messages that arrive while Claude is processing
+_processing_sessions: set[str] = set()
+_queued_messages: dict[str, list[str]] = {}
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -460,6 +464,17 @@ async def cmd_lock(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.info("User %d locked their session", user_id)
 
 
+async def _send_response(
+    bot, chat_id: int, thread_id: int | None, response: str
+) -> None:
+    """Send a response, splitting at Telegram's message limit."""
+    send_kwargs: dict = {"chat_id": chat_id}
+    if thread_id is not None:
+        send_kwargs["message_thread_id"] = thread_id
+    for i in range(0, len(response), TELEGRAM_MSG_LIMIT):
+        await bot.send_message(text=response[i : i + TELEGRAM_MSG_LIMIT], **send_kwargs)
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
 
@@ -480,6 +495,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     key = _session_key(chat_id, thread_id)
     logger.info("From %d [%s]: %s", user_id, key, text[:80])
 
+    # Debounce: if Claude is already processing for this session, queue the message
+    if key in _processing_sessions:
+        _queued_messages.setdefault(key, []).append(text)
+        depth = len(_queued_messages[key])
+        await update.message.reply_text(f"Queued ({depth}) — will send when current response finishes.")
+        logger.info("Queued message for %s (depth: %d)", key, depth)
+        return
+
+    _processing_sessions.add(key)
     pending_id = save_pending(chat_id, thread_id, text, key)
 
     stop_typing = asyncio.Event()
@@ -493,14 +517,34 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     except Exception as e:
         logger.error("Error running claude for %s: %s", key, e)
         response = f"Error: {e}"
-    finally:
-        stop_typing.set()
-        await typing_task
 
     for i in range(0, len(response), TELEGRAM_MSG_LIMIT):
         await update.message.reply_text(response[i : i + TELEGRAM_MSG_LIMIT])
-
     clear_pending(pending_id)
+
+    # Drain queued messages: batch all into a single Claude invocation
+    try:
+        while _queued_messages.get(key):
+            batch = _queued_messages.pop(key)
+            logger.info("Processing %d queued message(s) for %s", len(batch), key)
+            if len(batch) == 1:
+                combined = batch[0]
+            else:
+                combined = "\n\n---\n\n".join(
+                    f"[Follow-up {i + 1}]\n{msg}" for i, msg in enumerate(batch)
+                )
+            try:
+                response = await loop.run_in_executor(
+                    _executor, run_claude, combined, key
+                )
+            except Exception as e:
+                logger.error("Error running claude for queued batch %s: %s", key, e)
+                response = f"Error: {e}"
+            await _send_response(context.bot, chat_id, thread_id, response)
+    finally:
+        stop_typing.set()
+        await typing_task
+        _processing_sessions.discard(key)
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
