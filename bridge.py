@@ -407,6 +407,11 @@ async def _check_auth(update: Update) -> bool:
 async def _send_auth_link(update: Update) -> None:
     """Generate and send an auth link to the user."""
     user_id = update.effective_user.id
+    if auth.is_rate_limited(user_id):
+        await update.message.reply_text(
+            "Too many failed attempts. Account temporarily locked. Try again in 15 minutes."
+        )
+        return
     token = auth.generate_auth_token(user_id)
     link = f"{AUTH_BASE_URL}/login?token={token}"
     await update.message.reply_text(

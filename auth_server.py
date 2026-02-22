@@ -235,11 +235,20 @@ async def apple_callback(
             status_code=400,
         )
 
+    # Check rate limit before proceeding
+    if auth.is_rate_limited(telegram_user_id):
+        logger.warning("Rate-limited user %d attempted auth", telegram_user_id)
+        return HTMLResponse(
+            "<h1>Too many attempts</h1><p>Account temporarily locked. Try again later.</p>",
+            status_code=429,
+        )
+
     # Verify the Apple ID token
     try:
         claims = await _verify_apple_id_token(id_token)
     except Exception as e:
         logger.error("Apple token verification failed: %s", e)
+        auth.record_failed_attempt(telegram_user_id)
         return HTMLResponse(f"<h1>Verification failed</h1><p>{e}</p>", status_code=400)
 
     apple_subject = claims.get("sub", "")
@@ -247,6 +256,7 @@ async def apple_callback(
     # Check allowlist if configured
     if APPLE_SUBJECT_ALLOWLIST and apple_subject not in APPLE_SUBJECT_ALLOWLIST:
         logger.warning("Apple subject %s not in allowlist", apple_subject)
+        auth.record_failed_attempt(telegram_user_id)
         auth._log_event("denied", telegram_user_id, f"apple_sub={apple_subject} not in allowlist")
         auth._notify("denied", telegram_user_id, f"Apple subject {apple_subject} not in allowlist")
         return HTMLResponse("<h1>Access denied</h1><p>Your Apple ID is not authorized.</p>", status_code=403)

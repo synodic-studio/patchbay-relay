@@ -19,6 +19,14 @@ AUTH_LOG_FILE = AUTH_DIR / "auth_log.jsonl"
 # 30-day session expiry (can tighten to 7 days if moving to VPS)
 SESSION_EXPIRY_SECONDS = 30 * 24 * 60 * 60
 
+# Rate limiting: 3 failures in 5 min → locked out for 15 min
+RATE_LIMIT_MAX_FAILURES = 3
+RATE_LIMIT_WINDOW = 300  # 5 minutes
+RATE_LIMIT_LOCKOUT = 900  # 15 minutes
+
+# In-memory: telegram_user_id -> list of failure timestamps
+_failed_attempts: dict[int, list[float]] = {}
+
 # Optional async callback for auth event notifications (set by bridge.py)
 _notify_callback = None
 
@@ -82,6 +90,7 @@ def create_session(telegram_user_id: int, apple_subject: str, ip_address: str) -
         "locked": False,
     }
     _save_state(state)
+    clear_rate_limit(telegram_user_id)
     _log_event("authenticated", telegram_user_id, f"ip={ip_address}")
     _notify("authenticated", telegram_user_id, f"IP: {ip_address}")
 
@@ -153,6 +162,40 @@ def get_session_info(telegram_user_id: int) -> dict | None:
     """Get session details for a user."""
     state = _load_state()
     return state.get(str(telegram_user_id))
+
+
+def is_rate_limited(telegram_user_id: int) -> bool:
+    """Check if a user is locked out due to too many failed auth attempts."""
+    now = time.time()
+    attempts = _failed_attempts.get(telegram_user_id, [])
+    if not attempts:
+        return False
+    # Check if most recent lockout is still active
+    if len(attempts) >= RATE_LIMIT_MAX_FAILURES:
+        latest = attempts[-1]
+        if now - latest < RATE_LIMIT_LOCKOUT:
+            return True
+    return False
+
+
+def record_failed_attempt(telegram_user_id: int) -> bool:
+    """Record a failed auth attempt. Returns True if user is now locked out."""
+    now = time.time()
+    attempts = _failed_attempts.setdefault(telegram_user_id, [])
+    # Prune attempts outside the window
+    cutoff = now - RATE_LIMIT_WINDOW
+    _failed_attempts[telegram_user_id] = [t for t in attempts if t > cutoff]
+    _failed_attempts[telegram_user_id].append(now)
+    locked = len(_failed_attempts[telegram_user_id]) >= RATE_LIMIT_MAX_FAILURES
+    if locked:
+        _log_event("rate_limited", telegram_user_id, f"locked out for {RATE_LIMIT_LOCKOUT}s")
+        _notify("rate_limited", telegram_user_id, f"Locked out after {RATE_LIMIT_MAX_FAILURES} failed attempts")
+    return locked
+
+
+def clear_rate_limit(telegram_user_id: int) -> None:
+    """Clear rate limit state for a user (e.g. after successful auth)."""
+    _failed_attempts.pop(telegram_user_id, None)
 
 
 def generate_auth_token(telegram_user_id: int) -> str:
