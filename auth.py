@@ -6,6 +6,7 @@ IP change detection, and manual lock/unlock.
 
 import json
 import logging
+import os
 import time
 from pathlib import Path
 
@@ -18,6 +19,9 @@ AUTH_LOG_FILE = AUTH_DIR / "auth_log.jsonl"
 
 # 30-day session expiry (can tighten to 7 days if moving to VPS)
 SESSION_EXPIRY_SECONDS = 30 * 24 * 60 * 60
+
+# Inactivity timeout: auto-expire if no messages for this long (default 7 days)
+INACTIVITY_TIMEOUT = int(os.environ.get("AUTH_INACTIVITY_TIMEOUT", str(7 * 24 * 60 * 60)))
 
 # Rate limiting: 3 failures in 5 min → locked out for 15 min
 RATE_LIMIT_MAX_FAILURES = 3
@@ -103,11 +107,25 @@ def is_authenticated(telegram_user_id: int) -> bool:
         return False
     if session.get("locked", False):
         return False
-    elapsed = time.time() - session["authenticated_at"]
-    if elapsed > SESSION_EXPIRY_SECONDS:
+    now = time.time()
+    if now - session["authenticated_at"] > SESSION_EXPIRY_SECONDS:
         _log_event("expired", telegram_user_id)
         return False
+    last_seen = session.get("last_seen", session["authenticated_at"])
+    if now - last_seen > INACTIVITY_TIMEOUT:
+        _log_event("inactive_expired", telegram_user_id, f"idle {(now - last_seen) / 3600:.1f}h")
+        _notify("expired", telegram_user_id, f"Session expired due to inactivity ({(now - last_seen) / 3600:.1f}h)")
+        return False
     return True
+
+
+def touch_session(telegram_user_id: int) -> None:
+    """Update last_seen timestamp for a user's session."""
+    state = _load_state()
+    session = state.get(str(telegram_user_id))
+    if session:
+        session["last_seen"] = time.time()
+        _save_state(state)
 
 
 def check_ip(telegram_user_id: int, current_ip: str) -> bool:
