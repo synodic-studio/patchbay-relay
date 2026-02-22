@@ -413,6 +413,7 @@ async def _check_auth(update: Update) -> bool:
     user_id = update.effective_user.id
     if not auth.is_authenticated(user_id):
         return False
+    auth.touch_session(user_id)
     return True
 
 
