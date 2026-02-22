@@ -140,6 +140,12 @@ _active_procs: dict[str, subprocess.Popen] = {}
 _processing_sessions: set[str] = set()
 _queued_messages: dict[str, list[str]] = {}
 
+# Stalled process detector: track when each process last had meaningful CPU
+STALL_POLL_INTERVAL = 120  # check every 2 minutes
+STALL_CPU_THRESHOLD = 1.0  # %CPU below this = idle
+STALL_TIMEOUT = 600  # kill after 10 min of near-zero CPU
+_proc_last_active: dict[str, float] = {}  # session_key -> last time CPU was above threshold
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -352,6 +358,7 @@ def run_claude(message: str, session_key: str) -> str:
         cwd=chat_cwd,
     )
     _active_procs[session_key] = proc
+    _proc_last_active[session_key] = time.time()
 
     try:
         stdout, stderr = proc.communicate(timeout=MAX_TIMEOUT)
@@ -361,6 +368,7 @@ def run_claude(message: str, session_key: str) -> str:
         return f"Claude hit the {MAX_TIMEOUT // 60} minute safety limit. The work may be partially saved — check git status."
     finally:
         _active_procs.pop(session_key, None)
+        _proc_last_active.pop(session_key, None)
 
     stdout = stdout.strip()
     if not stdout:
@@ -975,6 +983,64 @@ async def _auth_notify(event_type: str, telegram_user_id: int, details: str = ""
 _bot_instance = None
 
 
+def _get_proc_cpu(pid: int) -> float | None:
+    """Get %CPU for a process via ps. Returns None if process not found."""
+    try:
+        result = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "%cpu="],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return float(result.stdout.strip())
+    except (subprocess.TimeoutExpired, ValueError):
+        pass
+    return None
+
+
+async def _stall_detector() -> None:
+    """Background task: poll active Claude processes for CPU stalls."""
+    while True:
+        await asyncio.sleep(STALL_POLL_INTERVAL)
+        now = time.time()
+        for key, proc in list(_active_procs.items()):
+            if proc.poll() is not None:
+                _proc_last_active.pop(key, None)
+                continue
+            cpu = _get_proc_cpu(proc.pid)
+            if cpu is None:
+                continue
+            if cpu >= STALL_CPU_THRESHOLD:
+                _proc_last_active[key] = now
+                continue
+            # CPU is below threshold
+            last_active = _proc_last_active.get(key, now)
+            if key not in _proc_last_active:
+                _proc_last_active[key] = now
+                continue
+            stall_duration = now - last_active
+            if stall_duration >= STALL_TIMEOUT:
+                logger.warning(
+                    "Killing stalled Claude process for %s (pid %d, idle %.0fs)",
+                    key, proc.pid, stall_duration,
+                )
+                proc.kill()
+                _proc_last_active.pop(key, None)
+                if _bot_instance:
+                    try:
+                        parts = key.split("_", 1)
+                        chat_id = int(parts[0])
+                        thread_id = int(parts[1]) if len(parts) > 1 else None
+                        send_kwargs: dict = {"chat_id": chat_id}
+                        if thread_id is not None:
+                            send_kwargs["message_thread_id"] = thread_id
+                        await _bot_instance.send_message(
+                            text=f"Killed stalled Claude process (idle {stall_duration / 60:.0f} min). Send your message again to retry.",
+                            **send_kwargs,
+                        )
+                    except Exception:
+                        logger.debug("Failed to notify about stalled process for %s", key)
+
+
 async def post_init(app: Application) -> None:
     """Register bot commands and replay any messages lost during previous crash."""
     global _bot_instance
@@ -999,6 +1065,9 @@ async def post_init(app: Application) -> None:
         ]
     )
     logger.info("Bot commands registered with Telegram")
+
+    asyncio.create_task(_stall_detector())
+    logger.info("Stall detector started (poll=%ds, timeout=%ds)", STALL_POLL_INTERVAL, STALL_TIMEOUT)
 
     await replay_pending(app.bot)
 
