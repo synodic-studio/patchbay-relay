@@ -284,28 +284,49 @@ async def replay_pending(bot) -> None:
 
 
 def parse_claude_response(stdout: str, session_key: str) -> str:
-    """Extract text and session_id from claude JSON output."""
+    """Extract text and session_id from claude JSON output.
+
+    Handles two CLI output formats:
+    - v2.1+: single dict with 'result', 'session_id', etc.
+    - legacy: list of event dicts with 'type' fields
+    """
     try:
-        events = json.loads(stdout)
-        result_event = next(
-            (e for e in reversed(events) if e.get("type") == "result"), None
-        )
-        if result_event:
-            new_session_id = result_event.get("session_id")
+        data = json.loads(stdout)
+
+        # v2.1+ format: single result dict
+        if isinstance(data, dict) and "result" in data:
+            new_session_id = data.get("session_id")
             if new_session_id:
                 save_session_id(session_key, new_session_id)
                 logger.info(
                     "Saved session %s for %s", new_session_id[:12], session_key
                 )
-            return result_event.get("result", "(no result text)")
-        for e in reversed(events):
-            if e.get("type") == "assistant":
-                content = e.get("message", {}).get("content", [])
-                texts = [c["text"] for c in content if c.get("type") == "text"]
-                if texts:
-                    return "\n".join(texts)
+            return data.get("result", "(no result text)")
+
+        # Legacy format: list of event dicts
+        if isinstance(data, list):
+            result_event = next(
+                (e for e in reversed(data) if isinstance(e, dict) and e.get("type") == "result"), None
+            )
+            if result_event:
+                new_session_id = result_event.get("session_id")
+                if new_session_id:
+                    save_session_id(session_key, new_session_id)
+                    logger.info(
+                        "Saved session %s for %s", new_session_id[:12], session_key
+                    )
+                return result_event.get("result", "(no result text)")
+            for e in reversed(data):
+                if not isinstance(e, dict):
+                    continue
+                if e.get("type") == "assistant":
+                    content = e.get("message", {}).get("content", [])
+                    texts = [c["text"] for c in content if c.get("type") == "text"]
+                    if texts:
+                        return "\n".join(texts)
+
         return "(no parseable response)"
-    except (json.JSONDecodeError, TypeError):
+    except (json.JSONDecodeError, TypeError, AttributeError):
         return stdout
 
 
@@ -660,12 +681,81 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
+def _git_status_summary(cwd: str) -> str | None:
+    """Return a short git status summary for a directory, or None if not a git repo."""
+    try:
+        subprocess.run(
+            ["git", "rev-parse", "--git-dir"],
+            cwd=cwd, capture_output=True, check=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return "⚠️ Git repo not initialized"
+
+    lines = []
+
+    # Branches (excluding beads-sync)
+    try:
+        result = subprocess.run(
+            ["git", "branch", "-a"],
+            cwd=cwd, capture_output=True, text=True, check=True,
+        )
+        all_branches = [
+            b.strip().lstrip("* ")
+            for b in result.stdout.splitlines()
+            if "beads-sync" not in b and "HEAD ->" not in b
+        ]
+        local = [b for b in all_branches if not b.startswith("remotes/")]
+        lines.append(f"Branches: {len(local)} local / {len(all_branches)} total")
+    except subprocess.CalledProcessError:
+        pass
+
+    # PRs (requires gh CLI)
+    try:
+        result = subprocess.run(
+            ["gh", "pr", "list", "--state", "open", "--json", "isDraft"],
+            cwd=cwd, capture_output=True, text=True, check=True, timeout=10,
+        )
+        prs = json.loads(result.stdout)
+        open_count = sum(1 for p in prs if not p.get("isDraft"))
+        draft_count = sum(1 for p in prs if p.get("isDraft"))
+        lines.append(f"PRs: {open_count} open, {draft_count} draft")
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+
+    # Stashes
+    try:
+        result = subprocess.run(
+            ["git", "stash", "list"],
+            cwd=cwd, capture_output=True, text=True, check=True,
+        )
+        stash_count = len(result.stdout.splitlines())
+        lines.append(f"Stashes: {stash_count}")
+    except subprocess.CalledProcessError:
+        pass
+
+    # Beads check
+    beads_dir = os.path.join(cwd, ".beads")
+    if not os.path.isdir(beads_dir):
+        lines.append("⚠️ Beads not initialized")
+
+    return "\n".join(lines) if lines else None
+
+
 async def cmd_new(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     thread_id = update.message.message_thread_id
     key = _session_key(chat_id, thread_id)
+    cwd = get_chat_working_dir(key)
     clear_session(key)
-    await update.message.reply_text("Fresh session started.")
+
+    msg = "Fresh session started."
+    summary = await asyncio.get_event_loop().run_in_executor(
+        _executor, _git_status_summary, cwd,
+    )
+    if summary:
+        msg += f"\n\n{summary}"
+
+    await update.message.reply_text(msg)
     logger.info("Session cleared for %s", key)
 
 
