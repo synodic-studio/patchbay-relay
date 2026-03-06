@@ -7,8 +7,10 @@ dependencies = [
     "fastapi>=0.129.2",
     "httpx>=0.28.1",
     "pyjwt[crypto]>=2.11.0",
+    "pyotp>=2.9.0",
     "python-dotenv>=1.2.1",
     "python-multipart>=0.0.22",
     "python-telegram-bot>=22.6",
+    "qrcode[terminal]>=8.2",
     "uvicorn>=0.41.0",
 ]
