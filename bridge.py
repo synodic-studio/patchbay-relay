@@ -481,6 +481,32 @@ async def _send_auth_link(update: Update) -> None:
     )
 
 
+async def _try_totp_auth(update: Update, code: str) -> None:
+    """Attempt TOTP authentication from a plain 6-digit message.
+
+    Called by handle_message when unauthenticated and the message looks like
+    a TOTP code. Falls back to the auth link if TOTP is not configured.
+    """
+    user_id = update.effective_user.id
+    if not auth.has_totp(user_id):
+        await _send_auth_link(update)
+        return
+    if auth.is_rate_limited(user_id):
+        await update.message.reply_text(
+            "Too many failed attempts. Try again in 15 minutes."
+        )
+        return
+    if auth.authenticate_totp(user_id, code):
+        await update.message.reply_text(
+            "Authenticated. Send your message again to continue."
+        )
+        logger.info("User %d authenticated via TOTP (inline)", user_id)
+    else:
+        await update.message.reply_text(
+            "Invalid code. Try again or use /auth for sign-in link."
+        )
+
+
 async def cmd_auth(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send an authentication link."""
     user_id = update.effective_user.id
@@ -597,12 +623,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         logger.warning("Unauthorized user %d attempted access", user_id)
         return
 
-    if not await _check_auth(update):
-        await _send_auth_link(update)
-        return
-
     text = update.message.text
     if not text:
+        return
+
+    if not await _check_auth(update):
+        # Accept a bare 6-digit TOTP code as an authentication attempt
+        if text.strip().isdigit() and len(text.strip()) == 6:
+            await _try_totp_auth(update, text.strip())
+        else:
+            await _send_auth_link(update)
         return
 
     chat_id = update.effective_chat.id
