@@ -30,7 +30,7 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent / ".env")
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, Update
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -153,6 +153,16 @@ logging.basicConfig(
 logger = logging.getLogger("bridge")
 
 TELEGRAM_MSG_LIMIT = 4096
+
+# Persistent quick-reply keyboard shown at the bottom of the chat
+QUICK_REPLY_KEYBOARD = ReplyKeyboardMarkup(
+    [
+        ["/new", "/kill", "/ping"],
+        ["/project", "/model", "/commitpushpr"],
+    ],
+    resize_keyboard=True,
+    is_persistent=True,
+)
 TYPING_INTERVAL = 4  # seconds between typing indicators
 PHOTO_DIR = Path(tempfile.gettempdir()) / "claude-telegram-photos"
 PHOTO_DIR.mkdir(exist_ok=True)
@@ -677,7 +687,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/auth - Authenticate or check auth status\n"
         "/lock - Lock session (/lock all for all sessions)\n"
         "/ping - Check if bridge is alive\n\n"
-        "Each forum topic runs as an independent Claude session."
+        "Each forum topic runs as an independent Claude session.",
+        reply_markup=QUICK_REPLY_KEYBOARD,
     )
 
 
@@ -755,7 +766,7 @@ async def cmd_new(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if summary:
         msg += f"\n\n{summary}"
 
-    await update.message.reply_text(msg)
+    await update.message.reply_text(msg, reply_markup=QUICK_REPLY_KEYBOARD)
     logger.info("Session cleared for %s", key)
 
 
