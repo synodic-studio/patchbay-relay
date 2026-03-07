@@ -42,8 +42,12 @@ from telegram.ext import (
 
 import auth
 
-_kc = subprocess.run(["security", "find-generic-password", "-a", "bryancostanza", "-s", "telegram-bot-token", "-w"], capture_output=True, text=True)
-BOT_TOKEN = _kc.stdout.strip() if _kc.returncode == 0 and _kc.stdout.strip() else os.environ.get("TELEGRAM_BOT_TOKEN", "")
+_pp = subprocess.run(["pass-cli", "item", "view", "--vault-name", "Developer Secrets", "--item-title", "telegram-bot-token", "--field", "note"], capture_output=True, text=True)
+if _pp.returncode == 0 and _pp.stdout.strip():
+    BOT_TOKEN = _pp.stdout.strip()
+else:
+    _kc = subprocess.run(["security", "find-generic-password", "-a", "bryancostanza", "-s", "telegram-bot-token", "-w"], capture_output=True, text=True)
+    BOT_TOKEN = _kc.stdout.strip() if _kc.returncode == 0 and _kc.stdout.strip() else os.environ.get("TELEGRAM_BOT_TOKEN", "")
 ALLOWED_USER_IDS: set[int] = set()
 _raw = os.environ.get("ALLOWED_USER_IDS", "")
 if _raw.strip():
@@ -66,38 +70,6 @@ SESSION_DIR.mkdir(exist_ok=True)
 PENDING_DIR = Path(__file__).parent / "pending"
 PENDING_DIR.mkdir(exist_ok=True)
 CHAT_PROJECTS_FILE = Path(__file__).parent / "chat_projects.json"
-CHAT_MODELS_FILE = Path(__file__).parent / "chat_models.json"
-
-VALID_MODELS = {"opus", "sonnet", "haiku"}
-
-
-def _load_chat_models() -> dict[str, str]:
-    """Load session_key -> model alias mapping."""
-    if CHAT_MODELS_FILE.exists():
-        try:
-            return json.loads(CHAT_MODELS_FILE.read_text())
-        except (json.JSONDecodeError, TypeError):
-            return {}
-    return {}
-
-
-def _save_chat_models(models: dict[str, str]) -> None:
-    CHAT_MODELS_FILE.write_text(json.dumps(models, indent=2) + "\n")
-
-
-def get_chat_model(session_key: str) -> str | None:
-    """Return the model alias for a chat, or None for default."""
-    return _load_chat_models().get(session_key)
-
-
-def set_chat_model(session_key: str, model: str | None) -> None:
-    """Set or clear the model for a chat."""
-    models = _load_chat_models()
-    if model is None:
-        models.pop(session_key, None)
-    else:
-        models[session_key] = model
-    _save_chat_models(models)
 
 
 def _load_chat_projects() -> dict:
@@ -170,7 +142,7 @@ TELEGRAM_MSG_LIMIT = 4096
 QUICK_REPLY_KEYBOARD = ReplyKeyboardMarkup(
     [
         ["/new", "/kill", "/ping"],
-        ["/project", "/model", "/commitpushpr"],
+        ["/project", "/cleanup"],
     ],
     resize_keyboard=True,
     is_persistent=True,
@@ -398,10 +370,6 @@ def run_claude(message: str, session_key: str) -> str:
         system_prompt,
     ]
 
-    model = get_chat_model(session_key)
-    if model:
-        cmd.extend(["--model", model])
-
     if session_id:
         cmd.extend(["--resume", session_id])
         logger.info("Resuming session %s for %s", session_id[:12], session_key)
@@ -412,7 +380,6 @@ def run_claude(message: str, session_key: str) -> str:
         "claude_invoke",
         session_key=session_key,
         cwd=chat_cwd,
-        model=model or "default",
         resume=bool(session_id),
     )
 
@@ -779,8 +746,6 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/setproject <path> - Set project dir (relative to ~/Developer)\n"
         "/setproject - Clear project binding (use default)\n"
         "/project - Show current project dir\n"
-        "/model - Set model (opus/sonnet/haiku)\n"
-        "/commitpushpr - Commit, push, and create a PR\n"
         "/cleanup - Switch to default branch and delete current\n"
         "/kill - Kill active Claude process\n"
         "/restart - Restart the bridge\n"
@@ -971,61 +936,6 @@ async def cmd_project(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await update.message.reply_text("No project set. Using default: ~/Developer")
 
 
-async def cmd_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Set or show the model for this chat/topic."""
-    user_id = update.effective_user.id
-    if ALLOWED_USER_IDS and user_id not in ALLOWED_USER_IDS:
-        return
-
-    chat_id = update.effective_chat.id
-    thread_id = update.message.message_thread_id
-    key = _session_key(chat_id, thread_id)
-
-    args = context.args
-    if args:
-        choice = args[0].lower()
-        if choice not in VALID_MODELS:
-            await update.message.reply_text(f"Invalid model. Choose: opus, sonnet, haiku")
-            return
-        set_chat_model(key, choice)
-        await update.message.reply_text(f"Model set to {choice}. Takes effect on next message.")
-        logger.info("Model set to %s for %s", choice, key)
-        return
-
-    # No args: show buttons
-    current = get_chat_model(key) or "default (opus)"
-    buttons = [
-        [
-            InlineKeyboardButton("opus", callback_data="model:opus"),
-            InlineKeyboardButton("sonnet", callback_data="model:sonnet"),
-            InlineKeyboardButton("haiku", callback_data="model:haiku"),
-        ]
-    ]
-    await update.message.reply_text(
-        f"Current model: {current}\nPick a model:",
-        reply_markup=InlineKeyboardMarkup(buttons),
-    )
-
-
-async def callback_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle inline keyboard button presses for model selection."""
-    query = update.callback_query
-    await query.answer()
-
-    chat_id = update.effective_chat.id
-    thread_id = query.message.message_thread_id
-    key = _session_key(chat_id, thread_id)
-
-    model = query.data.split(":", 1)[1]
-    if model not in VALID_MODELS:
-        await query.edit_message_text(f"Invalid model: {model}")
-        return
-
-    set_chat_model(key, model)
-    await query.edit_message_text(f"Model set to {model}. Takes effect on next message.")
-    logger.info("Model set to %s for %s", model, key)
-
-
 async def cmd_kill(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Kill the active Claude process for this chat/topic."""
     user_id = update.effective_user.id
@@ -1064,48 +974,6 @@ async def cmd_restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     # Exit non-zero so launchd respawns us (SIGTERM exits 0, which launchd
     # treats as successful and won't respawn)
     os._exit(1)
-
-
-async def cmd_commitpushpr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Commit, push, and create a PR via Claude skill."""
-    user_id = update.effective_user.id
-    if ALLOWED_USER_IDS and user_id not in ALLOWED_USER_IDS:
-        return
-
-    if not await _check_auth(update):
-        await _send_auth_link(update)
-        return
-
-    chat_id = update.effective_chat.id
-    thread_id = update.message.message_thread_id
-    key = _session_key(chat_id, thread_id)
-
-    prompt = (
-        "/synodic-kit:commit-push-pr\n\n"
-        "After creating the PR, include the PR URL in your response."
-    )
-
-    pending_id = save_pending(chat_id, thread_id, prompt, key)
-
-    stop_typing = asyncio.Event()
-    typing_task = asyncio.create_task(
-        keep_typing(chat_id, thread_id, stop_typing, context.bot)
-    )
-
-    try:
-        loop = asyncio.get_running_loop()
-        response = await loop.run_in_executor(_executor, run_claude, prompt, key)
-    except Exception as e:
-        logger.error("Error running commitpushpr for %s: %s", key, e)
-        response = f"Error: {e}"
-    finally:
-        stop_typing.set()
-        await typing_task
-
-    for i in range(0, len(response), TELEGRAM_MSG_LIMIT):
-        await update.message.reply_text(response[i : i + TELEGRAM_MSG_LIMIT])
-
-    clear_pending(pending_id)
 
 
 def _get_default_branch(cwd: str) -> str:
@@ -1290,8 +1158,6 @@ async def post_init(app: Application) -> None:
             BotCommand("project", "Show current project dir"),
             BotCommand("auth", "Authenticate or check auth status"),
             BotCommand("lock", "Lock session (use 'lock all' for all sessions)"),
-            BotCommand("model", "Set model (opus/sonnet/haiku)"),
-            BotCommand("commitpushpr", "Commit, push, and create a PR"),
             BotCommand("cleanup", "Switch to default branch, delete current"),
             BotCommand("kill", "Kill active Claude process"),
             BotCommand("restart", "Restart the bridge"),
@@ -1322,9 +1188,6 @@ def main() -> None:
     app.add_handler(CommandHandler("auth", cmd_auth))
     app.add_handler(CommandHandler("lock", cmd_lock))
     app.add_handler(CommandHandler("totp", cmd_totp))
-    app.add_handler(CommandHandler("model", cmd_model))
-    app.add_handler(CallbackQueryHandler(callback_model, pattern=r"^model:"))
-    app.add_handler(CommandHandler("commitpushpr", cmd_commitpushpr))
     app.add_handler(CommandHandler("cleanup", cmd_cleanup))
     app.add_handler(CommandHandler("kill", cmd_kill))
     app.add_handler(CommandHandler("restart", cmd_restart))
