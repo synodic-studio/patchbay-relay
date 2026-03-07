@@ -1,6 +1,6 @@
 """Authentication state management for the Telegram bridge.
 
-Manages Sign in with Apple sessions: creation, validation, expiry,
+Manages Sign in with Apple sessions and TOTP: creation, validation, expiry,
 IP change detection, and manual lock/unlock.
 """
 
@@ -271,3 +271,91 @@ def consume_auth_token(token: str) -> int | None:
     state["_pending_tokens"] = pending
     _save_state(state)
     return telegram_user_id
+
+
+# --- TOTP Authentication ---
+
+TOTP_SECRETS_FILE = AUTH_DIR / "totp_secrets.json"
+
+
+def _load_totp_secrets() -> dict:
+    if TOTP_SECRETS_FILE.exists():
+        try:
+            return json.loads(TOTP_SECRETS_FILE.read_text())
+        except (json.JSONDecodeError, TypeError):
+            return {}
+    return {}
+
+
+def _save_totp_secrets(secrets: dict) -> None:
+    TOTP_SECRETS_FILE.write_text(json.dumps(secrets, indent=2) + "\n")
+
+
+def setup_totp(telegram_user_id: int) -> tuple[str, str]:
+    """Generate a TOTP secret for a user. Returns (secret, provisioning_uri)."""
+    import pyotp
+
+    secret = pyotp.random_base32()
+    secrets = _load_totp_secrets()
+    secrets[str(telegram_user_id)] = {"secret": secret, "created_at": time.time()}
+    _save_totp_secrets(secrets)
+    _log_event("totp_setup", telegram_user_id)
+    _notify("totp_setup", telegram_user_id, "TOTP secret configured")
+    uri = pyotp.totp.TOTP(secret).provisioning_uri(
+        name=str(telegram_user_id), issuer_name="ClaudeBridge"
+    )
+    return secret, uri
+
+
+def has_totp(telegram_user_id: int) -> bool:
+    """Check if a user has TOTP configured."""
+    secrets = _load_totp_secrets()
+    return str(telegram_user_id) in secrets
+
+
+def verify_totp(telegram_user_id: int, code: str) -> bool:
+    """Verify a TOTP code. Returns True if valid."""
+    import pyotp
+
+    secrets = _load_totp_secrets()
+    entry = secrets.get(str(telegram_user_id))
+    if not entry:
+        return False
+    totp = pyotp.TOTP(entry["secret"])
+    return totp.verify(code, valid_window=1)
+
+
+def authenticate_totp(telegram_user_id: int, code: str) -> bool:
+    """Verify TOTP code and create a session if valid. Returns True on success."""
+    if is_rate_limited(telegram_user_id):
+        return False
+    if not verify_totp(telegram_user_id, code):
+        record_failed_attempt(telegram_user_id)
+        _log_event("totp_failed", telegram_user_id)
+        _notify("totp_failed", telegram_user_id, "Invalid TOTP code")
+        return False
+    # Create session (no Apple subject or IP for TOTP-based auth)
+    state = _load_state()
+    state[str(telegram_user_id)] = {
+        "auth_method": "totp",
+        "authenticated_at": time.time(),
+        "last_seen": time.time(),
+        "locked": False,
+    }
+    _save_state(state)
+    clear_rate_limit(telegram_user_id)
+    _log_event("totp_authenticated", telegram_user_id)
+    _notify("authenticated", telegram_user_id, "via TOTP")
+    return True
+
+
+def remove_totp(telegram_user_id: int) -> bool:
+    """Remove TOTP secret for a user. Returns True if existed."""
+    secrets = _load_totp_secrets()
+    if str(telegram_user_id) not in secrets:
+        return False
+    del secrets[str(telegram_user_id)]
+    _save_totp_secrets(secrets)
+    _log_event("totp_removed", telegram_user_id)
+    _notify("totp_removed", telegram_user_id, "TOTP secret removed")
+    return True

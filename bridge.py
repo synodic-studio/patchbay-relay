@@ -475,8 +475,9 @@ async def _send_auth_link(update: Update) -> None:
         return
     token = auth.generate_auth_token(user_id)
     link = f"{AUTH_BASE_URL}/login?token={token}"
+    totp_hint = "\n\nOr use /totp <code> if you have TOTP set up." if auth.has_totp(user_id) else ""
     await update.message.reply_text(
-        f"Authentication required.\n\n{link}\n\nLink expires in 15 minutes."
+        f"Authentication required.\n\n{link}\n\nLink expires in 15 minutes.{totp_hint}"
     )
 
 
@@ -519,6 +520,63 @@ async def cmd_lock(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         auth.lock_session(user_id)
         await update.message.reply_text("Session locked. Use /auth to re-authenticate.")
         logger.info("User %d locked their session", user_id)
+
+
+async def cmd_totp(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """TOTP setup and authentication."""
+    user_id = update.effective_user.id
+    if ALLOWED_USER_IDS and user_id not in ALLOWED_USER_IDS:
+        return
+
+    args = context.args
+    if not args:
+        has = auth.has_totp(user_id)
+        await update.message.reply_text(
+            f"TOTP is {'configured' if has else 'not configured'}.\n\n"
+            "Usage:\n"
+            "  /totp setup  — generate secret for authenticator app\n"
+            "  /totp <code> — authenticate with 6-digit code\n"
+            "  /totp disable — remove TOTP secret"
+        )
+        return
+
+    subcmd = args[0].lower()
+
+    if subcmd == "setup":
+        secret, uri = auth.setup_totp(user_id)
+        await update.message.reply_text(
+            f"TOTP configured.\n\n"
+            f"Manual key: {secret}\n\n"
+            f"Or add this URI to your authenticator app:\n{uri}\n\n"
+            f"Then verify with: /totp <6-digit-code>"
+        )
+        logger.info("User %d set up TOTP", user_id)
+        return
+
+    if subcmd == "disable":
+        if auth.remove_totp(user_id):
+            await update.message.reply_text("TOTP disabled.")
+        else:
+            await update.message.reply_text("TOTP was not configured.")
+        return
+
+    # Treat as a code attempt
+    code = subcmd
+    if not code.isdigit() or len(code) != 6:
+        await update.message.reply_text("Send a 6-digit code: /totp 123456")
+        return
+
+    if auth.is_rate_limited(user_id):
+        await update.message.reply_text(
+            "Too many failed attempts. Try again in 15 minutes."
+        )
+        return
+
+    if auth.authenticate_totp(user_id, code):
+        await update.message.reply_text("Authenticated via TOTP.")
+        logger.info("User %d authenticated via TOTP", user_id)
+    else:
+        await update.message.reply_text("Invalid code. Try again.")
 
 
 async def _send_response(
@@ -1210,6 +1268,7 @@ def main() -> None:
     app.add_handler(CommandHandler("project", cmd_project))
     app.add_handler(CommandHandler("auth", cmd_auth))
     app.add_handler(CommandHandler("lock", cmd_lock))
+    app.add_handler(CommandHandler("totp", cmd_totp))
     app.add_handler(CommandHandler("model", cmd_model))
     app.add_handler(CallbackQueryHandler(callback_model, pattern=r"^model:"))
     app.add_handler(CommandHandler("commitpushpr", cmd_commitpushpr))
