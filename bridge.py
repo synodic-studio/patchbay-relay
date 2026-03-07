@@ -42,7 +42,8 @@ from telegram.ext import (
 
 import auth
 
-BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
+_kc = subprocess.run(["security", "find-generic-password", "-a", "bryancostanza", "-s", "telegram-bot-token", "-w"], capture_output=True, text=True)
+BOT_TOKEN = _kc.stdout.strip() if _kc.returncode == 0 and _kc.stdout.strip() else os.environ.get("TELEGRAM_BOT_TOKEN", "")
 ALLOWED_USER_IDS: set[int] = set()
 _raw = os.environ.get("ALLOWED_USER_IDS", "")
 if _raw.strip():
