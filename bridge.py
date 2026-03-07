@@ -100,14 +100,25 @@ def set_chat_model(session_key: str, model: str | None) -> None:
     _save_chat_models(models)
 
 
-def _load_chat_projects() -> dict[str, str]:
-    """Load session_key -> relative project path mapping."""
+def _load_chat_projects() -> dict:
+    """Load session_key -> project entry mapping.
+
+    Values may be plain strings (relative path) or dicts with 'path' and
+    optional 'agent' keys (Fanta agent topics).
+    """
     if CHAT_PROJECTS_FILE.exists():
         try:
             return json.loads(CHAT_PROJECTS_FILE.read_text())
         except (json.JSONDecodeError, TypeError):
             return {}
     return {}
+
+
+def _project_rel_path(entry) -> str | None:
+    """Extract the relative path from a chat_projects entry (str or dict)."""
+    if isinstance(entry, dict):
+        return entry.get("path")
+    return entry
 
 
 def _save_chat_projects(projects: dict[str, str]) -> None:
@@ -117,7 +128,7 @@ def _save_chat_projects(projects: dict[str, str]) -> None:
 def get_chat_working_dir(session_key: str) -> str:
     """Resolve working directory for a chat. Returns absolute path."""
     projects = _load_chat_projects()
-    rel_path = projects.get(session_key)
+    rel_path = _project_rel_path(projects.get(session_key))
     if rel_path:
         return os.path.join(WORKING_DIR, rel_path)
     return WORKING_DIR
@@ -347,7 +358,7 @@ def run_claude(message: str, session_key: str) -> str:
     chat_cwd = get_chat_working_dir(session_key)
 
     projects = _load_chat_projects()
-    rel_path = projects.get(session_key)
+    rel_path = _project_rel_path(projects.get(session_key))
     project_info = f"~/Developer/{rel_path}" if rel_path else "~/Developer (default)"
 
     system_prompt = (
@@ -953,7 +964,7 @@ async def cmd_project(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     thread_id = update.message.message_thread_id
     key = _session_key(chat_id, thread_id)
     projects = _load_chat_projects()
-    rel_path = projects.get(key)
+    rel_path = _project_rel_path(projects.get(key))
     if rel_path:
         await update.message.reply_text(f"Project: ~/Developer/{rel_path}")
     else:
