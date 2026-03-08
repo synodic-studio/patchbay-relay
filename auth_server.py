@@ -46,8 +46,12 @@ APPLE_PRIVATE_KEY_PATH = os.environ.get("APPLE_PRIVATE_KEY_PATH", "")
 AUTH_BASE_URL = os.environ.get("AUTH_BASE_URL", "https://auth.kj6.dev")
 AUTH_PORT = int(os.environ.get("AUTH_PORT", "8443"))
 APPLE_SUBJECT_ALLOWLIST: set[str] = set()
-_kc_subj = subprocess.run(["security", "find-generic-password", "-a", "bryancostanza", "-s", "apple-subject-allowlist", "-w"], capture_output=True, text=True)
-_raw_subjects = _kc_subj.stdout.strip() if _kc_subj.returncode == 0 and _kc_subj.stdout.strip() else os.environ.get("APPLE_SUBJECT_ALLOWLIST", "")
+_pp_subj = subprocess.run(["pass-cli", "item", "view", "--vault-name", "Developer Secrets", "--item-title", "apple-subject-allowlist", "--field", "note"], capture_output=True, text=True)
+if _pp_subj.returncode == 0 and _pp_subj.stdout.strip():
+    _raw_subjects = _pp_subj.stdout.strip()
+else:
+    _kc_subj = subprocess.run(["security", "find-generic-password", "-a", "bryancostanza", "-s", "apple-subject-allowlist", "-w"], capture_output=True, text=True)
+    _raw_subjects = _kc_subj.stdout.strip() if _kc_subj.returncode == 0 and _kc_subj.stdout.strip() else os.environ.get("APPLE_SUBJECT_ALLOWLIST", "")
 if _raw_subjects.strip():
     APPLE_SUBJECT_ALLOWLIST = {s.strip() for s in _raw_subjects.split(",") if s.strip()}
 

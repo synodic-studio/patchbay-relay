@@ -14,6 +14,7 @@ becomes an independent Claude session, running in parallel.
 """
 
 import asyncio
+import functools
 import json
 import logging
 import os
@@ -30,7 +31,11 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent / ".env")
 
+import telegramify_markdown
+from telegramify_markdown.customize import get_runtime_config
+
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, Update
+from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -40,10 +45,24 @@ from telegram.ext import (
     filters,
 )
 
+# Configure telegramify-markdown: no emoji prefixes for headings
+_tgmd_config = get_runtime_config()
+_tgmd_sym = _tgmd_config.markdown_symbol
+_tgmd_sym.head_level_1 = ">"
+_tgmd_sym.head_level_2 = ">>"
+_tgmd_sym.head_level_3 = ">>>"
+_tgmd_sym.head_level_4 = ">>>"
+_tgmd_sym.image = ""
+_tgmd_sym.link = ""
+
 import auth
 
-_kc = subprocess.run(["security", "find-generic-password", "-a", "bryancostanza", "-s", "telegram-bot-token", "-w"], capture_output=True, text=True)
-BOT_TOKEN = _kc.stdout.strip() if _kc.returncode == 0 and _kc.stdout.strip() else os.environ.get("TELEGRAM_BOT_TOKEN", "")
+_pp = subprocess.run(["pass-cli", "item", "view", "--vault-name", "Developer Secrets", "--item-title", "telegram-bot-token", "--field", "note"], capture_output=True, text=True)
+if _pp.returncode == 0 and _pp.stdout.strip():
+    BOT_TOKEN = _pp.stdout.strip()
+else:
+    _kc = subprocess.run(["security", "find-generic-password", "-a", "bryancostanza", "-s", "telegram-bot-token", "-w"], capture_output=True, text=True)
+    BOT_TOKEN = _kc.stdout.strip() if _kc.returncode == 0 and _kc.stdout.strip() else os.environ.get("TELEGRAM_BOT_TOKEN", "")
 ALLOWED_USER_IDS: set[int] = set()
 _raw = os.environ.get("ALLOWED_USER_IDS", "")
 if _raw.strip():
@@ -66,38 +85,6 @@ SESSION_DIR.mkdir(exist_ok=True)
 PENDING_DIR = Path(__file__).parent / "pending"
 PENDING_DIR.mkdir(exist_ok=True)
 CHAT_PROJECTS_FILE = Path(__file__).parent / "chat_projects.json"
-CHAT_MODELS_FILE = Path(__file__).parent / "chat_models.json"
-
-VALID_MODELS = {"opus", "sonnet", "haiku"}
-
-
-def _load_chat_models() -> dict[str, str]:
-    """Load session_key -> model alias mapping."""
-    if CHAT_MODELS_FILE.exists():
-        try:
-            return json.loads(CHAT_MODELS_FILE.read_text())
-        except (json.JSONDecodeError, TypeError):
-            return {}
-    return {}
-
-
-def _save_chat_models(models: dict[str, str]) -> None:
-    CHAT_MODELS_FILE.write_text(json.dumps(models, indent=2) + "\n")
-
-
-def get_chat_model(session_key: str) -> str | None:
-    """Return the model alias for a chat, or None for default."""
-    return _load_chat_models().get(session_key)
-
-
-def set_chat_model(session_key: str, model: str | None) -> None:
-    """Set or clear the model for a chat."""
-    models = _load_chat_models()
-    if model is None:
-        models.pop(session_key, None)
-    else:
-        models[session_key] = model
-    _save_chat_models(models)
 
 
 def _load_chat_projects() -> dict:
@@ -126,21 +113,36 @@ def _save_chat_projects(projects: dict[str, str]) -> None:
 
 
 def get_chat_working_dir(session_key: str) -> str:
-    """Resolve working directory for a chat. Returns absolute path."""
+    """Resolve working directory for a chat. Returns absolute path.
+
+    For Fanta agent topics (dict entries with 'agent' key), this always
+    returns the Fanta root — NOT the agent subdirectory. The agent's
+    identity is communicated via the system prompt instead. Running from
+    Fanta root ensures Claude Code auto-loads the bootstrap CLAUDE.md
+    and has access to shared infra (USER.md, TOOLS.md, scripts/, etc.).
+    """
     projects = _load_chat_projects()
-    rel_path = _project_rel_path(projects.get(session_key))
+    entry = projects.get(session_key)
+    rel_path = _project_rel_path(entry)
     if rel_path:
         return os.path.join(WORKING_DIR, rel_path)
     return WORKING_DIR
 
 
 def set_chat_project(session_key: str, rel_path: str | None) -> None:
-    """Set or clear the project directory for a chat."""
+    """Set or clear the project directory for a chat.
+
+    Preserves the 'agent' field if the entry is already a dict (agent topic).
+    """
     projects = _load_chat_projects()
     if rel_path is None:
         projects.pop(session_key, None)
     else:
-        projects[session_key] = rel_path
+        existing = projects.get(session_key)
+        if isinstance(existing, dict) and "agent" in existing:
+            existing["path"] = rel_path
+        else:
+            projects[session_key] = rel_path
     _save_chat_projects(projects)
 
 _executor = ThreadPoolExecutor(max_workers=MAX_WORKERS)
@@ -170,7 +172,7 @@ TELEGRAM_MSG_LIMIT = 4096
 QUICK_REPLY_KEYBOARD = ReplyKeyboardMarkup(
     [
         ["/new", "/kill", "/ping"],
-        ["/project", "/model", "/commitpushpr"],
+        ["/project", "/cleanup"],
     ],
     resize_keyboard=True,
     is_persistent=True,
@@ -297,9 +299,8 @@ async def replay_pending(bot) -> None:
             send_kwargs["message_thread_id"] = thread_id
 
         for i in range(0, len(full_response), TELEGRAM_MSG_LIMIT):
-            await bot.send_message(
-                text=full_response[i : i + TELEGRAM_MSG_LIMIT], **send_kwargs
-            )
+            chunk = full_response[i : i + TELEGRAM_MSG_LIMIT]
+            await _send_md(bot.send_message, chunk, **send_kwargs)
 
         logger.info("Replayed pending message %s", f.stem)
 
@@ -352,7 +353,7 @@ def parse_claude_response(stdout: str, session_key: str) -> str:
         return stdout
 
 
-def run_claude(message: str, session_key: str) -> str:
+def run_claude(message: str, session_key: str, model: str | None = None) -> str:
     """Invoke claude CLI via Popen. Does not kill on timeout."""
     session_id = get_session_id(session_key)
     chat_cwd = get_chat_working_dir(session_key)
@@ -360,6 +361,10 @@ def run_claude(message: str, session_key: str) -> str:
     projects = _load_chat_projects()
     rel_path = _project_rel_path(projects.get(session_key))
     project_info = f"~/Developer/{rel_path}" if rel_path else "~/Developer (default)"
+
+    # Detect agent mode from chat_projects entry
+    entry = projects.get(session_key)
+    agent_name = entry.get("agent") if isinstance(entry, dict) else None
 
     system_prompt = (
         "Bryan is messaging you via Telegram from his phone. Keep responses concise - he's on mobile. "
@@ -369,8 +374,8 @@ def run_claude(message: str, session_key: str) -> str:
         "Bryan's accounts: iCloud (REDACTED@example.com) and Gmail (REDACTED@example.com). "
         "IMPORTANT: NEVER use the AskUserQuestion tool - it requires interactive terminal UI that doesn't work through Telegram. "
         "Instead, ask questions as plain text in your response and let Bryan reply naturally.\n\n"
-        "FORMATTING: Telegram renders messages as plain text — no markdown. "
-        "For any tabular or structured data, use ASCII art (aligned columns, dashes, box-drawing characters).\n\n"
+        "FORMATTING: Telegram supports markdown formatting. Use it naturally — "
+        "bold, italic, code blocks, etc. all render correctly.\n\n"
         "SHARED FILES: Bryan has a ProtonDrive folder synced to this machine at "
         "~/Library/CloudStorage/ProtonDrive-REDACTED@example.com-folder/Claude-Support. "
         "You can drop files there (documents, images, exports) for Bryan to access from any device. "
@@ -378,10 +383,24 @@ def run_claude(message: str, session_key: str) -> str:
         f"Telegram session key: {session_key}\n"
         f"Working directory: {project_info}\n"
         f"Chat projects config: {CHAT_PROJECTS_FILE}\n"
-        "You can change your own project directory by editing chat_projects.json "
-        "(map session key to a path relative to ~/Developer). "
-        "After changing it, tell Bryan to run /new to pick up the new cwd."
+        "To change the working directory, tell Bryan to use /setproject — do NOT edit chat_projects.json directly."
     )
+
+    # Inject agent identity so the Fanta bootstrap knows which agent to load
+    if agent_name:
+        system_prompt += (
+            f"\n\nAGENT MODE: You are the '{agent_name}' agent from Fanta. "
+            f"On session start, read your identity stack in this order:\n"
+            f"1. USER.md (global — in repo root)\n"
+            f"2. TOOLS.md (global — in repo root)\n"
+            f"3. agents/{agent_name}/SOUL.md\n"
+            f"4. agents/{agent_name}/IDENTITY.md (if it exists)\n"
+            f"5. agents/{agent_name}/AGENTS.md\n"
+            f"6. agents/{agent_name}/HEARTBEAT.md (if it exists)\n"
+            f"Do NOT read other agents' files. You are ONLY the {agent_name} agent. "
+            f"Adopt the personality and boundaries defined in your SOUL.md. "
+            f"Skip MEMORY.md in Telegram context (per Fanta conventions)."
+        )
 
     cmd = [
         CLAUDE_PATH,
@@ -398,21 +417,21 @@ def run_claude(message: str, session_key: str) -> str:
         system_prompt,
     ]
 
-    model = get_chat_model(session_key)
-    if model:
-        cmd.extend(["--model", model])
+    # Default to sonnet; callers pass model based on message prefix
+    effective_model = model or "sonnet"
+    cmd.extend(["--model", effective_model])
 
     if session_id:
         cmd.extend(["--resume", session_id])
         logger.info("Resuming session %s for %s", session_id[:12], session_key)
 
-    logger.info("Launching claude in %s for %s", chat_cwd, session_key)
+    logger.info("Launching claude (model=%s) in %s for %s", effective_model, chat_cwd, session_key)
     invoke_start = time.time()
     _log_activity(
         "claude_invoke",
         session_key=session_key,
         cwd=chat_cwd,
-        model=model or "default",
+        model=effective_model,
         resume=bool(session_id),
     )
 
@@ -627,6 +646,26 @@ async def cmd_totp(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("Invalid code. Try again.")
 
 
+def _to_markdownv2(text: str) -> str | None:
+    """Convert markdown to MarkdownV2. Returns None on failure."""
+    try:
+        return telegramify_markdown.markdownify(text)
+    except Exception:
+        return None
+
+
+async def _send_md(send_func, text: str, **kwargs) -> None:
+    """Send a message with MarkdownV2 formatting, falling back to plain text."""
+    md = _to_markdownv2(text)
+    if md:
+        try:
+            await send_func(text=md, parse_mode=ParseMode.MARKDOWN_V2, **kwargs)
+            return
+        except Exception as e:
+            logger.debug("MarkdownV2 send failed, falling back to plain: %s", e)
+    await send_func(text=text, **kwargs)
+
+
 async def _send_response(
     bot, chat_id: int, thread_id: int | None, response: str
 ) -> None:
@@ -635,7 +674,38 @@ async def _send_response(
     if thread_id is not None:
         send_kwargs["message_thread_id"] = thread_id
     for i in range(0, len(response), TELEGRAM_MSG_LIMIT):
-        await bot.send_message(text=response[i : i + TELEGRAM_MSG_LIMIT], **send_kwargs)
+        chunk = response[i : i + TELEGRAM_MSG_LIMIT]
+        await _send_md(bot.send_message, chunk, **send_kwargs)
+
+
+# Message prefix → model mapping
+# =  → opus (heavy lifting)
+# [  → haiku (quick/cheap)
+# ;  → haiku + triage mode (create beads, don't execute)
+_PREFIX_MAP = {
+    "=": "opus",
+    "[": "haiku",
+    ";": "haiku",
+}
+
+
+def _parse_model_prefix(text: str) -> tuple[str, str | None, bool]:
+    """Parse a leading prefix character that selects the model.
+
+    Returns (cleaned_text, model_or_None, is_triage_mode).
+    """
+    if text and text[0] in _PREFIX_MAP:
+        prefix = text[0]
+        cleaned = text[1:].lstrip()
+        is_triage = prefix == ";"
+        if is_triage:
+            cleaned = (
+                "Turn the following into bead issue(s) using `bd create`. "
+                "Do NOT execute the work — just create the beads.\n\n"
+                + cleaned
+            )
+        return cleaned, _PREFIX_MAP[prefix], is_triage
+    return text, None, False
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -657,15 +727,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await _send_auth_link(update)
         return
 
+    # Parse model prefix before anything else
+    text, model, _is_triage = _parse_model_prefix(text)
+    if not text:
+        return
+
     chat_id = update.effective_chat.id
     thread_id = update.message.message_thread_id
     key = _session_key(chat_id, thread_id)
-    logger.info("From %d [%s]: %s", user_id, key, text[:80])
-    _log_activity("message", user_id=user_id, session_key=key, text_len=len(text))
+    logger.info("From %d [%s] (model=%s): %s", user_id, key, model or "sonnet", text[:80])
+    _log_activity("message", user_id=user_id, session_key=key, text_len=len(text), model=model or "sonnet")
 
     # Debounce: if Claude is already processing for this session, queue the message
     if key in _processing_sessions:
-        _queued_messages.setdefault(key, []).append(text)
+        _queued_messages.setdefault(key, []).append((text, model))
         depth = len(_queued_messages[key])
         await update.message.reply_text(f"Queued ({depth}) — will send when current response finishes.")
         logger.info("Queued message for %s (depth: %d)", key, depth)
@@ -682,29 +757,36 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     try:
         loop = asyncio.get_running_loop()
-        response = await loop.run_in_executor(_executor, run_claude, text, key)
+        response = await loop.run_in_executor(
+            _executor, functools.partial(run_claude, text, key, model=model)
+        )
     except Exception as e:
         logger.error("Error running claude for %s: %s", key, e)
         response = f"Error: {e}"
 
     for i in range(0, len(response), TELEGRAM_MSG_LIMIT):
-        await update.message.reply_text(response[i : i + TELEGRAM_MSG_LIMIT])
+        chunk = response[i : i + TELEGRAM_MSG_LIMIT]
+        await _send_md(update.message.reply_text, chunk)
     clear_pending(pending_id)
 
     # Drain queued messages: batch all into a single Claude invocation
+    # Each queued item is a (text, model) tuple; use the last message's model
     try:
         while _queued_messages.get(key):
             batch = _queued_messages.pop(key)
             logger.info("Processing %d queued message(s) for %s", len(batch), key)
-            if len(batch) == 1:
-                combined = batch[0]
+            texts = [t for t, _m in batch]
+            # Use the model from the last queued message
+            queued_model = batch[-1][1]
+            if len(texts) == 1:
+                combined = texts[0]
             else:
                 combined = "\n\n---\n\n".join(
-                    f"[Follow-up {i + 1}]\n{msg}" for i, msg in enumerate(batch)
+                    f"[Follow-up {i + 1}]\n{msg}" for i, msg in enumerate(texts)
                 )
             try:
                 response = await loop.run_in_executor(
-                    _executor, run_claude, combined, key
+                    _executor, functools.partial(run_claude, combined, key, model=queued_model)
                 )
             except Exception as e:
                 logger.error("Error running claude for queued batch %s: %s", key, e)
@@ -765,7 +847,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         local_path.unlink(missing_ok=True)
 
     for i in range(0, len(response), TELEGRAM_MSG_LIMIT):
-        await update.message.reply_text(response[i : i + TELEGRAM_MSG_LIMIT])
+        chunk = response[i : i + TELEGRAM_MSG_LIMIT]
+        await _send_md(update.message.reply_text, chunk)
 
     clear_pending(pending_id)
 
@@ -779,8 +862,6 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/setproject <path> - Set project dir (relative to ~/Developer)\n"
         "/setproject - Clear project binding (use default)\n"
         "/project - Show current project dir\n"
-        "/model - Set model (opus/sonnet/haiku)\n"
-        "/commitpushpr - Commit, push, and create a PR\n"
         "/cleanup - Switch to default branch and delete current\n"
         "/kill - Kill active Claude process\n"
         "/restart - Restart the bridge\n"
@@ -859,7 +940,10 @@ async def cmd_new(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     cwd = get_chat_working_dir(key)
     clear_session(key)
 
-    msg = "Fresh session started."
+    msg = (
+        "Fresh session started.\n"
+        "Prefixes: = opus | [ haiku | ; haiku+beads | (none) sonnet"
+    )
     summary = await asyncio.get_event_loop().run_in_executor(
         _executor, _git_status_summary, cwd,
     )
@@ -963,67 +1047,16 @@ async def cmd_project(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     chat_id = update.effective_chat.id
     thread_id = update.message.message_thread_id
     key = _session_key(chat_id, thread_id)
+    cwd = get_chat_working_dir(key)
+    home = str(Path.home())
+    display = cwd.replace(home, "~")
     projects = _load_chat_projects()
-    rel_path = _project_rel_path(projects.get(key))
-    if rel_path:
-        await update.message.reply_text(f"Project: ~/Developer/{rel_path}")
+    entry = projects.get(key)
+    agent_name = entry.get("agent") if isinstance(entry, dict) else None
+    if agent_name:
+        await update.message.reply_text(f"Project: {display}\nAgent: {agent_name}")
     else:
-        await update.message.reply_text("No project set. Using default: ~/Developer")
-
-
-async def cmd_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Set or show the model for this chat/topic."""
-    user_id = update.effective_user.id
-    if ALLOWED_USER_IDS and user_id not in ALLOWED_USER_IDS:
-        return
-
-    chat_id = update.effective_chat.id
-    thread_id = update.message.message_thread_id
-    key = _session_key(chat_id, thread_id)
-
-    args = context.args
-    if args:
-        choice = args[0].lower()
-        if choice not in VALID_MODELS:
-            await update.message.reply_text(f"Invalid model. Choose: opus, sonnet, haiku")
-            return
-        set_chat_model(key, choice)
-        await update.message.reply_text(f"Model set to {choice}. Takes effect on next message.")
-        logger.info("Model set to %s for %s", choice, key)
-        return
-
-    # No args: show buttons
-    current = get_chat_model(key) or "default (opus)"
-    buttons = [
-        [
-            InlineKeyboardButton("opus", callback_data="model:opus"),
-            InlineKeyboardButton("sonnet", callback_data="model:sonnet"),
-            InlineKeyboardButton("haiku", callback_data="model:haiku"),
-        ]
-    ]
-    await update.message.reply_text(
-        f"Current model: {current}\nPick a model:",
-        reply_markup=InlineKeyboardMarkup(buttons),
-    )
-
-
-async def callback_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle inline keyboard button presses for model selection."""
-    query = update.callback_query
-    await query.answer()
-
-    chat_id = update.effective_chat.id
-    thread_id = query.message.message_thread_id
-    key = _session_key(chat_id, thread_id)
-
-    model = query.data.split(":", 1)[1]
-    if model not in VALID_MODELS:
-        await query.edit_message_text(f"Invalid model: {model}")
-        return
-
-    set_chat_model(key, model)
-    await query.edit_message_text(f"Model set to {model}. Takes effect on next message.")
-    logger.info("Model set to %s for %s", model, key)
+        await update.message.reply_text(f"Project: {display}")
 
 
 async def cmd_kill(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1064,48 +1097,6 @@ async def cmd_restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     # Exit non-zero so launchd respawns us (SIGTERM exits 0, which launchd
     # treats as successful and won't respawn)
     os._exit(1)
-
-
-async def cmd_commitpushpr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Commit, push, and create a PR via Claude skill."""
-    user_id = update.effective_user.id
-    if ALLOWED_USER_IDS and user_id not in ALLOWED_USER_IDS:
-        return
-
-    if not await _check_auth(update):
-        await _send_auth_link(update)
-        return
-
-    chat_id = update.effective_chat.id
-    thread_id = update.message.message_thread_id
-    key = _session_key(chat_id, thread_id)
-
-    prompt = (
-        "/synodic-kit:commit-push-pr\n\n"
-        "After creating the PR, include the PR URL in your response."
-    )
-
-    pending_id = save_pending(chat_id, thread_id, prompt, key)
-
-    stop_typing = asyncio.Event()
-    typing_task = asyncio.create_task(
-        keep_typing(chat_id, thread_id, stop_typing, context.bot)
-    )
-
-    try:
-        loop = asyncio.get_running_loop()
-        response = await loop.run_in_executor(_executor, run_claude, prompt, key)
-    except Exception as e:
-        logger.error("Error running commitpushpr for %s: %s", key, e)
-        response = f"Error: {e}"
-    finally:
-        stop_typing.set()
-        await typing_task
-
-    for i in range(0, len(response), TELEGRAM_MSG_LIMIT):
-        await update.message.reply_text(response[i : i + TELEGRAM_MSG_LIMIT])
-
-    clear_pending(pending_id)
 
 
 def _get_default_branch(cwd: str) -> str:
@@ -1290,8 +1281,6 @@ async def post_init(app: Application) -> None:
             BotCommand("project", "Show current project dir"),
             BotCommand("auth", "Authenticate or check auth status"),
             BotCommand("lock", "Lock session (use 'lock all' for all sessions)"),
-            BotCommand("model", "Set model (opus/sonnet/haiku)"),
-            BotCommand("commitpushpr", "Commit, push, and create a PR"),
             BotCommand("cleanup", "Switch to default branch, delete current"),
             BotCommand("kill", "Kill active Claude process"),
             BotCommand("restart", "Restart the bridge"),
@@ -1322,9 +1311,6 @@ def main() -> None:
     app.add_handler(CommandHandler("auth", cmd_auth))
     app.add_handler(CommandHandler("lock", cmd_lock))
     app.add_handler(CommandHandler("totp", cmd_totp))
-    app.add_handler(CommandHandler("model", cmd_model))
-    app.add_handler(CallbackQueryHandler(callback_model, pattern=r"^model:"))
-    app.add_handler(CommandHandler("commitpushpr", cmd_commitpushpr))
     app.add_handler(CommandHandler("cleanup", cmd_cleanup))
     app.add_handler(CommandHandler("kill", cmd_kill))
     app.add_handler(CommandHandler("restart", cmd_restart))

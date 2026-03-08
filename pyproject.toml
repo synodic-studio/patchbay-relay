@@ -12,5 +12,6 @@ dependencies = [
     "python-multipart>=0.0.22",
     "python-telegram-bot>=22.6",
     "qrcode[terminal]>=8.2",
+    "telegramify-markdown>=0.5.4",
     "uvicorn>=0.41.0",
 ]
