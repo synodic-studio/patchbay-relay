@@ -10,3 +10,4 @@ chat_projects.json
 chat_models.json
 activity.jsonl
 .tcc-paths
+.aider*
