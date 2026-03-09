@@ -11,3 +11,5 @@ chat_models.json
 activity.jsonl
 .tcc-paths
 .aider*
+.crash-timestamps
+.bridge-known-good.py
