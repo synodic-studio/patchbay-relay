@@ -1,4 +1,4 @@
-# Claude Telegram Bridge
+# Stargate
 
 Telegram bot bridge that routes messages to Claude Code sessions.
 
@@ -15,7 +15,7 @@ Both services use `KeepAlive: { SuccessfulExit: false }` so they auto-restart on
 
 | Plist (source of truth) | Installed to | Label |
 |---|---|---|
-| `com.synodic.claude-telegram-bridge.plist` | `~/Library/LaunchAgents/` | `com.synodic.claude-telegram-bridge` |
+| `com.synodic.claude-telegram-bridge.plist` | `~/Library/LaunchAgents/` | `com.synodic.stargate` |
 | `dev.kj6.auth-bridge.plist` | `~/Library/LaunchAgents/` | `dev.kj6.auth-bridge` |
 
 After editing a plist here, copy it to `~/Library/LaunchAgents/` and reload:
@@ -27,4 +27,4 @@ launchctl load ~/Library/LaunchAgents/<file>.plist
 
 ## Python Environment
 
-Virtual environment at `~/Developer/venvs/claude-telegram-bridge/`. Dependencies in `requirements.txt`.
+Managed with `uv`. Run `uv sync` to install dependencies. Scripts use `uv run` — no venv activation needed.

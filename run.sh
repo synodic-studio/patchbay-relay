@@ -1,5 +1,5 @@
 #!/bin/bash
-# Launch the Claude Code Telegram bridge
+# Launch Stargate
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 "$SCRIPT_DIR/tcc-check.sh" || true
-exec "$SCRIPT_DIR/.venv/bin/python3" "$SCRIPT_DIR/bridge.py"
+exec uv run --project "$SCRIPT_DIR" python "$SCRIPT_DIR/bridge.py"

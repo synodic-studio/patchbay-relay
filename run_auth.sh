@@ -12,7 +12,7 @@ trap cleanup INT TERM
 
 # Start auth server
 echo "Starting auth server on port 8443..."
-"$SCRIPT_DIR/.venv/bin/python3" "$SCRIPT_DIR/auth_server.py" &
+uv run --project "$SCRIPT_DIR" python "$SCRIPT_DIR/auth_server.py" &
 AUTH_PID=$!
 
 # Start Cloudflare Tunnel

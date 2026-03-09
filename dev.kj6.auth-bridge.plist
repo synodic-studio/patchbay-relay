@@ -7,7 +7,7 @@
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
-        <string>/Users/bryancostanza/Developer/claude-telegram-bridge/run_auth.sh</string>
+        <string>/Users/bryancostanza/Developer/stargate/run_auth.sh</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
@@ -17,11 +17,11 @@
         <false/>
     </dict>
     <key>WorkingDirectory</key>
-    <string>/Users/bryancostanza/Developer/claude-telegram-bridge</string>
+    <string>/Users/bryancostanza/Developer/stargate</string>
     <key>StandardOutPath</key>
-    <string>/Users/bryancostanza/Developer/claude-telegram-bridge/logs/auth-bridge.log</string>
+    <string>/Users/bryancostanza/Developer/stargate/logs/auth-bridge.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/bryancostanza/Developer/claude-telegram-bridge/logs/auth-bridge.err</string>
+    <string>/Users/bryancostanza/Developer/stargate/logs/auth-bridge.err</string>
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
