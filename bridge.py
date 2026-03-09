@@ -1107,6 +1107,12 @@ async def cmd_restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         _remote_proc.terminate()
         logger.info("Terminated remote-control process (pid %d)", _remote_proc.pid)
 
+    # Write restart notify so the new process can ping this chat on startup
+    restart_notify = PENDING_DIR / "restart_notify.json"
+    restart_notify.write_text(
+        json.dumps({"chat_id": update.effective_chat.id, "thread_id": update.message.message_thread_id})
+    )
+
     # Exit non-zero so launchd respawns us (SIGTERM exits 0, which launchd
     # treats as successful and won't respawn)
     os._exit(1)
@@ -1348,6 +1354,19 @@ async def post_init(app: Application) -> None:
     logger.info("Stall detector started (poll=%ds, timeout=%ds)", STALL_POLL_INTERVAL, STALL_TIMEOUT)
 
     await replay_pending(app.bot)
+
+    # Ping the chat that triggered /restart, if any
+    restart_notify = PENDING_DIR / "restart_notify.json"
+    if restart_notify.exists():
+        try:
+            data = json.loads(restart_notify.read_text())
+            send_kwargs: dict = {"chat_id": data["chat_id"], "text": "Bridge restarted ✓"}
+            if data.get("thread_id"):
+                send_kwargs["message_thread_id"] = data["thread_id"]
+            await app.bot.send_message(**send_kwargs)
+        except Exception:
+            pass
+        restart_notify.unlink(missing_ok=True)
 
 
 def main() -> None:
