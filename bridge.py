@@ -70,6 +70,7 @@ AUTH_REQUIRED = os.environ.get("AUTH_REQUIRED", "false").lower() == "true"
 SESSION_DIR = Path(__file__).parent / "sessions"
 SESSION_DIR.mkdir(exist_ok=True)
 PENDING_DIR = Path(__file__).parent / "pending"
+RESTART_NOTIFY_FILE = Path(__file__).parent / "restart_notify.json"
 PENDING_DIR.mkdir(exist_ok=True)
 CHAT_PROJECTS_FILE = Path(__file__).parent / "chat_projects.json"
 PACMAN_QUEUE_DIR = Path(PA_PLUGIN_DIR) / "agents" / "pac-man" / "queue"
@@ -1108,7 +1109,7 @@ async def cmd_restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         logger.info("Terminated remote-control process (pid %d)", _remote_proc.pid)
 
     # Write restart notify so the new process can ping this chat on startup
-    restart_notify = PENDING_DIR / "restart_notify.json"
+    restart_notify = RESTART_NOTIFY_FILE
     restart_notify.write_text(
         json.dumps({"chat_id": update.effective_chat.id, "thread_id": update.message.message_thread_id})
     )
@@ -1356,7 +1357,7 @@ async def post_init(app: Application) -> None:
     await replay_pending(app.bot)
 
     # Ping the chat that triggered /restart, if any
-    restart_notify = PENDING_DIR / "restart_notify.json"
+    restart_notify = RESTART_NOTIFY_FILE
     if restart_notify.exists():
         try:
             data = json.loads(restart_notify.read_text())
