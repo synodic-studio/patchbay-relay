@@ -15,7 +15,7 @@ Both services use `KeepAlive: { SuccessfulExit: false }` so they auto-restart on
 
 | Plist (source of truth) | Installed to | Label |
 |---|---|---|
-| `com.synodic.claude-telegram-bridge.plist` | `~/Library/LaunchAgents/` | `com.synodic.stargate` |
+| `com.synodic.claude-telegram-bridge.plist` | `~/Library/LaunchAgents/com.synodic.stargate.plist` | `com.synodic.stargate` |
 | `dev.kj6.auth-bridge.plist` | `~/Library/LaunchAgents/` | `dev.kj6.auth-bridge` |
 
 After editing a plist here, copy it to `~/Library/LaunchAgents/` and reload:

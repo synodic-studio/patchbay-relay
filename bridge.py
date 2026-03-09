@@ -141,6 +141,7 @@ _remote_proc_key: str | None = None
 
 # Message debounce: batch messages that arrive while Claude is processing
 _processing_sessions: set[str] = set()
+_session_start_times: dict[str, float] = {}  # session_key -> time.time() when processing began
 _queued_messages: dict[str, list[str]] = {}
 
 # Stalled process detector: track when each process last had meaningful CPU
@@ -801,6 +802,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     _processing_sessions.add(key)
+    _session_start_times[key] = time.time()
     pending_id = save_pending(chat_id, thread_id, text, key)
 
     stop_typing = asyncio.Event()
@@ -872,6 +874,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         stop_typing.set()
         await typing_task
         _processing_sessions.discard(key)
+        _session_start_times.pop(key, None)
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1197,7 +1200,20 @@ async def cmd_remote_control(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 async def cmd_ping(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text("pong")
+    if not _processing_sessions:
+        await update.message.reply_text("pong — no active sessions")
+        return
+    now = time.time()
+    lines = ["pong — active sessions:"]
+    for key in sorted(_processing_sessions):
+        started = _session_start_times.get(key)
+        if started:
+            elapsed = int(now - started)
+            mins, secs = divmod(elapsed, 60)
+            lines.append(f"  {key}: running {mins}m{secs:02d}s")
+        else:
+            lines.append(f"  {key}: running (start time unknown)")
+    await update.message.reply_text("\n".join(lines))
 
 
 async def _auth_notify(event_type: str, telegram_user_id: int, details: str = "") -> None:
@@ -1288,21 +1304,44 @@ async def post_init(app: Application) -> None:
     _bot_instance = app.bot
     auth.set_notify_callback(_auth_notify)
 
-    from telegram import BotCommand
-
-    await app.bot.set_my_commands(
-        [
-            BotCommand("clearnew", "Start a fresh conversation"),
-            BotCommand("setproject", "Set project dir (relative to ~/Developer)"),
-            BotCommand("project", "Show current project dir"),
-            BotCommand("remote_control", "Start/stop claude remote-control in project dir"),
-            BotCommand("kill", "Kill active Claude process"),
-            BotCommand("restart", "Restart the bridge"),
-            BotCommand("auth", "Authenticate or check auth status"),
-            BotCommand("lock", "Lock session (use 'lock all' for all sessions)"),
-            BotCommand("ping", "Check if bridge is alive"),
-        ]
+    from telegram import (
+        BotCommand,
+        BotCommandScopeAllChatAdministrators,
+        BotCommandScopeAllGroupChats,
+        BotCommandScopeAllPrivateChats,
+        BotCommandScopeChat,
+        BotCommandScopeDefault,
     )
+
+    # Clear stale commands from all scopes (including per-chat overrides) before re-registering
+    generic_scopes = [
+        BotCommandScopeDefault(),
+        BotCommandScopeAllPrivateChats(),
+        BotCommandScopeAllGroupChats(),
+        BotCommandScopeAllChatAdministrators(),
+    ]
+    for scope in generic_scopes:
+        await app.bot.delete_my_commands(scope=scope)
+    # Also clear any per-chat overrides for known group chats
+    known_chat_ids = {int(k.split("_")[0]) for k in _load_chat_projects()}
+    for chat_id in known_chat_ids:
+        try:
+            await app.bot.delete_my_commands(scope=BotCommandScopeChat(chat_id=chat_id))
+        except Exception:
+            pass
+
+    commands = [
+        BotCommand("clearnew", "Start a fresh conversation"),
+        BotCommand("setproject", "Set project dir (relative to ~/Developer)"),
+        BotCommand("project", "Show current project dir"),
+        BotCommand("remote_control", "Start/stop claude remote-control in project dir"),
+        BotCommand("kill", "Kill active Claude process"),
+        BotCommand("restart", "Restart the bridge"),
+        BotCommand("auth", "Authenticate or check auth status"),
+        BotCommand("lock", "Lock session (use 'lock all' for all sessions)"),
+        BotCommand("ping", "Check if bridge is alive"),
+    ]
+    await app.bot.set_my_commands(commands)
     logger.info("Bot commands registered with Telegram")
 
     asyncio.create_task(_stall_detector())
