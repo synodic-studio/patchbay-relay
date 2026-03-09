@@ -247,6 +247,11 @@ async def replay_pending(bot) -> None:
             f.unlink()
             continue
 
+        if not all(k in data for k in ("chat_id", "session_key", "text", "timestamp")):
+            logger.warning("Skipping malformed pending file %s", f.name)
+            f.unlink(missing_ok=True)
+            continue
+
         if time.time() - data["timestamp"] > SESSION_EXPIRY:
             f.unlink(missing_ok=True)
             logger.info("Discarding expired pending message %s", f.stem)
