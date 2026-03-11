@@ -18,6 +18,7 @@ import datetime
 import json
 import logging
 import os
+import re
 import select
 import signal
 import subprocess
@@ -458,6 +459,13 @@ def _handoff_to_pacman(
     now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     today = datetime.date.today().isoformat()
 
+    # Sanitize message for safe embedding in markdown code fence.
+    # Find the longest run of backticks in the message and use a fence
+    # that's strictly longer, so the user can't break out of the block.
+    backtick_runs = re.findall(r"`+", message)
+    max_backticks = max((len(r) for r in backtick_runs), default=0)
+    fence = "`" * max(3, max_backticks + 1)
+
     # Build the queue file
     lines = [
         "# Bridge Quota Recovery",
@@ -484,9 +492,9 @@ def _handoff_to_pacman(
         f"- **Thread ID:** {thread_id}",
         "",
         "**Original message from Bryan:**",
-        "```",
+        fence,
         message,
-        "```",
+        fence,
         "",
         "**Response routing:** When done, send the response back to Telegram.",
         "Use the bot API:",
