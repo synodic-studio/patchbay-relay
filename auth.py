@@ -14,6 +14,7 @@ logger = logging.getLogger("bridge.auth")
 
 AUTH_DIR = Path(__file__).parent / "auth"
 AUTH_DIR.mkdir(exist_ok=True)
+os.chmod(AUTH_DIR, 0o700)
 AUTH_STATE_FILE = AUTH_DIR / "sessions.json"
 AUTH_LOG_FILE = AUTH_DIR / "auth_log.jsonl"
 
@@ -21,7 +22,9 @@ AUTH_LOG_FILE = AUTH_DIR / "auth_log.jsonl"
 SESSION_EXPIRY_SECONDS = 30 * 24 * 60 * 60
 
 # Inactivity timeout: auto-expire if no messages for this long (default 7 days)
-INACTIVITY_TIMEOUT = int(os.environ.get("AUTH_INACTIVITY_TIMEOUT", str(7 * 24 * 60 * 60)))
+INACTIVITY_TIMEOUT = int(
+    os.environ.get("AUTH_INACTIVITY_TIMEOUT", str(7 * 24 * 60 * 60))
+)
 
 # Rate limiting: 3 failures in 5 min → locked out for 15 min
 RATE_LIMIT_MAX_FAILURES = 3
@@ -49,11 +52,16 @@ def _notify(event_type: str, telegram_user_id: int, details: str = "") -> None:
     if _notify_callback:
         try:
             import asyncio
+
             loop = asyncio.get_event_loop()
             if loop.is_running():
-                loop.create_task(_notify_callback(event_type, telegram_user_id, details))
+                loop.create_task(
+                    _notify_callback(event_type, telegram_user_id, details)
+                )
             else:
-                loop.run_until_complete(_notify_callback(event_type, telegram_user_id, details))
+                loop.run_until_complete(
+                    _notify_callback(event_type, telegram_user_id, details)
+                )
         except Exception:
             logger.debug("Failed to send auth notification", exc_info=True)
 
@@ -69,6 +77,7 @@ def _load_state() -> dict:
 
 def _save_state(state: dict) -> None:
     AUTH_STATE_FILE.write_text(json.dumps(state, indent=2) + "\n")
+    AUTH_STATE_FILE.chmod(0o600)
 
 
 def _log_event(event_type: str, telegram_user_id: int, details: str = "") -> None:
@@ -113,8 +122,16 @@ def is_authenticated(telegram_user_id: int) -> bool:
         return False
     last_seen = session.get("last_seen", session["authenticated_at"])
     if now - last_seen > INACTIVITY_TIMEOUT:
-        _log_event("inactive_expired", telegram_user_id, f"idle {(now - last_seen) / 3600:.1f}h")
-        _notify("expired", telegram_user_id, f"Session expired due to inactivity ({(now - last_seen) / 3600:.1f}h)")
+        _log_event(
+            "inactive_expired",
+            telegram_user_id,
+            f"idle {(now - last_seen) / 3600:.1f}h",
+        )
+        _notify(
+            "expired",
+            telegram_user_id,
+            f"Session expired due to inactivity ({(now - last_seen) / 3600:.1f}h)",
+        )
         return False
     return True
 
@@ -141,7 +158,11 @@ def check_ip(telegram_user_id: int, current_ip: str) -> bool:
         session["locked"] = True
         session["lock_reason"] = f"IP changed: {stored_ip} -> {current_ip}"
         _save_state(state)
-        _notify("ip_changed", telegram_user_id, f"IP changed: {stored_ip} -> {current_ip} -- session locked")
+        _notify(
+            "ip_changed",
+            telegram_user_id,
+            f"IP changed: {stored_ip} -> {current_ip} -- session locked",
+        )
         return False
     # Update last_seen
     session["last_seen"] = time.time()
@@ -206,8 +227,14 @@ def record_failed_attempt(telegram_user_id: int) -> bool:
     _failed_attempts[telegram_user_id].append(now)
     locked = len(_failed_attempts[telegram_user_id]) >= RATE_LIMIT_MAX_FAILURES
     if locked:
-        _log_event("rate_limited", telegram_user_id, f"locked out for {RATE_LIMIT_LOCKOUT}s")
-        _notify("rate_limited", telegram_user_id, f"Locked out after {RATE_LIMIT_MAX_FAILURES} failed attempts")
+        _log_event(
+            "rate_limited", telegram_user_id, f"locked out for {RATE_LIMIT_LOCKOUT}s"
+        )
+        _notify(
+            "rate_limited",
+            telegram_user_id,
+            f"Locked out after {RATE_LIMIT_MAX_FAILURES} failed attempts",
+        )
     return locked
 
 
@@ -233,11 +260,7 @@ def generate_auth_token(telegram_user_id: int) -> str:
         "created_at": time.time(),
     }
     # Clean expired pending tokens (15 min lifetime)
-    pending = {
-        k: v
-        for k, v in pending.items()
-        if time.time() - v["created_at"] < 900
-    }
+    pending = {k: v for k, v in pending.items() if time.time() - v["created_at"] < 900}
     state["_pending_tokens"] = pending
     _save_state(state)
     return token
@@ -289,6 +312,7 @@ def _load_totp_secrets() -> dict:
 
 def _save_totp_secrets(secrets: dict) -> None:
     TOTP_SECRETS_FILE.write_text(json.dumps(secrets, indent=2) + "\n")
+    TOTP_SECRETS_FILE.chmod(0o600)
 
 
 def setup_totp(telegram_user_id: int) -> tuple[str, str]:
