@@ -20,7 +20,6 @@ import logging
 import os
 import re
 import select
-import signal
 import subprocess
 import sys
 import tempfile
@@ -45,12 +44,42 @@ from telegram.ext import (
 
 import auth
 
-_pp = subprocess.run(["pass-cli", "item", "view", "--vault-name", "Developer Secrets", "--item-title", "telegram-bot-token", "--field", "note"], capture_output=True, text=True)
+_pp = subprocess.run(
+    [
+        "pass-cli",
+        "item",
+        "view",
+        "--vault-name",
+        "Developer Secrets",
+        "--item-title",
+        "telegram-bot-token",
+        "--field",
+        "note",
+    ],
+    capture_output=True,
+    text=True,
+)
 if _pp.returncode == 0 and _pp.stdout.strip():
     BOT_TOKEN = _pp.stdout.strip()
 else:
-    _kc = subprocess.run(["security", "find-generic-password", "-a", "bryancostanza", "-s", "telegram-bot-token", "-w"], capture_output=True, text=True)
-    BOT_TOKEN = _kc.stdout.strip() if _kc.returncode == 0 and _kc.stdout.strip() else os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    _kc = subprocess.run(
+        [
+            "security",
+            "find-generic-password",
+            "-a",
+            "bryancostanza",
+            "-s",
+            "telegram-bot-token",
+            "-w",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    BOT_TOKEN = (
+        _kc.stdout.strip()
+        if _kc.returncode == 0 and _kc.stdout.strip()
+        else os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    )
 
 if not BOT_TOKEN:
     print(
@@ -143,6 +172,7 @@ def set_chat_project(session_key: str, rel_path: str | None) -> None:
         projects[session_key] = rel_path
     _save_chat_projects(projects)
 
+
 _executor = ThreadPoolExecutor(max_workers=MAX_WORKERS)
 
 # Track active Claude subprocesses per session key so /kill can terminate them
@@ -153,14 +183,18 @@ _remote_proc_key: str | None = None
 
 # Message debounce: batch messages that arrive while Claude is processing
 _processing_sessions: set[str] = set()
-_session_start_times: dict[str, float] = {}  # session_key -> time.time() when processing began
+_session_start_times: dict[
+    str, float
+] = {}  # session_key -> time.time() when processing began
 _queued_messages: dict[str, list[str]] = {}
 
 # Stalled process detector: track when each process last had meaningful CPU
 STALL_POLL_INTERVAL = 120  # check every 2 minutes
 STALL_CPU_THRESHOLD = 1.0  # %CPU below this = idle
 STALL_TIMEOUT = 600  # kill after 10 min of near-zero CPU
-_proc_last_active: dict[str, float] = {}  # session_key -> last time CPU was above threshold
+_proc_last_active: dict[
+    str, float
+] = {}  # session_key -> last time CPU was above threshold
 
 logging.basicConfig(
     level=logging.INFO,
@@ -312,7 +346,6 @@ async def replay_pending(bot) -> None:
         logger.info("Replayed pending message %s", f.stem)
 
 
-
 def _parse_events(stdout: str) -> list[dict]:
     """Parse stdout from --output-format json into a list of event dicts."""
     stripped = stdout.strip()
@@ -342,7 +375,11 @@ def _extract_text_from_events(events: list[dict]) -> str | None:
             continue
         msg = e.get("message", {})
         content = msg.get("content", []) if isinstance(msg, dict) else []
-        texts = [c["text"] for c in content if isinstance(c, dict) and c.get("type") == "text"]
+        texts = [
+            c["text"]
+            for c in content
+            if isinstance(c, dict) and c.get("type") == "text"
+        ]
         if texts:
             return "\n".join(texts)
 
@@ -354,7 +391,10 @@ def _extract_text_from_events(events: list[dict]) -> str | None:
         result_text = result_event.get("result")
         if result_text:
             return result_text
-        logger.info("Result event found but 'result' field is empty/missing. Keys: %s", list(result_event.keys()))
+        logger.info(
+            "Result event found but 'result' field is empty/missing. Keys: %s",
+            list(result_event.keys()),
+        )
 
     return None
 
@@ -381,7 +421,10 @@ def parse_claude_response(stdout: str, session_key: str) -> str:
             save_session_id(session_key, new_session_id)
             logger.info("Saved session %s for %s", new_session_id[:12], session_key)
         else:
-            logger.error("Result event has no session_id for %s — continuity will break", session_key)
+            logger.error(
+                "Result event has no session_id for %s — continuity will break",
+                session_key,
+            )
 
     text = _extract_text_from_events(events)
 
@@ -404,9 +447,12 @@ def parse_claude_response(stdout: str, session_key: str) -> str:
             logger.warning("Result event has error for %s: %s", session_key, error)
             return f"(Claude error: {error})"
         # Log the full result event for debugging
-        logger.warning("No text extracted for %s. Result event keys: %s, values preview: %s",
-                       session_key, list(result_event.keys()),
-                       {k: str(v)[:100] for k, v in result_event.items()})
+        logger.warning(
+            "No text extracted for %s. Result event keys: %s, values preview: %s",
+            session_key,
+            list(result_event.keys()),
+            {k: str(v)[:100] for k, v in result_event.items()},
+        )
 
     return "(no parseable response)"
 
@@ -509,15 +555,17 @@ def _handoff_to_pacman(
         "**Response routing:** When done, send the response back to Telegram.",
         "Use the bot API:",
         "```bash",
-        'BOT_TOKEN=$(grep TELEGRAM_BOT_TOKEN ~/Developer/claude-telegram-bridge/.env | cut -d= -f2-)',
-        f'curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" \\',
-        f'  -d chat_id={chat_id} \\',
-        f'  -d message_thread_id={thread_id} \\',
+        "BOT_TOKEN=$(grep TELEGRAM_BOT_TOKEN ~/Developer/claude-telegram-bridge/.env | cut -d= -f2-)",
+        'curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" \\',
+        f"  -d chat_id={chat_id} \\",
+        f"  -d message_thread_id={thread_id} \\",
         '  -d text="YOUR_RESPONSE_HERE"',
         "```",
     ]
 
-    queue_file = PACMAN_QUEUE_DIR / f"bridge-recovery-{session_key.replace('-', '')[:20]}.md"
+    queue_file = (
+        PACMAN_QUEUE_DIR / f"bridge-recovery-{session_key.replace('-', '')[:20]}.md"
+    )
     try:
         PACMAN_QUEUE_DIR.mkdir(parents=True, exist_ok=True)
         queue_file.write_text("\n".join(lines) + "\n")
@@ -636,7 +684,9 @@ def run_claude(message: str, session_key: str) -> str:
         proc.kill()
         proc.communicate()  # drain pipes
         duration = time.time() - invoke_start
-        _log_activity("claude_timeout", session_key=session_key, pid=proc.pid, duration=duration)
+        _log_activity(
+            "claude_timeout", session_key=session_key, pid=proc.pid, duration=duration
+        )
         return f"[Timed out after {MAX_TIMEOUT // 60} min] Session preserved — send your message again to resume."
     finally:
         _active_procs.pop(session_key, None)
@@ -648,28 +698,57 @@ def run_claude(message: str, session_key: str) -> str:
     if not stdout:
         # Stale session: Claude couldn't find the conversation. Clear and retry.
         if stderr and "No conversation found" in stderr and session_id:
-            logger.warning("Stale session %s for %s, retrying fresh", session_id[:12], session_key)
+            logger.warning(
+                "Stale session %s for %s, retrying fresh", session_id[:12], session_key
+            )
             clear_session(session_key)
             return run_claude(message, session_key)
         # Check for quota error in stderr even when stdout is empty
         if _is_quota_error([], stderr):
-            logger.warning("Quota/rate limit detected (no output) for %s: %s", session_key, stderr[:200])
-            _log_activity("quota_hit", session_key=session_key, duration=duration, source="stderr")
+            logger.warning(
+                "Quota/rate limit detected (no output) for %s: %s",
+                session_key,
+                stderr[:200],
+            )
+            _log_activity(
+                "quota_hit", session_key=session_key, duration=duration, source="stderr"
+            )
             return QUOTA_HIT_PREFIX + message
-        _log_activity("claude_error", session_key=session_key, duration=duration, error=stderr[:200] if stderr else "no output")
+        _log_activity(
+            "claude_error",
+            session_key=session_key,
+            duration=duration,
+            error=stderr[:200] if stderr else "no output",
+        )
         if stderr:
             return f"(no output. stderr: {stderr[:500]})"
         return "(no output)"
 
-    _log_activity("claude_complete", session_key=session_key, duration=duration, exit_code=proc.returncode, response_len=len(stdout))
+    _log_activity(
+        "claude_complete",
+        session_key=session_key,
+        duration=duration,
+        exit_code=proc.returncode,
+        response_len=len(stdout),
+    )
     if proc.returncode != 0 and stderr:
-        logger.warning("Claude exited %d for %s. stderr: %s", proc.returncode, session_key, stderr[:300])
+        logger.warning(
+            "Claude exited %d for %s. stderr: %s",
+            proc.returncode,
+            session_key,
+            stderr[:300],
+        )
 
     # Check for quota error in completed response
     events = _parse_events(stdout)
     if _is_quota_error(events, stderr):
         logger.warning("Quota/rate limit detected for %s", session_key)
-        _log_activity("quota_hit", session_key=session_key, duration=duration, source="events+stderr")
+        _log_activity(
+            "quota_hit",
+            session_key=session_key,
+            duration=duration,
+            source="events+stderr",
+        )
         # Still save session_id if available
         parse_claude_response(stdout, session_key)  # side-effect: saves session_id
         return QUOTA_HIT_PREFIX + message
@@ -741,7 +820,9 @@ async def cmd_auth(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             authed_at = datetime.datetime.fromtimestamp(
                 info["authenticated_at"], tz=datetime.timezone.utc
             )
-            expires_at = authed_at + datetime.timedelta(seconds=auth.SESSION_EXPIRY_SECONDS)
+            expires_at = authed_at + datetime.timedelta(
+                seconds=auth.SESSION_EXPIRY_SECONDS
+            )
             await update.message.reply_text(
                 f"Already authenticated.\n"
                 f"Since: {authed_at.strftime('%Y-%m-%d %H:%M UTC')}\n"
@@ -781,7 +862,13 @@ async def _send_response(
         try:
             await bot.send_message(text=chunk, **send_kwargs)
         except Exception as e:
-            logger.error("Telegram send failed for chat=%s thread=%s chunk_start=%d: %s", chat_id, thread_id, i, e)
+            logger.error(
+                "Telegram send failed for chat=%s thread=%s chunk_start=%d: %s",
+                chat_id,
+                thread_id,
+                i,
+                e,
+            )
             raise
 
 
@@ -834,7 +921,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if key in _processing_sessions:
         _queued_messages.setdefault(key, []).append(text)
         depth = len(_queued_messages[key])
-        await update.message.reply_text(f"Queued ({depth}) — will send when current response finishes.")
+        await update.message.reply_text(
+            f"Queued ({depth}) — will send when current response finishes."
+        )
         logger.info("Queued message for %s (depth: %d)", key, depth)
         _log_activity("message_queued", session_key=key, depth=depth)
         return
@@ -858,7 +947,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
         # Quota hit — hand off to Pac-Man instead of sending error to user
         if response.startswith(QUOTA_HIT_PREFIX):
-            original_msg = response[len(QUOTA_HIT_PREFIX):]
+            original_msg = response[len(QUOTA_HIT_PREFIX) :]
             session_id = get_session_id(key)
             chat_cwd = get_chat_working_dir(key)
             handed_off = _handoff_to_pacman(
@@ -883,10 +972,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
         try:
             await _send_response(context.bot, chat_id, thread_id, response)
+            clear_pending(pending_id)
         except Exception as e:
             logger.error("Failed to send response for %s: %s", key, e)
             await _notify_delivery_failure(context.bot, chat_id, thread_id, key)
-        clear_pending(pending_id)
 
         # Drain queued messages: batch all into a single Claude invocation
         while _queued_messages.get(key):
@@ -964,10 +1053,10 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
         try:
             await _send_response(context.bot, chat_id, thread_id, response)
+            clear_pending(pending_id)
         except Exception as e:
             logger.error("Failed to send photo response for %s: %s", key, e)
             await _notify_delivery_failure(context.bot, chat_id, thread_id, key)
-        clear_pending(pending_id)
     finally:
         stop_typing.set()
         await typing_task
@@ -1029,11 +1118,14 @@ async def cmd_setproject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             for name in projects
         ]
         buttons.append(
-            [InlineKeyboardButton("Clear (use ~/Developer)", callback_data="setproject:__clear__")]
+            [
+                InlineKeyboardButton(
+                    "Clear (use ~/Developer)", callback_data="setproject:__clear__"
+                )
+            ]
         )
         await update.message.reply_text(
-            "Pick a project (A-Z).\n"
-            "Or type: /setproject <path>",
+            "Pick a project (A-Z).\nOr type: /setproject <path>",
             reply_markup=InlineKeyboardMarkup(buttons),
         )
         return
@@ -1041,9 +1133,7 @@ async def cmd_setproject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     rel_path = args[0]
     abs_path = os.path.join(WORKING_DIR, rel_path)
     if not os.path.isdir(abs_path):
-        await update.message.reply_text(
-            f"Directory not found: ~/Developer/{rel_path}"
-        )
+        await update.message.reply_text(f"Directory not found: ~/Developer/{rel_path}")
         return
 
     set_chat_project(key, rel_path)
@@ -1057,7 +1147,9 @@ async def cmd_setproject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     logger.info("Project set to %s for %s (%s)", rel_path, key, chat_title)
 
 
-async def callback_setproject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def callback_setproject(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     """Handle inline keyboard button presses for project selection."""
     query = update.callback_query
     await query.answer()
@@ -1072,7 +1164,9 @@ async def callback_setproject(update: Update, context: ContextTypes.DEFAULT_TYPE
     if rel_path == "__clear__":
         set_chat_project(key, None)
         clear_session(key)
-        await query.edit_message_text("Project cleared. Using default: ~/Developer\nSession reset.")
+        await query.edit_message_text(
+            "Project cleared. Using default: ~/Developer\nSession reset."
+        )
         logger.info("Project cleared for %s", key)
         return
 
@@ -1121,9 +1215,19 @@ async def cmd_kill(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     proc = _active_procs.get(key)
     if proc and proc.poll() is None:
         proc.kill()
-        await update.message.reply_text("Killed active Claude process. Session preserved — next message resumes.")
-        logger.info("User %d killed Claude process for %s (pid %d)", user_id, key, proc.pid)
-        _log_activity("process_kill", session_key=key, pid=proc.pid, user_id=user_id, reason="manual")
+        await update.message.reply_text(
+            "Killed active Claude process. Session preserved — next message resumes."
+        )
+        logger.info(
+            "User %d killed Claude process for %s (pid %d)", user_id, key, proc.pid
+        )
+        _log_activity(
+            "process_kill",
+            session_key=key,
+            pid=proc.pid,
+            user_id=user_id,
+            reason="manual",
+        )
     else:
         await update.message.reply_text("No active Claude process in this chat.")
 
@@ -1151,7 +1255,12 @@ async def cmd_restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     # Write restart notify so the new process can ping this chat on startup
     restart_notify = RESTART_NOTIFY_FILE
     restart_notify.write_text(
-        json.dumps({"chat_id": update.effective_chat.id, "thread_id": update.message.message_thread_id})
+        json.dumps(
+            {
+                "chat_id": update.effective_chat.id,
+                "thread_id": update.message.message_thread_id,
+            }
+        )
     )
 
     # Exit non-zero so launchd respawns us (SIGTERM exits 0, which launchd
@@ -1159,7 +1268,9 @@ async def cmd_restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     os._exit(1)
 
 
-async def cmd_remote_control(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def cmd_remote_control(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     """Start or stop claude remote-control in this topic's project dir. Use 'stop' arg to stop."""
     global _remote_proc, _remote_proc_key
 
@@ -1195,7 +1306,9 @@ async def cmd_remote_control(update: Update, context: ContextTypes.DEFAULT_TYPE)
             _remote_proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             _remote_proc.kill()
-        logger.info("Replaced existing remote-control process (pid %d)", _remote_proc.pid)
+        logger.info(
+            "Replaced existing remote-control process (pid %d)", _remote_proc.pid
+        )
 
     chat_cwd = get_chat_working_dir(key)
     await update.message.reply_text(f"Starting remote-control in {chat_cwd}...")
@@ -1247,12 +1360,16 @@ async def cmd_remote_control(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if proc.poll() is not None:
         # Process already exited
         output = "\n".join(lines) if lines else "(no output)"
-        await update.message.reply_text(f"Remote control exited (code {proc.returncode}):\n{output}")
+        await update.message.reply_text(
+            f"Remote control exited (code {proc.returncode}):\n{output}"
+        )
         _remote_proc = None
         _remote_proc_key = None
     else:
         output = "\n".join(lines) if lines else "(waiting for connection info...)"
-        await update.message.reply_text(f"Remote control running (pid {proc.pid}):\n{output}\n\nUse /remote stop to shut it down.")
+        await update.message.reply_text(
+            f"Remote control running (pid {proc.pid}):\n{output}\n\nUse /remote stop to shut it down."
+        )
 
 
 async def cmd_ping(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1272,7 +1389,9 @@ async def cmd_ping(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("\n".join(lines))
 
 
-async def _auth_notify(event_type: str, telegram_user_id: int, details: str = "") -> None:
+async def _auth_notify(
+    event_type: str, telegram_user_id: int, details: str = ""
+) -> None:
     """Send auth event alerts to the admin via Telegram."""
     if not ALLOWED_USER_IDS:
         return
@@ -1300,7 +1419,9 @@ def _get_proc_cpu(pid: int) -> float | None:
     try:
         result = subprocess.run(
             ["ps", "-p", str(pid), "-o", "%cpu="],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         if result.returncode == 0 and result.stdout.strip():
             return float(result.stdout.strip())
@@ -1333,11 +1454,19 @@ async def _stall_detector() -> None:
             if stall_duration >= STALL_TIMEOUT:
                 logger.warning(
                     "Killing stalled Claude process for %s (pid %d, idle %.0fs)",
-                    key, proc.pid, stall_duration,
+                    key,
+                    proc.pid,
+                    stall_duration,
                 )
                 proc.kill()
                 _proc_last_active.pop(key, None)
-                _log_activity("process_kill", session_key=key, pid=proc.pid, reason="stalled", idle_seconds=stall_duration)
+                _log_activity(
+                    "process_kill",
+                    session_key=key,
+                    pid=proc.pid,
+                    reason="stalled",
+                    idle_seconds=stall_duration,
+                )
                 if _bot_instance:
                     try:
                         parts = key.split("_", 1)
@@ -1351,7 +1480,9 @@ async def _stall_detector() -> None:
                             **send_kwargs,
                         )
                     except Exception:
-                        logger.debug("Failed to notify about stalled process for %s", key)
+                        logger.debug(
+                            "Failed to notify about stalled process for %s", key
+                        )
 
 
 async def post_init(app: Application) -> None:
@@ -1401,7 +1532,11 @@ async def post_init(app: Application) -> None:
     logger.info("Bot commands registered with Telegram")
 
     asyncio.create_task(_stall_detector())
-    logger.info("Stall detector started (poll=%ds, timeout=%ds)", STALL_POLL_INTERVAL, STALL_TIMEOUT)
+    logger.info(
+        "Stall detector started (poll=%ds, timeout=%ds)",
+        STALL_POLL_INTERVAL,
+        STALL_TIMEOUT,
+    )
 
     await replay_pending(app.bot)
 
@@ -1410,7 +1545,10 @@ async def post_init(app: Application) -> None:
     if restart_notify.exists():
         try:
             data = json.loads(restart_notify.read_text())
-            send_kwargs: dict = {"chat_id": data["chat_id"], "text": "Bridge restarted ✓"}
+            send_kwargs: dict = {
+                "chat_id": data["chat_id"],
+                "text": "Bridge restarted ✓",
+            }
             if data.get("thread_id"):
                 send_kwargs["message_thread_id"] = data["thread_id"]
             await app.bot.send_message(**send_kwargs)
