@@ -25,6 +25,39 @@ launchctl unload ~/Library/LaunchAgents/<file>.plist
 launchctl load ~/Library/LaunchAgents/<file>.plist
 ```
 
+## Telegram Commands
+
+All commands are registered in `bridge.py` via `CommandHandler`. Auth-gated commands silently drop requests from unauthorized user IDs.
+
+| Command | Auth required | Description |
+|---|---|---|
+| `/start` | No | Show the command list and your Telegram user ID. |
+| `/auth` | No | Send an authentication link (Sign in with Apple). If already authenticated, shows session start time and expiry. |
+| `/lock` | Yes | Lock your current session immediately. `/lock all` locks all active sessions across users. |
+| `/clearnew` | No | Discard the current session ID for this topic and start a fresh one. Conversation history is lost. |
+| `/setproject [path]` | No | Bind this topic to a project directory under `~/Developer`. Without an argument, shows an inline keyboard to pick from all subdirectories. Pass a path relative to `~/Developer` to set it directly. Session is reset on change. |
+| `/project` | No | Show the project directory currently bound to this topic (and the agent name if one is configured). |
+| `/kill` | Yes | Kill the active Claude subprocess for this topic. Session ID is preserved — the next message resumes in the same session. |
+| `/restart` | Yes | Restart the bridge process (terminates all active Claude and remote-control processes, then exits non-zero so launchd respawns). Sends a ping to this topic after the new process starts. |
+| `/remote_control` | Yes | Start `claude remote-control` in this topic's project directory, and report connection info. If one is already running, it is replaced. |
+| `/remote_control stop` | Yes | Stop the running remote-control process. |
+| `/ping` | No | Check liveness. Reports "pong" plus a list of any sessions currently running Claude, with elapsed time. |
+
+### Session model
+
+- Each forum topic (or DM chat) maps to a unique session key (`chat_id:thread_id`).
+- Sessions carry a Claude `--resume` ID so consecutive messages share context.
+- Sessions expire automatically after 3 days of inactivity.
+- If Claude is already processing a message, new messages are queued and batched into a single follow-up invocation when the current one finishes.
+
+### Photo / image handling
+
+Sending a photo triggers `handle_photo`: the image is downloaded, and Claude is asked to read and describe it (or respond to the caption). The file is deleted after the response.
+
+### Quota handoff
+
+If Claude hits a quota/rate limit, the message is handed off to Pac-Man (`~/.claude/pac-man/queue/`) so it can be processed in the background and the response sent back to the same topic.
+
 ## Python Environment
 
 Managed with `uv`. Run `uv sync` to install dependencies. Scripts use `uv run` — no venv activation needed.
