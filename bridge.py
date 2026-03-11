@@ -64,6 +64,7 @@ PA_PLUGIN_DIR = os.environ.get(
 )
 SESSION_EXPIRY = int(os.environ.get("SESSION_EXPIRY", "259200"))  # 3 days
 MAX_TIMEOUT = int(os.environ.get("MAX_TIMEOUT", "2700"))  # 45 min safety valve
+MAX_TURNS = int(os.environ.get("MAX_TURNS", "30"))  # ~10-20 min of typical work
 MAX_WORKERS = int(os.environ.get("MAX_WORKERS", "4"))
 AUTH_BASE_URL = os.environ.get("AUTH_BASE_URL", "https://auth.kj6.dev")
 AUTH_REQUIRED = os.environ.get("AUTH_REQUIRED", "false").lower() == "true"
@@ -160,6 +161,7 @@ logger = logging.getLogger("bridge")
 
 TELEGRAM_MSG_LIMIT = 4096
 TYPING_INTERVAL = 4  # seconds between typing indicators
+_ANSI_RE = re.compile(r"\x1b(?:\[[0-9;]*[A-Za-z]|\].*?(?:\x07|\x1b\\))")
 PHOTO_DIR = Path(tempfile.gettempdir()) / "claude-telegram-photos"
 PHOTO_DIR.mkdir(exist_ok=True)
 ACTIVITY_LOG = Path(__file__).parent / "activity.jsonl"
@@ -303,11 +305,10 @@ async def replay_pending(bot) -> None:
 
 
 def _parse_events(stdout: str) -> list[dict]:
-    """Parse stdout into a list of event dicts. Handles JSON array, single object, or NDJSON."""
+    """Parse stdout from --output-format json into a list of event dicts."""
     stripped = stdout.strip()
     if not stripped:
         return []
-    # Try single JSON (array or object)
     try:
         parsed = json.loads(stripped)
         if isinstance(parsed, dict):
@@ -316,27 +317,15 @@ def _parse_events(stdout: str) -> list[dict]:
             return [e for e in parsed if isinstance(e, dict)]
     except (json.JSONDecodeError, TypeError):
         pass
-    # Fall back to NDJSON (stream-json: one JSON object per line)
-    events = []
-    for line in stripped.split("\n"):
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            obj = json.loads(line)
-            if isinstance(obj, dict):
-                events.append(obj)
-        except (json.JSONDecodeError, TypeError):
-            pass
-    return events
+    return []
 
 
 def _extract_text_from_events(events: list[dict]) -> str | None:
-    """Extract text from the final assistant turn only.
+    """Extract text from claude output events.
 
-    Multi-turn agent conversations produce many assistant events (interim
-    narration like "Let me read that file…").  We only send the last
-    assistant turn's text so the Telegram message is concise.
+    With --output-format json, the result is typically a single result event
+    whose "result" field contains Claude's final response. The assistant event
+    path handles any edge cases where intermediate events are present.
     """
     # Walk backwards to find the last assistant event with text
     for e in reversed(events):
@@ -362,7 +351,7 @@ def _extract_text_from_events(events: list[dict]) -> str | None:
 
 
 def parse_claude_response(stdout: str, session_key: str) -> str:
-    """Extract text and session_id from claude JSON or stream-json output."""
+    """Extract text and session_id from claude --output-format json output."""
     events = _parse_events(stdout)
     if not events:
         return stdout.strip() or "(no parseable response)"
@@ -382,8 +371,20 @@ def parse_claude_response(stdout: str, session_key: str) -> str:
         if new_session_id:
             save_session_id(session_key, new_session_id)
             logger.info("Saved session %s for %s", new_session_id[:12], session_key)
+        else:
+            logger.error("Result event has no session_id for %s — continuity will break", session_key)
 
     text = _extract_text_from_events(events)
+
+    # Detect max_turns and append a notice
+    if result_event:
+        subtype = result_event.get("subtype") or result_event.get("result_subtype")
+        if subtype == "max_turns":
+            notice = f"\n\n[Reached {MAX_TURNS}-turn limit. Session preserved — reply to continue or check beads for queued tasks.]"
+            return (text + notice) if text else notice
+        elif subtype:
+            logger.info("Result subtype for %s: %s", session_key, subtype)
+
     if text:
         return text
 
@@ -545,6 +546,9 @@ def run_claude(message: str, session_key: str) -> str:
         "Bryan's accounts: iCloud (REDACTED@example.com) and Gmail (REDACTED@example.com). "
         "IMPORTANT: NEVER use the AskUserQuestion tool - it requires interactive terminal UI that doesn't work through Telegram. "
         "Instead, ask questions as plain text in your response and let Bryan reply naturally.\n\n"
+        f"TURN LIMIT: This session has a {MAX_TURNS}-turn limit. If a task will take more than ~20 tool calls, "
+        "decompose it: do the critical/unblocking work now, create beads for the remaining subtasks, "
+        "then report what you did and what's queued. Don't get cut off mid-task.\n\n"
         "FORMATTING: Telegram renders messages as plain text — no markdown. "
         "For any tabular or structured data, use ASCII art (aligned columns, dashes, box-drawing characters).\n\n"
         "SHARED FILES: Bryan has a ProtonDrive folder synced to this machine at "
@@ -579,11 +583,12 @@ def run_claude(message: str, session_key: str) -> str:
         "-p",
         message,
         "--output-format",
-        "stream-json",
-        "--verbose",
+        "json",
         "--dangerously-skip-permissions",
         "--disallowed-tools",
         "AskUserQuestion,EnterPlanMode,ExitPlanMode",
+        "--max-turns",
+        str(MAX_TURNS),
         "--plugin-dir",
         PA_PLUGIN_DIR,
         "--append-system-prompt",
@@ -620,29 +625,10 @@ def run_claude(message: str, session_key: str) -> str:
         stdout, stderr = proc.communicate(timeout=MAX_TIMEOUT)
     except subprocess.TimeoutExpired:
         proc.kill()
-        # Read whatever output was buffered before the kill
-        stdout, stderr = proc.communicate()
+        proc.communicate()  # drain pipes
         duration = time.time() - invoke_start
         _log_activity("claude_timeout", session_key=session_key, pid=proc.pid, duration=duration)
-
-        # Try to salvage a partial response from stream-json output
-        timeout_msg = f"[Timed out after {MAX_TIMEOUT // 60} min]"
-        if stdout and stdout.strip():
-            events = _parse_events(stdout)
-            # Save session_id even on timeout so we can resume
-            result_event = next(
-                (e for e in reversed(events) if e.get("type") == "result"), None
-            )
-            if result_event:
-                new_session_id = result_event.get("session_id")
-                if new_session_id:
-                    save_session_id(session_key, new_session_id)
-            partial = _extract_text_from_events(events)
-            if partial:
-                logger.info("Salvaged %d chars of partial response on timeout", len(partial))
-                return f"{timeout_msg}\n\n{partial}"
-
-        return f"{timeout_msg} No response was captured. The session is preserved — send your message again to resume."
+        return f"[Timed out after {MAX_TIMEOUT // 60} min] Session preserved — send your message again to resume."
     finally:
         _active_procs.pop(session_key, None)
         _proc_last_active.pop(session_key, None)
@@ -782,7 +768,12 @@ async def _send_response(
     if thread_id is not None:
         send_kwargs["message_thread_id"] = thread_id
     for i in range(0, len(response), TELEGRAM_MSG_LIMIT):
-        await bot.send_message(text=response[i : i + TELEGRAM_MSG_LIMIT], **send_kwargs)
+        chunk = response[i : i + TELEGRAM_MSG_LIMIT]
+        try:
+            await bot.send_message(text=chunk, **send_kwargs)
+        except Exception as e:
+            logger.error("Telegram send failed for chat=%s thread=%s chunk_start=%d: %s", chat_id, thread_id, i, e)
+            raise
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1194,7 +1185,6 @@ async def cmd_remote_control(update: Update, context: ContextTypes.DEFAULT_TYPE)
         deadline = time.time() + 10
         while time.time() < deadline:
             if proc.poll() is not None:
-                # Process exited — read remaining output
                 remaining = proc.stdout.read()
                 if remaining:
                     collected.extend(remaining.splitlines())
@@ -1204,7 +1194,17 @@ async def cmd_remote_control(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 line = proc.stdout.readline()
                 if line:
                     collected.append(line.rstrip())
-        return collected
+        # Strip ANSI escape sequences and deduplicate — remote-control uses a
+        # TUI that cursor-up overwrites its own output, producing repeated
+        # refresh cycles with raw escape codes in the captured text.
+        seen: set[str] = set()
+        result: list[str] = []
+        for raw in collected:
+            clean = _ANSI_RE.sub("", raw).strip()
+            if clean and clean not in seen:
+                seen.add(clean)
+                result.append(clean)
+        return result
 
     lines = await loop.run_in_executor(_executor, _read_initial_output)
 
