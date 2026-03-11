@@ -776,6 +776,30 @@ async def _send_response(
             raise
 
 
+async def _notify_delivery_failure(
+    bot, chat_id: int, thread_id: int | None, label: str
+) -> None:
+    """Attempt to notify the user that a response failed to deliver.
+
+    Best-effort: logs and suppresses any secondary failure so callers never
+    need to handle exceptions from this function.
+    """
+    send_kwargs: dict = {"chat_id": chat_id}
+    if thread_id is not None:
+        send_kwargs["message_thread_id"] = thread_id
+    try:
+        await bot.send_message(
+            text="[Response was generated but could not be delivered due to a Telegram error. Check logs for details.]",
+            **send_kwargs,
+        )
+    except Exception as notify_exc:
+        logger.error(
+            "Also failed to send delivery-failure notification for %s: %s",
+            label,
+            notify_exc,
+        )
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
 
@@ -852,6 +876,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await _send_response(context.bot, chat_id, thread_id, response)
         except Exception as e:
             logger.error("Failed to send response for %s: %s", key, e)
+            await _notify_delivery_failure(context.bot, chat_id, thread_id, key)
         clear_pending(pending_id)
 
         # Drain queued messages: batch all into a single Claude invocation
@@ -875,6 +900,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 await _send_response(context.bot, chat_id, thread_id, response)
             except Exception as e:
                 logger.error("Failed to send queued response for %s: %s", key, e)
+                await _notify_delivery_failure(context.bot, chat_id, thread_id, key)
     finally:
         stop_typing.set()
         await typing_task
@@ -931,6 +957,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             await _send_response(context.bot, chat_id, thread_id, response)
         except Exception as e:
             logger.error("Failed to send photo response for %s: %s", key, e)
+            await _notify_delivery_failure(context.bot, chat_id, thread_id, key)
         clear_pending(pending_id)
     finally:
         stop_typing.set()
