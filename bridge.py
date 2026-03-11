@@ -51,6 +51,15 @@ if _pp.returncode == 0 and _pp.stdout.strip():
 else:
     _kc = subprocess.run(["security", "find-generic-password", "-a", "bryancostanza", "-s", "telegram-bot-token", "-w"], capture_output=True, text=True)
     BOT_TOKEN = _kc.stdout.strip() if _kc.returncode == 0 and _kc.stdout.strip() else os.environ.get("TELEGRAM_BOT_TOKEN", "")
+
+if not BOT_TOKEN:
+    print(
+        "ERROR: BOT_TOKEN is empty. Set TELEGRAM_BOT_TOKEN in the environment "
+        "or ensure 'telegram-bot-token' is accessible via Proton Pass or Keychain.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
 ALLOWED_USER_IDS: set[int] = set()
 _raw = os.environ.get("ALLOWED_USER_IDS", "")
 if _raw.strip():
