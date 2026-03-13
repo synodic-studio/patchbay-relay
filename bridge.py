@@ -44,6 +44,29 @@ from telegram.ext import (
 
 import auth
 
+
+class _SecretStr:
+    """Wraps a secret string so it never appears in tracebacks or repr output."""
+
+    __slots__ = ("_value",)
+
+    def __init__(self, value: str) -> None:
+        self._value = value
+
+    def __repr__(self) -> str:
+        return "***REDACTED***"
+
+    def __str__(self) -> str:
+        return "***REDACTED***"
+
+    def __bool__(self) -> bool:
+        return bool(self._value)
+
+    def reveal(self) -> str:
+        """Return the raw secret value. Call only where the plaintext is required."""
+        return self._value
+
+
 _pp = subprocess.run(
     [
         "pass-cli",
@@ -60,7 +83,7 @@ _pp = subprocess.run(
     text=True,
 )
 if _pp.returncode == 0 and _pp.stdout.strip():
-    BOT_TOKEN = _pp.stdout.strip()
+    _raw_token = _pp.stdout.strip()
 else:
     _kc = subprocess.run(
         [
@@ -75,11 +98,15 @@ else:
         capture_output=True,
         text=True,
     )
-    BOT_TOKEN = (
+    _raw_token = (
         _kc.stdout.strip()
         if _kc.returncode == 0 and _kc.stdout.strip()
         else os.environ.get("TELEGRAM_BOT_TOKEN", "")
     )
+    del _kc
+del _pp
+BOT_TOKEN = _SecretStr(_raw_token)
+del _raw_token
 
 if not BOT_TOKEN:
     print(
@@ -92,7 +119,21 @@ if not BOT_TOKEN:
 ALLOWED_USER_IDS: set[int] = set()
 _raw = os.environ.get("ALLOWED_USER_IDS", "")
 if _raw.strip():
-    ALLOWED_USER_IDS = {int(x.strip()) for x in _raw.split(",") if x.strip()}
+    _parsed_ids: set[int] = set()
+    for _uid_token in _raw.split(","):
+        _uid_token = _uid_token.strip()
+        if not _uid_token:
+            continue
+        try:
+            _parsed_ids.add(int(_uid_token))
+        except ValueError:
+            print(
+                f"ERROR: ALLOWED_USER_IDS contains non-integer value: {_uid_token!r}. "
+                "All entries must be numeric Telegram user IDs (e.g. 123456789,987654321).",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+    ALLOWED_USER_IDS = _parsed_ids
 
 CLAUDE_PATH = os.environ.get("CLAUDE_PATH", "/opt/homebrew/bin/claude")
 WORKING_DIR = os.environ.get("CLAUDE_WORKING_DIR", os.path.expanduser("~/Developer"))
@@ -1560,7 +1601,7 @@ async def post_init(app: Application) -> None:
 def main() -> None:
     app = (
         Application.builder()
-        .token(BOT_TOKEN)
+        .token(BOT_TOKEN.reveal())
         .concurrent_updates(True)
         .post_init(post_init)
         .build()

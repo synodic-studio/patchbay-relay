@@ -37,7 +37,9 @@ import auth
 load_dotenv(Path(__file__).parent / ".env")
 
 logger = logging.getLogger("bridge.auth_server")
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
+)
 
 APPLE_SERVICE_ID = os.environ.get("APPLE_SERVICE_ID", "")
 APPLE_TEAM_ID = os.environ.get("APPLE_TEAM_ID", "")
@@ -46,14 +48,60 @@ APPLE_PRIVATE_KEY_PATH = os.environ.get("APPLE_PRIVATE_KEY_PATH", "")
 AUTH_BASE_URL = os.environ.get("AUTH_BASE_URL", "https://auth.kj6.dev")
 AUTH_PORT = int(os.environ.get("AUTH_PORT", "8443"))
 APPLE_SUBJECT_ALLOWLIST: set[str] = set()
-_pp_subj = subprocess.run(["pass-cli", "item", "view", "--vault-name", "Developer Secrets", "--item-title", "apple-subject-allowlist", "--field", "note"], capture_output=True, text=True)
+_pp_subj = subprocess.run(
+    [
+        "pass-cli",
+        "item",
+        "view",
+        "--vault-name",
+        "Developer Secrets",
+        "--item-title",
+        "apple-subject-allowlist",
+        "--field",
+        "note",
+    ],
+    capture_output=True,
+    text=True,
+)
 if _pp_subj.returncode == 0 and _pp_subj.stdout.strip():
     _raw_subjects = _pp_subj.stdout.strip()
 else:
-    _kc_subj = subprocess.run(["security", "find-generic-password", "-a", "bryancostanza", "-s", "apple-subject-allowlist", "-w"], capture_output=True, text=True)
-    _raw_subjects = _kc_subj.stdout.strip() if _kc_subj.returncode == 0 and _kc_subj.stdout.strip() else os.environ.get("APPLE_SUBJECT_ALLOWLIST", "")
+    if _pp_subj.returncode != 0:
+        logger.warning(
+            "pass-cli apple-subject-allowlist lookup failed (rc=%d): %s",
+            _pp_subj.returncode,
+            _pp_subj.stderr.strip() or "(no stderr)",
+        )
+    _kc_subj = subprocess.run(
+        [
+            "security",
+            "find-generic-password",
+            "-a",
+            "bryancostanza",
+            "-s",
+            "apple-subject-allowlist",
+            "-w",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if _kc_subj.returncode == 0 and _kc_subj.stdout.strip():
+        _raw_subjects = _kc_subj.stdout.strip()
+    else:
+        if _kc_subj.returncode != 0:
+            logger.warning(
+                "keychain apple-subject-allowlist lookup failed (rc=%d) — falling back to env var",
+                _kc_subj.returncode,
+            )
+        _raw_subjects = os.environ.get("APPLE_SUBJECT_ALLOWLIST", "")
 if _raw_subjects.strip():
     APPLE_SUBJECT_ALLOWLIST = {s.strip() for s in _raw_subjects.split(",") if s.strip()}
+
+if not APPLE_SUBJECT_ALLOWLIST:
+    logger.warning(
+        "APPLE_SUBJECT_ALLOWLIST is empty — any authenticated Apple ID will be accepted. "
+        "Configure the allowlist via pass-cli, keychain, or APPLE_SUBJECT_ALLOWLIST env var."
+    )
 
 # Apple's public keys URL for JWT verification
 APPLE_KEYS_URL = "https://appleid.apple.com/auth/keys"
@@ -152,7 +200,10 @@ async def login_page(token: str = ""):
     who requested authentication.
     """
     if not token:
-        return HTMLResponse("<h1>Missing auth token</h1><p>Use /auth in Telegram to get a login link.</p>", status_code=400)
+        return HTMLResponse(
+            "<h1>Missing auth token</h1><p>Use /auth in Telegram to get a login link.</p>",
+            status_code=400,
+        )
 
     # Verify token exists without consuming it -- consumption happens in /callback
     if auth.check_auth_token(token) is None:
@@ -228,10 +279,15 @@ async def apple_callback(
     """
     if error:
         logger.warning("Apple auth error: %s", error)
-        return HTMLResponse(f"<h1>Authentication failed</h1><p>{error}</p>", status_code=400)
+        return HTMLResponse(
+            f"<h1>Authentication failed</h1><p>{error}</p>", status_code=400
+        )
 
     if not id_token or not state:
-        return HTMLResponse("<h1>Invalid callback</h1><p>Missing required parameters.</p>", status_code=400)
+        return HTMLResponse(
+            "<h1>Invalid callback</h1><p>Missing required parameters.</p>",
+            status_code=400,
+        )
 
     # Consume the auth token to get Telegram user ID
     telegram_user_id = auth.consume_auth_token(state)
@@ -259,13 +315,33 @@ async def apple_callback(
 
     apple_subject = claims.get("sub", "")
 
+    # Reject tokens with missing or empty subject — Apple IDs always have a sub claim
+    if not apple_subject:
+        logger.error(
+            "Apple ID token missing 'sub' claim — rejecting (user %d)", telegram_user_id
+        )
+        auth.record_failed_attempt(telegram_user_id)
+        return HTMLResponse(
+            "<h1>Verification failed</h1><p>Invalid identity token.</p>",
+            status_code=403,
+        )
+
     # Check allowlist if configured
     if APPLE_SUBJECT_ALLOWLIST and apple_subject not in APPLE_SUBJECT_ALLOWLIST:
         logger.warning("Apple subject %s not in allowlist", apple_subject)
         auth.record_failed_attempt(telegram_user_id)
-        auth._log_event("denied", telegram_user_id, f"apple_sub={apple_subject} not in allowlist")
-        auth._notify("denied", telegram_user_id, f"Apple subject {apple_subject} not in allowlist")
-        return HTMLResponse("<h1>Access denied</h1><p>Your Apple ID is not authorized.</p>", status_code=403)
+        auth._log_event(
+            "denied", telegram_user_id, f"apple_sub={apple_subject} not in allowlist"
+        )
+        auth._notify(
+            "denied",
+            telegram_user_id,
+            f"Apple subject {apple_subject} not in allowlist",
+        )
+        return HTMLResponse(
+            "<h1>Access denied</h1><p>Your Apple ID is not authorized.</p>",
+            status_code=403,
+        )
 
     # Get client IP
     client_ip = request.client.host if request.client else "unknown"
@@ -276,7 +352,11 @@ async def apple_callback(
     # Create authenticated session
     auth.create_session(telegram_user_id, apple_subject, client_ip)
 
-    logger.info("Authenticated Telegram user %d (Apple sub: %s)", telegram_user_id, apple_subject[:12])
+    logger.info(
+        "Authenticated Telegram user %d (Apple sub: %s)",
+        telegram_user_id,
+        apple_subject[:12],
+    )
 
     return HTMLResponse("""<!DOCTYPE html>
 <html>
