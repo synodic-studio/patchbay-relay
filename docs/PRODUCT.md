@@ -25,7 +25,7 @@ Telegram bot that bridges messages to Claude Code sessions. Powers all mobile in
 - Last commit: 2026-03-04
 - 7 open beads (auth/security features: TOTP, session timeout, /lock)
 - 138 TODOs in codebase (needs triage)
-- Recent: quota/rate-limit detection, Pac-Man handoff
+- Recent: quota/rate-limit detection, Forge handoff
 
 ## Key Architecture
 

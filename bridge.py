@@ -154,7 +154,7 @@ PENDING_DIR = Path(__file__).parent / "pending"
 RESTART_NOTIFY_FILE = Path(__file__).parent / "restart_notify.json"
 PENDING_DIR.mkdir(exist_ok=True)
 CHAT_PROJECTS_FILE = Path(__file__).parent / "chat_projects.json"
-PACMAN_QUEUE_DIR = Path(PA_PLUGIN_DIR) / "agents" / "pac-man" / "queue"
+FORGE_QUEUE_DIR = Path(PA_PLUGIN_DIR) / "agents" / "dev" / "forge" / "queue"
 QUOTA_HIT_PREFIX = "\x00QUOTA_HIT\x00"  # sentinel prefix for quota errors
 
 
@@ -400,7 +400,19 @@ def _parse_events(stdout: str) -> list[dict]:
             return [e for e in parsed if isinstance(e, dict)]
     except (json.JSONDecodeError, TypeError):
         pass
-    return []
+    # Try NDJSON (newline-delimited JSON — one event per line)
+    events = []
+    for line in stripped.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+            if isinstance(obj, dict):
+                events.append(obj)
+        except (json.JSONDecodeError, TypeError):
+            continue
+    return events
 
 
 def _extract_text_from_events(events: list[dict]) -> str | None:
@@ -499,7 +511,7 @@ def parse_claude_response(stdout: str, session_key: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Quota / rate-limit detection & Pac-Man handoff
+# Quota / rate-limit detection & Forge handoff
 # ---------------------------------------------------------------------------
 
 # Patterns confirmed from Claude CLI source:
@@ -541,7 +553,7 @@ def _is_quota_error(events: list[dict], stderr: str) -> bool:
     return False
 
 
-def _handoff_to_pacman(
+def _handoff_to_forge(
     session_key: str,
     message: str,
     chat_id: int,
@@ -549,7 +561,7 @@ def _handoff_to_pacman(
     session_id: str | None,
     working_dir: str,
 ) -> bool:
-    """Write a Pac-Man queue file so the task can be resumed later.
+    """Write a Forge queue file so the task can be resumed later.
 
     Returns True if the queue file was written successfully.
     """
@@ -605,14 +617,14 @@ def _handoff_to_pacman(
     ]
 
     queue_file = (
-        PACMAN_QUEUE_DIR / f"bridge-recovery-{session_key.replace('-', '')[:20]}.md"
+        FORGE_QUEUE_DIR / f"bridge-recovery-{session_key.replace('-', '')[:20]}.md"
     )
     try:
-        PACMAN_QUEUE_DIR.mkdir(parents=True, exist_ok=True)
+        FORGE_QUEUE_DIR.mkdir(parents=True, exist_ok=True)
         queue_file.write_text("\n".join(lines) + "\n")
-        logger.info("Wrote Pac-Man queue file: %s", queue_file.name)
+        logger.info("Wrote Forge queue file: %s", queue_file.name)
         _log_activity(
-            "pacman_handoff",
+            "forge_handoff",
             session_key=session_key,
             queue_file=str(queue_file.name),
             chat_id=chat_id,
@@ -620,7 +632,7 @@ def _handoff_to_pacman(
         )
         return True
     except Exception as e:
-        logger.error("Failed to write Pac-Man queue file: %s", e)
+        logger.error("Failed to write Forge queue file: %s", e)
         return False
 
 
@@ -667,10 +679,11 @@ def run_claude(message: str, session_key: str) -> str:
             f"On session start, read your identity stack in this order:\n"
             f"1. USER.md (global)\n"
             f"2. TOOLS.md (global)\n"
-            f"3. agents/{agent_name}/SOUL.md\n"
-            f"4. agents/{agent_name}/IDENTITY.md (if it exists)\n"
-            f"5. agents/{agent_name}/AGENTS.md\n"
-            f"6. agents/{agent_name}/HEARTBEAT.md (if it exists)\n"
+            f"3. Find your agent directory (search agents/dev/{agent_name}/, agents/pa/{agent_name}/, or agents/{agent_name}/) and read:\n"
+            f"   - SOUL.md\n"
+            f"   - IDENTITY.md (if it exists)\n"
+            f"   - AGENTS.md\n"
+            f"   - HEARTBEAT.md (if it exists)\n"
             f"Do NOT read other agents' files. You are ONLY the {agent_name} agent. "
             f"Adopt the personality and boundaries defined in your SOUL.md. "
             f"Skip MEMORY.md in Telegram context (per Fanta conventions)."
@@ -986,12 +999,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             logger.error("Error running claude for %s: %s", key, e)
             response = f"Error: {e}"
 
-        # Quota hit — hand off to Pac-Man instead of sending error to user
+        # Quota hit — hand off to Forge instead of sending error to user
         if response.startswith(QUOTA_HIT_PREFIX):
             original_msg = response[len(QUOTA_HIT_PREFIX) :]
             session_id = get_session_id(key)
             chat_cwd = get_chat_working_dir(key)
-            handed_off = _handoff_to_pacman(
+            handed_off = _handoff_to_forge(
                 session_key=key,
                 message=original_msg,
                 chat_id=chat_id,
@@ -1001,13 +1014,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             )
             if handed_off:
                 response = (
-                    "Hit a quota/rate limit. Handed this off to Pac-Man — "
+                    "Hit a quota/rate limit. Handed this off to Forge — "
                     "it'll pick up where this left off and send the response "
                     "back here when done."
                 )
             else:
                 response = (
-                    "Hit a quota/rate limit. Tried to hand off to Pac-Man but "
+                    "Hit a quota/rate limit. Tried to hand off to Forge but "
                     "failed to write the queue file. Try again later."
                 )
 

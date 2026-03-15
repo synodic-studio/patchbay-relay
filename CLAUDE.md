@@ -56,7 +56,7 @@ Sending a photo triggers `handle_photo`: the image is downloaded, and Claude is 
 
 ### Quota handoff
 
-If Claude hits a quota/rate limit, the message is handed off to Pac-Man (`~/.claude/pac-man/queue/`) so it can be processed in the background and the response sent back to the same topic.
+If Claude hits a quota/rate limit, the message is handed off to Forge (`~/Developer/Fanta/agents/dev/forge/queue/`) so it can be processed in the background and the response sent back to the same topic.
 
 ## Python Environment
 

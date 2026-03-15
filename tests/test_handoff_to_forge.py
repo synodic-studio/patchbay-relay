@@ -1,4 +1,4 @@
-"""Tests for _handoff_to_pacman queue file writing."""
+"""Tests for _handoff_to_forge queue file writing."""
 
 import datetime
 from pathlib import Path
@@ -8,21 +8,21 @@ import bridge
 
 
 def test_handoff_writes_correct_content_and_returns_true(tmp_path: Path) -> None:
-    """Verify _handoff_to_pacman writes expected queue file content and returns True."""
-    queue_dir = tmp_path / "agents" / "pac-man" / "queue"
+    """Verify _handoff_to_forge writes expected queue file content and returns True."""
+    queue_dir = tmp_path / "agents" / "dev" / "forge" / "queue"
 
     fake_now = datetime.datetime(2026, 3, 10, 14, 30, 0, tzinfo=datetime.timezone.utc)
     fake_today = datetime.date(2026, 3, 10)
 
     with (
-        patch.object(bridge, "PACMAN_QUEUE_DIR", queue_dir),
+        patch.object(bridge, "FORGE_QUEUE_DIR", queue_dir),
         patch("bridge.datetime") as mock_dt,
     ):
         mock_dt.datetime.now.return_value = fake_now
         mock_dt.date.today.return_value = fake_today
         mock_dt.timezone = datetime.timezone
 
-        result = bridge._handoff_to_pacman(
+        result = bridge._handoff_to_forge(
             session_key="123_456",
             message="Please fix the login bug",
             chat_id=123,
@@ -72,10 +72,10 @@ def test_handoff_writes_correct_content_and_returns_true(tmp_path: Path) -> None
 
 def test_handoff_with_no_session_id(tmp_path: Path) -> None:
     """Verify session_id=None renders as 'none (fresh session)'."""
-    queue_dir = tmp_path / "agents" / "pac-man" / "queue"
+    queue_dir = tmp_path / "agents" / "dev" / "forge" / "queue"
 
     with (
-        patch.object(bridge, "PACMAN_QUEUE_DIR", queue_dir),
+        patch.object(bridge, "FORGE_QUEUE_DIR", queue_dir),
         patch("bridge.datetime") as mock_dt,
     ):
         mock_dt.datetime.now.return_value = datetime.datetime(
@@ -84,7 +84,7 @@ def test_handoff_with_no_session_id(tmp_path: Path) -> None:
         mock_dt.date.today.return_value = datetime.date(2026, 1, 1)
         mock_dt.timezone = datetime.timezone
 
-        result = bridge._handoff_to_pacman(
+        result = bridge._handoff_to_forge(
             session_key="789",
             message="hello",
             chat_id=789,
@@ -102,10 +102,10 @@ def test_handoff_with_no_session_id(tmp_path: Path) -> None:
 
 def test_handoff_session_key_sanitized_in_filename(tmp_path: Path) -> None:
     """Verify hyphens are stripped and key is truncated to 20 chars in filename."""
-    queue_dir = tmp_path / "agents" / "pac-man" / "queue"
+    queue_dir = tmp_path / "agents" / "dev" / "forge" / "queue"
 
     with (
-        patch.object(bridge, "PACMAN_QUEUE_DIR", queue_dir),
+        patch.object(bridge, "FORGE_QUEUE_DIR", queue_dir),
         patch("bridge.datetime") as mock_dt,
     ):
         mock_dt.datetime.now.return_value = datetime.datetime(
@@ -114,7 +114,7 @@ def test_handoff_session_key_sanitized_in_filename(tmp_path: Path) -> None:
         mock_dt.date.today.return_value = datetime.date(2026, 1, 1)
         mock_dt.timezone = datetime.timezone
 
-        result = bridge._handoff_to_pacman(
+        result = bridge._handoff_to_forge(
             session_key="aaa-bbb-ccc-ddd-eee-fff-ggg",
             message="test",
             chat_id=1,
@@ -126,7 +126,5 @@ def test_handoff_session_key_sanitized_in_filename(tmp_path: Path) -> None:
     assert result is True
 
     queue_file = next(queue_dir.iterdir())
-    # "aaa-bbb-ccc-ddd-eee-fff-ggg" -> strip hyphens -> "aaabbbcccdddeeefffggg" -> [:20] -> "aaabbbcccdddeeeffggg"... wait
-    # Actually: "aaa-bbb-ccc-ddd-eee-fff-ggg".replace('-','') = "aaabbbcccdddeeefffggg" (21 chars) -> [:20] = "aaabbbcccdddeeeffgg"... let me just check
     sanitized = "aaa-bbb-ccc-ddd-eee-fff-ggg".replace("-", "")[:20]
     assert queue_file.name == f"bridge-recovery-{sanitized}.md"

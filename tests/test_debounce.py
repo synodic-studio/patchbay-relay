@@ -22,10 +22,13 @@ def _clean_bridge_state():
     bridge._processing_sessions.clear()
     bridge._queued_messages.clear()
     bridge._session_start_times.clear()
+    original = bridge.ALLOWED_USER_IDS
+    bridge.ALLOWED_USER_IDS = set()  # disable allowlist for tests
     yield
     bridge._processing_sessions.clear()
     bridge._queued_messages.clear()
     bridge._session_start_times.clear()
+    bridge.ALLOWED_USER_IDS = original
 
 
 def _make_update(chat_id=1, thread_id=None, text="hello", user_id=42):
@@ -125,7 +128,7 @@ async def test_queued_messages_drained_after_processing():
         patch.object(bridge, "save_pending", return_value="pending-1"),
         patch.object(bridge, "clear_pending"),
         patch.object(bridge, "keep_typing", new=AsyncMock()),
-        patch.object(bridge, "_handoff_to_pacman", return_value=False),
+        patch.object(bridge, "_handoff_to_forge", return_value=False),
     ):
         first_update = _make_update(text="initial question")
         task = asyncio.create_task(bridge.handle_message(first_update, ctx))
@@ -161,7 +164,7 @@ async def test_multiple_queued_messages_combined_with_separator():
         patch.object(bridge, "save_pending", return_value="pending-1"),
         patch.object(bridge, "clear_pending"),
         patch.object(bridge, "keep_typing", new=AsyncMock()),
-        patch.object(bridge, "_handoff_to_pacman", return_value=False),
+        patch.object(bridge, "_handoff_to_forge", return_value=False),
     ):
         first_update = _make_update(text="initial")
         task = asyncio.create_task(bridge.handle_message(first_update, ctx))
@@ -198,7 +201,7 @@ async def test_single_queued_message_sent_without_follow_up_format():
         patch.object(bridge, "save_pending", return_value="pending-1"),
         patch.object(bridge, "clear_pending"),
         patch.object(bridge, "keep_typing", new=AsyncMock()),
-        patch.object(bridge, "_handoff_to_pacman", return_value=False),
+        patch.object(bridge, "_handoff_to_forge", return_value=False),
     ):
         first_update = _make_update(text="initial")
         task = asyncio.create_task(bridge.handle_message(first_update, ctx))
@@ -227,7 +230,7 @@ async def test_session_cleared_after_processing_completes():
         patch.object(bridge, "save_pending", return_value="pending-1"),
         patch.object(bridge, "clear_pending"),
         patch.object(bridge, "keep_typing", new=AsyncMock()),
-        patch.object(bridge, "_handoff_to_pacman", return_value=False),
+        patch.object(bridge, "_handoff_to_forge", return_value=False),
     ):
         update = _make_update(text="test")
         await bridge.handle_message(update, ctx)
@@ -248,7 +251,7 @@ async def test_session_cleared_even_on_error():
         patch.object(bridge, "save_pending", return_value="pending-1"),
         patch.object(bridge, "clear_pending"),
         patch.object(bridge, "keep_typing", new=AsyncMock()),
-        patch.object(bridge, "_handoff_to_pacman", return_value=False),
+        patch.object(bridge, "_handoff_to_forge", return_value=False),
     ):
         update = _make_update(text="test")
         await bridge.handle_message(update, ctx)
@@ -271,7 +274,7 @@ async def test_message_not_queued_when_session_idle():
         patch.object(bridge, "save_pending", return_value="pending-1"),
         patch.object(bridge, "clear_pending"),
         patch.object(bridge, "keep_typing", new=AsyncMock()),
-        patch.object(bridge, "_handoff_to_pacman", return_value=False),
+        patch.object(bridge, "_handoff_to_forge", return_value=False),
     ):
         update = _make_update(text="normal message")
         await bridge.handle_message(update, ctx)
@@ -296,7 +299,7 @@ async def test_forum_topic_sessions_queue_independently():
         patch.object(bridge, "save_pending", return_value="p1"),
         patch.object(bridge, "clear_pending"),
         patch.object(bridge, "keep_typing", new=AsyncMock()),
-        patch.object(bridge, "_handoff_to_pacman", return_value=False),
+        patch.object(bridge, "_handoff_to_forge", return_value=False),
     ):
         update_a = _make_update(chat_id=1, thread_id=100, text="to A")
         await bridge.handle_message(update_a, ctx)
