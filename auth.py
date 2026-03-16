@@ -4,10 +4,12 @@ Manages Sign in with Apple sessions and TOTP: creation, validation, expiry,
 IP change detection, and manual lock/unlock.
 """
 
+import fcntl
 import json
 import logging
 import os
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 logger = logging.getLogger("bridge.auth")
@@ -66,6 +68,25 @@ def _notify(event_type: str, telegram_user_id: int, details: str = "") -> None:
             logger.debug("Failed to send auth notification", exc_info=True)
 
 
+_AUTH_LOCK_FILE = AUTH_DIR / ".sessions.lock"
+
+
+@contextmanager
+def _state_lock():
+    """Acquire an exclusive file lock around auth state read-modify-write cycles.
+
+    Uses fcntl.flock (blocking) so concurrent callers are serialized rather
+    than corrupting the JSON file.
+    """
+    fd = os.open(_AUTH_LOCK_FILE, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
 def _load_state() -> dict:
     if AUTH_STATE_FILE.exists():
         try:
@@ -94,15 +115,16 @@ def _log_event(event_type: str, telegram_user_id: int, details: str = "") -> Non
 
 def create_session(telegram_user_id: int, apple_subject: str, ip_address: str) -> None:
     """Create an authenticated session after successful Apple sign-in."""
-    state = _load_state()
-    state[str(telegram_user_id)] = {
-        "apple_subject": apple_subject,
-        "authenticated_at": time.time(),
-        "last_seen": time.time(),
-        "ip_address": ip_address,
-        "locked": False,
-    }
-    _save_state(state)
+    with _state_lock():
+        state = _load_state()
+        state[str(telegram_user_id)] = {
+            "apple_subject": apple_subject,
+            "authenticated_at": time.time(),
+            "last_seen": time.time(),
+            "ip_address": ip_address,
+            "locked": False,
+        }
+        _save_state(state)
     clear_rate_limit(telegram_user_id)
     _log_event("authenticated", telegram_user_id, f"ip={ip_address}")
     _notify("authenticated", telegram_user_id, f"IP: {ip_address}")
@@ -138,61 +160,65 @@ def is_authenticated(telegram_user_id: int) -> bool:
 
 def touch_session(telegram_user_id: int) -> None:
     """Update last_seen timestamp for a user's session."""
-    state = _load_state()
-    session = state.get(str(telegram_user_id))
-    if session:
-        session["last_seen"] = time.time()
-        _save_state(state)
+    with _state_lock():
+        state = _load_state()
+        session = state.get(str(telegram_user_id))
+        if session:
+            session["last_seen"] = time.time()
+            _save_state(state)
 
 
 def check_ip(telegram_user_id: int, current_ip: str) -> bool:
     """Check if IP matches the authenticated session. Returns False if IP changed."""
-    state = _load_state()
-    session = state.get(str(telegram_user_id))
-    if not session:
-        return False
-    stored_ip = session.get("ip_address")
-    if stored_ip and stored_ip != current_ip:
-        _log_event("ip_changed", telegram_user_id, f"from={stored_ip} to={current_ip}")
-        # Lock the session on IP change
-        session["locked"] = True
-        session["lock_reason"] = f"IP changed: {stored_ip} -> {current_ip}"
+    with _state_lock():
+        state = _load_state()
+        session = state.get(str(telegram_user_id))
+        if not session:
+            return False
+        stored_ip = session.get("ip_address")
+        if stored_ip and stored_ip != current_ip:
+            _log_event("ip_changed", telegram_user_id, f"from={stored_ip} to={current_ip}")
+            # Lock the session on IP change
+            session["locked"] = True
+            session["lock_reason"] = f"IP changed: {stored_ip} -> {current_ip}"
+            _save_state(state)
+            _notify(
+                "ip_changed",
+                telegram_user_id,
+                f"IP changed: {stored_ip} -> {current_ip} -- session locked",
+            )
+            return False
+        # Update last_seen
+        session["last_seen"] = time.time()
         _save_state(state)
-        _notify(
-            "ip_changed",
-            telegram_user_id,
-            f"IP changed: {stored_ip} -> {current_ip} -- session locked",
-        )
-        return False
-    # Update last_seen
-    session["last_seen"] = time.time()
-    _save_state(state)
-    return True
+        return True
 
 
 def lock_all_sessions() -> int:
     """Lock all active sessions. Returns count of sessions locked."""
-    state = _load_state()
-    count = 0
-    for uid, session in state.items():
-        if not session.get("locked", False):
-            session["locked"] = True
-            session["lock_reason"] = "manual_lock"
-            _log_event("locked", int(uid), "manual lock all")
-            count += 1
-    _save_state(state)
+    with _state_lock():
+        state = _load_state()
+        count = 0
+        for uid, session in state.items():
+            if not session.get("locked", False):
+                session["locked"] = True
+                session["lock_reason"] = "manual_lock"
+                _log_event("locked", int(uid), "manual lock all")
+                count += 1
+        _save_state(state)
     return count
 
 
 def lock_session(telegram_user_id: int) -> bool:
     """Lock a specific user's session. Returns True if session existed."""
-    state = _load_state()
-    session = state.get(str(telegram_user_id))
-    if not session:
-        return False
-    session["locked"] = True
-    session["lock_reason"] = "manual_lock"
-    _save_state(state)
+    with _state_lock():
+        state = _load_state()
+        session = state.get(str(telegram_user_id))
+        if not session:
+            return False
+        session["locked"] = True
+        session["lock_reason"] = "manual_lock"
+        _save_state(state)
     _log_event("locked", telegram_user_id, "manual lock")
     return True
 
@@ -252,17 +278,18 @@ def generate_auth_token(telegram_user_id: int) -> str:
     import secrets
 
     token = secrets.token_urlsafe(32)
-    state = _load_state()
-    # Store pending auth tokens separately
-    pending = state.get("_pending_tokens", {})
-    pending[token] = {
-        "telegram_user_id": telegram_user_id,
-        "created_at": time.time(),
-    }
-    # Clean expired pending tokens (15 min lifetime)
-    pending = {k: v for k, v in pending.items() if time.time() - v["created_at"] < 900}
-    state["_pending_tokens"] = pending
-    _save_state(state)
+    with _state_lock():
+        state = _load_state()
+        # Store pending auth tokens separately
+        pending = state.get("_pending_tokens", {})
+        pending[token] = {
+            "telegram_user_id": telegram_user_id,
+            "created_at": time.time(),
+        }
+        # Clean expired pending tokens (15 min lifetime)
+        pending = {k: v for k, v in pending.items() if time.time() - v["created_at"] < 900}
+        state["_pending_tokens"] = pending
+        _save_state(state)
     return token
 
 
@@ -280,19 +307,20 @@ def check_auth_token(token: str) -> int | None:
 
 def consume_auth_token(token: str) -> int | None:
     """Verify and consume a pending auth token. Returns Telegram user ID or None."""
-    state = _load_state()
-    pending = state.get("_pending_tokens", {})
-    entry = pending.get(token)
-    if not entry:
-        return None
-    if time.time() - entry["created_at"] > 900:  # 15 min expiry
+    with _state_lock():
+        state = _load_state()
+        pending = state.get("_pending_tokens", {})
+        entry = pending.get(token)
+        if not entry:
+            return None
+        if time.time() - entry["created_at"] > 900:  # 15 min expiry
+            del pending[token]
+            _save_state(state)
+            return None
+        telegram_user_id = entry["telegram_user_id"]
         del pending[token]
+        state["_pending_tokens"] = pending
         _save_state(state)
-        return None
-    telegram_user_id = entry["telegram_user_id"]
-    del pending[token]
-    state["_pending_tokens"] = pending
-    _save_state(state)
     return telegram_user_id
 
 
@@ -359,14 +387,15 @@ def authenticate_totp(telegram_user_id: int, code: str) -> bool:
         _notify("totp_failed", telegram_user_id, "Invalid TOTP code")
         return False
     # Create session (no Apple subject or IP for TOTP-based auth)
-    state = _load_state()
-    state[str(telegram_user_id)] = {
-        "auth_method": "totp",
-        "authenticated_at": time.time(),
-        "last_seen": time.time(),
-        "locked": False,
-    }
-    _save_state(state)
+    with _state_lock():
+        state = _load_state()
+        state[str(telegram_user_id)] = {
+            "auth_method": "totp",
+            "authenticated_at": time.time(),
+            "last_seen": time.time(),
+            "locked": False,
+        }
+        _save_state(state)
     clear_rate_limit(telegram_user_id)
     _log_event("totp_authenticated", telegram_user_id)
     _notify("authenticated", telegram_user_id, "via TOTP")

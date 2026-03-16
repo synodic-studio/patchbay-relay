@@ -22,10 +22,13 @@ def tmp_auth_state(tmp_path):
 
     import auth
 
+    tmp_lock_file = tmp_auth_dir / ".sessions.lock"
+
     with (
         patch.object(auth, "AUTH_DIR", tmp_auth_dir),
         patch.object(auth, "AUTH_STATE_FILE", tmp_state_file),
         patch.object(auth, "AUTH_LOG_FILE", tmp_log_file),
+        patch.object(auth, "_AUTH_LOCK_FILE", tmp_lock_file),
     ):
         # Reset in-memory rate-limit state between tests
         auth._failed_attempts.clear()
@@ -33,6 +36,7 @@ def tmp_auth_state(tmp_path):
             "dir": tmp_auth_dir,
             "state_file": tmp_state_file,
             "log_file": tmp_log_file,
+            "lock_file": tmp_lock_file,
         }
 
 

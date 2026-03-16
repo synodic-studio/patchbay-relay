@@ -20,6 +20,7 @@ import logging
 import os
 import re
 import select
+import signal
 import subprocess
 import sys
 import tempfile
@@ -245,6 +246,11 @@ logger = logging.getLogger("bridge")
 
 TELEGRAM_MSG_LIMIT = 4096
 TYPING_INTERVAL = 4  # seconds between typing indicators
+SEND_RETRY_ATTEMPTS = 3
+SEND_RETRY_BASE_DELAY = 1.0  # seconds; doubles each retry (1s, 2s, 4s)
+
+# Allowed characters in session keys: digits, underscore, hyphen
+_SESSION_KEY_RE = re.compile(r"^[-\w]+$")
 _ANSI_RE = re.compile(r"\x1b(?:\[[0-9;]*[A-Za-z]|\].*?(?:\x07|\x1b\\))")
 PHOTO_DIR = Path(tempfile.gettempdir()) / "claude-telegram-photos"
 PHOTO_DIR.mkdir(exist_ok=True)
@@ -261,6 +267,28 @@ def _log_activity(event: str, **kwargs) -> None:
         logger.debug("Failed to write activity log")
 
 
+def _sanitize_session_key(key: str) -> str:
+    """Sanitize a session key to prevent path traversal.
+
+    Session keys are used in filenames (e.g. sessions/{key}.json).
+    Reject any key containing path separators or traversal sequences,
+    then validate the format is alphanumeric with underscores/hyphens only.
+    """
+    if not key:
+        raise ValueError("Invalid session key format: empty string")
+    # Reject keys that contain path separators or traversal components
+    if "/" in key or "\\" in key or ".." in key:
+        raise ValueError(f"Invalid session key format: {key!r}")
+    # Reject anything that doesn't match the expected pattern
+    if not _SESSION_KEY_RE.match(key):
+        raise ValueError(f"Invalid session key format: {key!r}")
+    return key
+
+
+# Flag to block new messages during graceful shutdown
+_shutting_down = False
+
+
 def _session_key(chat_id: int, thread_id: int | None) -> str:
     """Build a unique session key from chat ID and optional forum topic thread ID."""
     if thread_id is not None:
@@ -269,6 +297,7 @@ def _session_key(chat_id: int, thread_id: int | None) -> str:
 
 
 def get_session_id(session_key: str) -> str | None:
+    session_key = _sanitize_session_key(session_key)
     session_file = SESSION_DIR / f"{session_key}.json"
     if not session_file.exists():
         return None
@@ -285,12 +314,14 @@ def get_session_id(session_key: str) -> str | None:
 
 
 def save_session_id(session_key: str, session_id: str) -> None:
+    session_key = _sanitize_session_key(session_key)
     (SESSION_DIR / f"{session_key}.json").write_text(
         json.dumps({"session_id": session_id, "last_active": time.time()})
     )
 
 
 def clear_session(session_key: str) -> None:
+    session_key = _sanitize_session_key(session_key)
     session_file = SESSION_DIR / f"{session_key}.json"
     if session_file.exists():
         session_file.unlink()
@@ -907,23 +938,49 @@ async def cmd_lock(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def _send_response(
     bot, chat_id: int, thread_id: int | None, response: str
 ) -> None:
-    """Send a response, splitting at Telegram's message limit."""
+    """Send a response, splitting at Telegram's message limit.
+
+    Retries each chunk up to SEND_RETRY_ATTEMPTS times with exponential
+    backoff (1s, 2s, 4s) before giving up.
+    """
     send_kwargs: dict = {"chat_id": chat_id}
     if thread_id is not None:
         send_kwargs["message_thread_id"] = thread_id
     for i in range(0, len(response), TELEGRAM_MSG_LIMIT):
         chunk = response[i : i + TELEGRAM_MSG_LIMIT]
-        try:
-            await bot.send_message(text=chunk, **send_kwargs)
-        except Exception as e:
+        last_exc: Exception | None = None
+        for attempt in range(SEND_RETRY_ATTEMPTS):
+            try:
+                await bot.send_message(text=chunk, **send_kwargs)
+                last_exc = None
+                break
+            except Exception as e:
+                last_exc = e
+                delay = SEND_RETRY_BASE_DELAY * (2 ** attempt)
+                logger.warning(
+                    "Telegram send failed (attempt %d/%d) for chat=%s thread=%s "
+                    "chunk_start=%d: %s — retrying in %.1fs",
+                    attempt + 1,
+                    SEND_RETRY_ATTEMPTS,
+                    chat_id,
+                    thread_id,
+                    i,
+                    e,
+                    delay,
+                )
+                if attempt < SEND_RETRY_ATTEMPTS - 1:
+                    await asyncio.sleep(delay)
+        if last_exc is not None:
             logger.error(
-                "Telegram send failed for chat=%s thread=%s chunk_start=%d: %s",
+                "Telegram send failed after %d attempts for chat=%s thread=%s "
+                "chunk_start=%d: %s",
+                SEND_RETRY_ATTEMPTS,
                 chat_id,
                 thread_id,
                 i,
-                e,
+                last_exc,
             )
-            raise
+            raise last_exc
 
 
 async def _notify_delivery_failure(
@@ -951,6 +1008,12 @@ async def _notify_delivery_failure(
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if _shutting_down:
+        await update.message.reply_text(
+            "Bridge is shutting down. Message not processed — please resend in a moment."
+        )
+        return
+
     user_id = update.effective_user.id
 
     if ALLOWED_USER_IDS and user_id not in ALLOWED_USER_IDS:
@@ -1061,6 +1124,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if _shutting_down:
+        await update.message.reply_text(
+            "Bridge is shutting down. Photo not processed — please resend in a moment."
+        )
+        return
+
     user_id = update.effective_user.id
 
     if ALLOWED_USER_IDS and user_id not in ALLOWED_USER_IDS:
@@ -1611,7 +1680,61 @@ async def post_init(app: Application) -> None:
         restart_notify.unlink(missing_ok=True)
 
 
+SHUTDOWN_PROCESS_TIMEOUT = 30  # seconds to wait for active Claude processes
+
+
+def _graceful_shutdown(signum: int, frame) -> None:
+    """Handle SIGTERM/SIGINT: stop accepting new messages, wait for active
+    processes, clean up temp files, then exit."""
+    global _shutting_down
+    sig_name = signal.Signals(signum).name
+    logger.info("Received %s — starting graceful shutdown", sig_name)
+    _shutting_down = True
+
+    # Terminate all active Claude subprocesses (SIGTERM first, then SIGKILL)
+    for key, proc in list(_active_procs.items()):
+        if proc.poll() is None:
+            logger.info("Sending SIGTERM to Claude process for %s (pid %d)", key, proc.pid)
+            proc.terminate()
+
+    # Wait for active processes to finish (with timeout)
+    deadline = time.time() + SHUTDOWN_PROCESS_TIMEOUT
+    for key, proc in list(_active_procs.items()):
+        remaining = max(0, deadline - time.time())
+        try:
+            proc.wait(timeout=remaining)
+            logger.info("Claude process for %s exited cleanly", key)
+        except subprocess.TimeoutExpired:
+            logger.warning("Force-killing Claude process for %s (pid %d)", key, proc.pid)
+            proc.kill()
+            proc.wait()
+
+    # Terminate remote-control process if running
+    if _remote_proc and _remote_proc.poll() is None:
+        logger.info("Terminating remote-control process (pid %d)", _remote_proc.pid)
+        _remote_proc.terminate()
+        try:
+            _remote_proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            _remote_proc.kill()
+
+    # Clean up temp photo files
+    try:
+        for f in PHOTO_DIR.glob("*.jpg"):
+            f.unlink(missing_ok=True)
+        logger.info("Cleaned up temp photo directory")
+    except Exception:
+        pass
+
+    logger.info("Graceful shutdown complete — exiting")
+    sys.exit(0)
+
+
 def main() -> None:
+    # Install signal handlers for graceful shutdown
+    signal.signal(signal.SIGTERM, _graceful_shutdown)
+    signal.signal(signal.SIGINT, _graceful_shutdown)
+
     app = (
         Application.builder()
         .token(BOT_TOKEN.reveal())
