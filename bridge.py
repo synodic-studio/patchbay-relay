@@ -96,6 +96,12 @@ from stargate.quota import (  # noqa: E402
     is_quota_error as _is_quota_error_impl,
 )
 from stargate.activity import log_activity  # noqa: E402
+from stargate.models import (  # noqa: E402
+    VALID_MODELS,
+    extract_model_prefix,
+    get_chat_model,
+    set_chat_model,
+)
 from stargate.projects import (  # noqa: E402
     _load_chat_projects,
     _parse_project_entry,
@@ -124,15 +130,11 @@ _remote_proc_key: str | None = None
 
 # Message debounce: batch messages that arrive while Claude is processing
 _processing_sessions: set[str] = set()
-_session_start_times: dict[
-    str, float
-] = {}  # session_key -> time.time() when processing began
+_session_start_times: dict[str, float] = {}  # session_key -> time.time() when processing began
 _queued_messages: dict[str, list[str]] = {}
 
 # Stalled process detector
-_proc_last_active: dict[
-    str, float
-] = {}  # session_key -> last time CPU was above threshold
+_proc_last_active: dict[str, float] = {}  # session_key -> last time CPU was above threshold
 
 # Flag to block new messages during graceful shutdown
 _shutting_down = False
@@ -146,7 +148,7 @@ _bot_instance = None
 # ---------------------------------------------------------------------------
 
 
-def run_claude(message: str, session_key: str, _retry: bool = False) -> str:
+def run_claude(message: str, session_key: str, _retry: bool = False, model: str | None = None) -> str:
     """Invoke claude CLI via Popen. Does not kill on timeout."""
     session_id = get_session_id(session_key)
     chat_cwd = get_chat_working_dir(session_key)
@@ -215,17 +217,23 @@ def run_claude(message: str, session_key: str, _retry: bool = False) -> str:
         system_prompt,
     ]
 
+    # Resolve model: per-message override > sticky setting > default
+    if not model:
+        model = get_chat_model(session_key)
+    if model:
+        cmd.extend(["--model", model])
+
     if session_id:
         cmd.extend(["--resume", session_id])
         logger.info("Resuming session %s for %s", session_id[:12], session_key)
 
-    logger.info("Launching claude in %s for %s", chat_cwd, session_key)
+    logger.info("Launching claude in %s for %s (model=%s)", chat_cwd, session_key, model or "default")
     invoke_start = time.time()
     _log_activity(
         "claude_invoke",
         session_key=session_key,
         cwd=chat_cwd,
-        model="default",
+        model=model or "default",
         resume=bool(session_id),
     )
 
@@ -245,9 +253,7 @@ def run_claude(message: str, session_key: str, _retry: bool = False) -> str:
         proc.kill()
         proc.communicate()  # drain pipes
         duration = time.time() - invoke_start
-        _log_activity(
-            "claude_timeout", session_key=session_key, pid=proc.pid, duration=duration
-        )
+        _log_activity("claude_timeout", session_key=session_key, pid=proc.pid, duration=duration)
         return f"[Timed out after {MAX_TIMEOUT // 60} min] Session preserved — send your message again to resume."
     finally:
         _active_procs.pop(session_key, None)
@@ -259,9 +265,7 @@ def run_claude(message: str, session_key: str, _retry: bool = False) -> str:
     if not stdout:
         # Stale session: Claude couldn't find the conversation. Clear and retry.
         if stderr and "No conversation found" in stderr and session_id and not _retry:
-            logger.warning(
-                "Stale session %s for %s, retrying fresh", session_id[:12], session_key
-            )
+            logger.warning("Stale session %s for %s, retrying fresh", session_id[:12], session_key)
             clear_session(session_key)
             return run_claude(message, session_key, _retry=True)
         # Check for quota error in stderr even when stdout is empty
@@ -271,9 +275,7 @@ def run_claude(message: str, session_key: str, _retry: bool = False) -> str:
                 session_key,
                 stderr[:200],
             )
-            _log_activity(
-                "quota_hit", session_key=session_key, duration=duration, source="stderr"
-            )
+            _log_activity("quota_hit", session_key=session_key, duration=duration, source="stderr")
             return QUOTA_HIT_PREFIX + message
         _log_activity(
             "claude_error",
@@ -369,14 +371,10 @@ async def _send_auth_link(update: Update) -> None:
         return
     token = auth.generate_auth_token(user_id)
     link = f"{AUTH_BASE_URL}/login?token={token}"
-    await update.message.reply_text(
-        f"Authentication required.\n\n{link}\n\nLink expires in 15 minutes."
-    )
+    await update.message.reply_text(f"Authentication required.\n\n{link}\n\nLink expires in 15 minutes.")
 
 
-async def _send_response(
-    bot, chat_id: int, thread_id: int | None, response: str
-) -> None:
+async def _send_response(bot, chat_id: int, thread_id: int | None, response: str) -> None:
     """Send a response, splitting at Telegram's message limit.
 
     Retries each chunk up to SEND_RETRY_ATTEMPTS times with exponential
@@ -397,8 +395,7 @@ async def _send_response(
                 last_exc = e
                 delay = SEND_RETRY_BASE_DELAY * (2**attempt)
                 logger.warning(
-                    "Telegram send failed (attempt %d/%d) for chat=%s thread=%s "
-                    "chunk_start=%d: %s — retrying in %.1fs",
+                    "Telegram send failed (attempt %d/%d) for chat=%s thread=%s chunk_start=%d: %s — retrying in %.1fs",
                     attempt + 1,
                     SEND_RETRY_ATTEMPTS,
                     chat_id,
@@ -411,8 +408,7 @@ async def _send_response(
                     await asyncio.sleep(delay)
         if last_exc is not None:
             logger.error(
-                "Telegram send failed after %d attempts for chat=%s thread=%s "
-                "chunk_start=%d: %s",
+                "Telegram send failed after %d attempts for chat=%s thread=%s chunk_start=%d: %s",
                 SEND_RETRY_ATTEMPTS,
                 chat_id,
                 thread_id,
@@ -422,9 +418,7 @@ async def _send_response(
             raise last_exc
 
 
-async def _notify_delivery_failure(
-    bot, chat_id: int, thread_id: int | None, label: str
-) -> None:
+async def _notify_delivery_failure(bot, chat_id: int, thread_id: int | None, label: str) -> None:
     """Attempt to notify the user that a response failed to deliver."""
     send_kwargs: dict = {"chat_id": chat_id}
     if thread_id is not None:
@@ -483,15 +477,11 @@ async def replay_pending(bot) -> None:
         f.unlink()
 
         stop_typing = asyncio.Event()
-        typing_task = asyncio.create_task(
-            keep_typing(chat_id, thread_id, stop_typing, bot)
-        )
+        typing_task = asyncio.create_task(keep_typing(chat_id, thread_id, stop_typing, bot))
 
         loop = asyncio.get_running_loop()
         try:
-            response = await loop.run_in_executor(
-                _executor, run_claude, text, session_key
-            )
+            response = await loop.run_in_executor(_executor, run_claude, text, session_key)
         except Exception as e:
             logger.error("Error replaying %s: %s", f.stem, e)
             response = (
@@ -510,9 +500,7 @@ async def replay_pending(bot) -> None:
             send_kwargs["message_thread_id"] = thread_id
 
         for i in range(0, len(full_response), TELEGRAM_MSG_LIMIT):
-            await bot.send_message(
-                text=full_response[i : i + TELEGRAM_MSG_LIMIT], **send_kwargs
-            )
+            await bot.send_message(text=full_response[i : i + TELEGRAM_MSG_LIMIT], **send_kwargs)
 
         logger.info("Replayed pending message %s", f.stem)
 
@@ -524,9 +512,7 @@ async def replay_pending(bot) -> None:
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if _shutting_down:
-        await update.message.reply_text(
-            "Bridge is shutting down. Message not processed — please resend in a moment."
-        )
+        await update.message.reply_text("Bridge is shutting down. Message not processed — please resend in a moment.")
         return
 
     user_id = update.effective_user.id
@@ -561,33 +547,32 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             return
         queue.append(text)
         depth = len(queue)
-        await update.message.reply_text(
-            f"Queued ({depth}) — will send when current response finishes."
-        )
+        await update.message.reply_text(f"Queued ({depth}) — will send when current response finishes.")
         logger.info("Queued message for %s (depth: %d)", key, depth)
         _log_activity("message_queued", session_key=key, depth=depth)
         return
 
+    # Check for per-message model prefix (e.g. "!sonnet do something")
+    msg_model, clean_text = extract_model_prefix(text)
+
     _processing_sessions.add(key)
     _session_start_times[key] = time.time()
-    pending_id = save_pending(chat_id, thread_id, text, key)
+    pending_id = save_pending(chat_id, thread_id, clean_text, key)
 
     stop_typing = asyncio.Event()
-    typing_task = asyncio.create_task(
-        keep_typing(chat_id, thread_id, stop_typing, context.bot)
-    )
+    typing_task = asyncio.create_task(keep_typing(chat_id, thread_id, stop_typing, context.bot))
 
     try:
         loop = asyncio.get_running_loop()
         try:
-            response = await loop.run_in_executor(_executor, run_claude, text, key)
+            response = await loop.run_in_executor(_executor, lambda: run_claude(clean_text, key, model=msg_model))
         except Exception as e:
             logger.error("Error running claude for %s: %s", key, e)
             response = f"Error: {e}"
 
         # Quota hit — hand off to Forge instead of sending error to user
         if response.startswith(QUOTA_HIT_PREFIX):
-            original_msg = response[len(QUOTA_HIT_PREFIX):]
+            original_msg = response[len(QUOTA_HIT_PREFIX) :]
             session_id = get_session_id(key)
             chat_cwd = get_chat_working_dir(key)
             handed_off = _handoff_to_forge(
@@ -624,13 +609,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             if len(batch) == 1:
                 combined = batch[0]
             else:
-                combined = "\n\n---\n\n".join(
-                    f"[Follow-up {i + 1}]\n{msg}" for i, msg in enumerate(batch)
-                )
+                combined = "\n\n---\n\n".join(f"[Follow-up {i + 1}]\n{msg}" for i, msg in enumerate(batch))
             try:
-                response = await loop.run_in_executor(
-                    _executor, run_claude, combined, key
-                )
+                response = await loop.run_in_executor(_executor, run_claude, combined, key)
             except Exception as e:
                 logger.error("Error running claude for queued batch %s: %s", key, e)
                 response = f"Error: {e}"
@@ -648,9 +629,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if _shutting_down:
-        await update.message.reply_text(
-            "Bridge is shutting down. Photo not processed — please resend in a moment."
-        )
+        await update.message.reply_text("Bridge is shutting down. Photo not processed — please resend in a moment.")
         return
 
     user_id = update.effective_user.id
@@ -676,11 +655,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     logger.info("Downloaded photo to %s for %s", local_path, key)
     _log_activity("photo", user_id=user_id, session_key=key, caption_len=len(caption))
 
-    prompt = (
-        f"{caption}\n\n"
-        f"[An image has been saved to {local_path} — "
-        f"use the Read tool to view it before responding.]"
-    )
+    prompt = f"{caption}\n\n[An image has been saved to {local_path} — use the Read tool to view it before responding.]"
 
     # Debounce: if Claude is already processing for this session, queue the photo prompt
     if key in _processing_sessions:
@@ -695,9 +670,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             return
         queue.append(prompt)
         depth = len(queue)
-        await update.message.reply_text(
-            f"Photo queued ({depth}) — will send when current response finishes."
-        )
+        await update.message.reply_text(f"Photo queued ({depth}) — will send when current response finishes.")
         logger.info("Queued photo for %s (depth: %d)", key, depth)
         _log_activity("photo_queued", session_key=key, depth=depth)
         return
@@ -707,9 +680,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     pending_id = save_pending(chat_id, thread_id, prompt, key)
 
     stop_typing = asyncio.Event()
-    typing_task = asyncio.create_task(
-        keep_typing(chat_id, thread_id, stop_typing, context.bot)
-    )
+    typing_task = asyncio.create_task(keep_typing(chat_id, thread_id, stop_typing, context.bot))
 
     try:
         loop = asyncio.get_running_loop()
@@ -733,13 +704,9 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             if len(batch) == 1:
                 combined = batch[0]
             else:
-                combined = "\n\n---\n\n".join(
-                    f"[Follow-up {i + 1}]\n{msg}" for i, msg in enumerate(batch)
-                )
+                combined = "\n\n---\n\n".join(f"[Follow-up {i + 1}]\n{msg}" for i, msg in enumerate(batch))
             try:
-                response = await loop.run_in_executor(
-                    _executor, run_claude, combined, key
-                )
+                response = await loop.run_in_executor(_executor, run_claude, combined, key)
             except Exception as e:
                 logger.error("Error running claude for queued batch %s: %s", key, e)
                 response = f"Error: {e}"
@@ -770,6 +737,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/setproject <path> - Set project dir (relative to ~/Developer)\n"
         "/setproject - Clear project binding (use default)\n"
         "/project - Show current project dir\n"
+        "/model - Set model (opus/sonnet/haiku) or prefix with !s !o !h\n"
         "/remote-control - Start claude remote-control in this topic's project dir\n"
         "/remote-control stop - Stop remote-control\n"
         "/kill - Kill active Claude process\n"
@@ -798,17 +766,8 @@ async def cmd_setproject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     args = context.args
     if not args:
         projects = _get_all_projects()
-        buttons = [
-            [InlineKeyboardButton(name, callback_data=f"setproject:{name}")]
-            for name in projects
-        ]
-        buttons.append(
-            [
-                InlineKeyboardButton(
-                    "Clear (use ~/Developer)", callback_data="setproject:__clear__"
-                )
-            ]
-        )
+        buttons = [[InlineKeyboardButton(name, callback_data=f"setproject:{name}")] for name in projects]
+        buttons.append([InlineKeyboardButton("Clear (use ~/Developer)", callback_data="setproject:__clear__")])
         await update.message.reply_text(
             "Pick a project (A-Z).\nOr type: /setproject <path>",
             reply_markup=InlineKeyboardMarkup(buttons),
@@ -833,16 +792,12 @@ async def cmd_setproject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     clear_session(key)
     chat_title = update.effective_chat.title or "DM"
     await update.message.reply_text(
-        f"Project set: ~/Developer/{rel_path}\n"
-        f"Chat: {chat_title}\n"
-        f"Session reset. Claude will run from this directory."
+        f"Project set: ~/Developer/{rel_path}\nChat: {chat_title}\nSession reset. Claude will run from this directory."
     )
     logger.info("Project set to %s for %s (%s)", rel_path, key, chat_title)
 
 
-async def callback_setproject(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
+async def callback_setproject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle inline keyboard button presses for project selection."""
     query = update.callback_query
     await query.answer()
@@ -857,9 +812,7 @@ async def callback_setproject(
     if rel_path == "__clear__":
         set_chat_project(key, None)
         clear_session(key)
-        await query.edit_message_text(
-            "Project cleared. Using default: ~/Developer\nSession reset."
-        )
+        await query.edit_message_text("Project cleared. Using default: ~/Developer\nSession reset.")
         logger.info("Project cleared for %s", key)
         return
 
@@ -882,9 +835,7 @@ async def callback_setproject(
     clear_session(key)
     chat_title = update.effective_chat.title or "DM"
     await query.edit_message_text(
-        f"Project set: ~/Developer/{rel_path}\n"
-        f"Chat: {chat_title}\n"
-        f"Session reset. Claude will run from this directory."
+        f"Project set: ~/Developer/{rel_path}\nChat: {chat_title}\nSession reset. Claude will run from this directory."
     )
     logger.info("Project set to %s for %s (%s)", rel_path, key, chat_title)
 
@@ -914,12 +865,8 @@ async def cmd_auth(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if auth.is_authenticated(user_id):
         info = auth.get_session_info(user_id)
         if info:
-            authed_at = datetime.datetime.fromtimestamp(
-                info["authenticated_at"], tz=datetime.timezone.utc
-            )
-            expires_at = authed_at + datetime.timedelta(
-                seconds=auth.SESSION_EXPIRY_SECONDS
-            )
+            authed_at = datetime.datetime.fromtimestamp(info["authenticated_at"], tz=datetime.timezone.utc)
+            expires_at = authed_at + datetime.timedelta(seconds=auth.SESSION_EXPIRY_SECONDS)
             await update.message.reply_text(
                 f"Already authenticated.\n"
                 f"Since: {authed_at.strftime('%Y-%m-%d %H:%M UTC')}\n"
@@ -947,6 +894,72 @@ async def cmd_lock(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.info("User %d locked their session", user_id)
 
 
+async def cmd_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Set or show the model for this chat/topic."""
+    user_id = update.effective_user.id
+    if ALLOWED_USER_IDS and user_id not in ALLOWED_USER_IDS:
+        return
+
+    chat_id = update.effective_chat.id
+    thread_id = update.message.message_thread_id
+    key = _session_key(chat_id, thread_id)
+
+    args = context.args
+    if args:
+        choice = args[0].lower()
+        if choice == "default":
+            set_chat_model(key, None)
+            await update.message.reply_text("Model reset to default (opus).")
+            logger.info("Model cleared for %s", key)
+            return
+        if choice not in VALID_MODELS:
+            await update.message.reply_text("Invalid model. Choose: opus, sonnet, haiku, default")
+            return
+        set_chat_model(key, choice)
+        await update.message.reply_text(f"Model set to {choice}. Takes effect on next message.")
+        logger.info("Model set to %s for %s", choice, key)
+        return
+
+    # No args: show buttons
+    current = get_chat_model(key) or "default (opus)"
+    buttons = [
+        [
+            InlineKeyboardButton("opus", callback_data="model:opus"),
+            InlineKeyboardButton("sonnet", callback_data="model:sonnet"),
+            InlineKeyboardButton("haiku", callback_data="model:haiku"),
+        ],
+        [InlineKeyboardButton("default", callback_data="model:__default__")],
+    ]
+    await update.message.reply_text(
+        f"Current model: {current}\nPick a model (or prefix any message with !s !o !h for one-shot):",
+        reply_markup=InlineKeyboardMarkup(buttons),
+    )
+
+
+async def callback_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle inline keyboard button presses for model selection."""
+    query = update.callback_query
+    await query.answer()
+
+    chat_id = update.effective_chat.id
+    thread_id = query.message.message_thread_id
+    key = _session_key(chat_id, thread_id)
+
+    choice = query.data.split(":", 1)[1]
+    if choice == "__default__":
+        set_chat_model(key, None)
+        await query.edit_message_text("Model reset to default (opus).")
+        logger.info("Model cleared for %s", key)
+        return
+    if choice not in VALID_MODELS:
+        await query.edit_message_text(f"Invalid model: {choice}")
+        return
+
+    set_chat_model(key, choice)
+    await query.edit_message_text(f"Model set to {choice}. Takes effect on next message.")
+    logger.info("Model set to %s for %s", choice, key)
+
+
 async def cmd_kill(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Kill the active Claude process for this chat/topic."""
     user_id = update.effective_user.id
@@ -960,12 +973,8 @@ async def cmd_kill(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     proc = _active_procs.get(key)
     if proc and proc.poll() is None:
         proc.kill()
-        await update.message.reply_text(
-            "Killed active Claude process. Session preserved — next message resumes."
-        )
-        logger.info(
-            "User %d killed Claude process for %s (pid %d)", user_id, key, proc.pid
-        )
+        await update.message.reply_text("Killed active Claude process. Session preserved — next message resumes.")
+        logger.info("User %d killed Claude process for %s (pid %d)", user_id, key, proc.pid)
         _log_activity(
             "process_kill",
             session_key=key,
@@ -1008,9 +1017,7 @@ async def cmd_restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     os._exit(1)
 
 
-async def cmd_remote_control(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
+async def cmd_remote_control(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Start or stop claude remote-control in this topic's project dir."""
     global _remote_proc, _remote_proc_key
 
@@ -1044,9 +1051,7 @@ async def cmd_remote_control(
             _remote_proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             _remote_proc.kill()
-        logger.info(
-            "Replaced existing remote-control process (pid %d)", _remote_proc.pid
-        )
+        logger.info("Replaced existing remote-control process (pid %d)", _remote_proc.pid)
 
     chat_cwd = get_chat_working_dir(key)
     await update.message.reply_text(f"Starting remote-control in {chat_cwd}...")
@@ -1092,9 +1097,7 @@ async def cmd_remote_control(
 
     if proc.poll() is not None:
         output = "\n".join(lines) if lines else "(no output)"
-        await update.message.reply_text(
-            f"Remote control exited (code {proc.returncode}):\n{output}"
-        )
+        await update.message.reply_text(f"Remote control exited (code {proc.returncode}):\n{output}")
         _remote_proc = None
         _remote_proc_key = None
     else:
@@ -1126,9 +1129,7 @@ async def cmd_ping(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def _auth_notify(
-    event_type: str, telegram_user_id: int, details: str = ""
-) -> None:
+async def _auth_notify(event_type: str, telegram_user_id: int, details: str = "") -> None:
     """Send auth event alerts to the admin via Telegram."""
     if not ALLOWED_USER_IDS:
         return
@@ -1206,9 +1207,7 @@ async def _stall_detector() -> None:
                         chat_id = int(parts[0])
                         thread_id = int(parts[1]) if len(parts) > 1 else None
                     except (ValueError, IndexError):
-                        logger.warning(
-                            "Cannot parse session key %r for stall notification", key
-                        )
+                        logger.warning("Cannot parse session key %r for stall notification", key)
                         continue
                     try:
                         send_kwargs: dict = {"chat_id": chat_id}
@@ -1219,9 +1218,7 @@ async def _stall_detector() -> None:
                             **send_kwargs,
                         )
                     except Exception:
-                        logger.debug(
-                            "Failed to notify about stalled process for %s", key
-                        )
+                        logger.debug("Failed to notify about stalled process for %s", key)
 
 
 async def post_init(app: Application) -> None:
@@ -1258,6 +1255,7 @@ async def post_init(app: Application) -> None:
         BotCommand("clearnew", "Start a fresh conversation"),
         BotCommand("setproject", "Set project dir (relative to ~/Developer)"),
         BotCommand("project", "Show current project dir"),
+        BotCommand("model", "Set model (opus/sonnet/haiku)"),
         BotCommand("remote_control", "Start/stop claude remote-control in project dir"),
         BotCommand("kill", "Kill active Claude process"),
         BotCommand("restart", "Restart the bridge"),
@@ -1370,13 +1368,7 @@ def main() -> None:
     signal.signal(signal.SIGTERM, _graceful_shutdown)
     signal.signal(signal.SIGINT, _graceful_shutdown)
 
-    app = (
-        Application.builder()
-        .token(BOT_TOKEN.reveal())
-        .concurrent_updates(True)
-        .post_init(post_init)
-        .build()
-    )
+    app = Application.builder().token(BOT_TOKEN.reveal()).concurrent_updates(True).post_init(post_init).build()
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("clearnew", cmd_clearnew))
     app.add_handler(CommandHandler("setproject", cmd_setproject))
@@ -1385,6 +1377,8 @@ def main() -> None:
     app.add_handler(CommandHandler("auth", cmd_auth))
     app.add_handler(CommandHandler("lock", cmd_lock))
     app.add_handler(CommandHandler("kill", cmd_kill))
+    app.add_handler(CommandHandler("model", cmd_model))
+    app.add_handler(CallbackQueryHandler(callback_model, pattern=r"^model:"))
     app.add_handler(CommandHandler("remote_control", cmd_remote_control))
     app.add_handler(CommandHandler("restart", cmd_restart))
     app.add_handler(CommandHandler("ping", cmd_ping))
