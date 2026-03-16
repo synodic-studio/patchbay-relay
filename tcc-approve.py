@@ -119,9 +119,9 @@ def main():
     check_node_claude()
 
     print("\nDone. These permissions persist until:")
-    print(f"  - `brew upgrade python` changes the Cellar path")
-    print(f"  - You reset TCC via System Settings")
-    print(f"\nRe-run this script after Python upgrades.")
+    print("  - `brew upgrade python` changes the Cellar path")
+    print("  - You reset TCC via System Settings")
+    print("\nRe-run this script after Python upgrades.")
 
 
 if __name__ == "__main__":

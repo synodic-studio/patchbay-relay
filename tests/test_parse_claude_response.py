@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Tests for parse_claude_response function in bridge.py."""
 
-import pytest
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 import sys
 import os
 
@@ -85,7 +84,7 @@ class TestParseClaudeResponse:
         session_key = "test_session"
 
         # Mock save_session_id to verify it's called
-        with patch.object(bridge, "save_session_id") as mock_save:
+        with patch("stargate.parser.save_session_id") as mock_save:
             result = bridge.parse_claude_response(stdout, session_key)
 
             # Verify save_session_id was called with correct arguments

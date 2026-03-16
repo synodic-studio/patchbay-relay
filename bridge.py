@@ -14,18 +14,13 @@ becomes an independent Claude session, running in parallel.
 """
 
 import asyncio
-import datetime
 import json
-import logging
 import os
-import re
 import select
 import signal
 import subprocess
 import sys
-import tempfile
 import time
-import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -33,8 +28,8 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent / ".env")
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import (
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update  # noqa: E402
+from telegram.ext import (  # noqa: E402
     Application,
     CallbackQueryHandler,
     CommandHandler,
@@ -43,177 +38,80 @@ from telegram.ext import (
     filters,
 )
 
-import auth
+import auth  # noqa: E402
 
-
-class _SecretStr:
-    """Wraps a secret string so it never appears in tracebacks or repr output."""
-
-    __slots__ = ("_value",)
-
-    def __init__(self, value: str) -> None:
-        self._value = value
-
-    def __repr__(self) -> str:
-        return "***REDACTED***"
-
-    def __str__(self) -> str:
-        return "***REDACTED***"
-
-    def __bool__(self) -> bool:
-        return bool(self._value)
-
-    def reveal(self) -> str:
-        """Return the raw secret value. Call only where the plaintext is required."""
-        return self._value
-
-
-_pp = subprocess.run(
-    [
-        "pass-cli",
-        "item",
-        "view",
-        "--vault-name",
-        "Developer Secrets",
-        "--item-title",
-        "telegram-bot-token",
-        "--field",
-        "note",
-    ],
-    capture_output=True,
-    text=True,
+# ---------------------------------------------------------------------------
+# Import from package modules — these are the canonical implementations.
+# Re-export at module level for backward compatibility with existing tests
+# and validate.py.
+# ---------------------------------------------------------------------------
+from stargate.config import (  # noqa: E402
+    ACTIVITY_LOG,  # noqa: F401 — used by tests via bridge.ACTIVITY_LOG
+    ALLOWED_USER_IDS,
+    ANSI_RE,
+    AUTH_BASE_URL,
+    AUTH_REQUIRED,
+    BOT_TOKEN,
+    CHAT_PROJECTS_FILE,
+    CLAUDE_PATH,
+    FORGE_QUEUE_DIR,  # noqa: F401 — used by tests via bridge.FORGE_QUEUE_DIR
+    MAX_TIMEOUT,
+    MAX_TURNS,
+    MAX_WORKERS,
+    PA_PLUGIN_DIR,
+    PENDING_DIR,
+    PHOTO_DIR,
+    QUOTA_HIT_PREFIX,
+    RESTART_NOTIFY_FILE,
+    SEND_RETRY_ATTEMPTS,
+    SEND_RETRY_BASE_DELAY,
+    SESSION_DIR,  # noqa: F401 — used by tests via bridge.SESSION_DIR
+    SESSION_EXPIRY,
+    SESSION_KEY_RE,
+    SHUTDOWN_PROCESS_TIMEOUT,
+    STALL_CPU_THRESHOLD,
+    STALL_POLL_INTERVAL,
+    STALL_TIMEOUT,
+    TELEGRAM_MSG_LIMIT,
+    TYPING_INTERVAL,
+    WORKING_DIR,
+    logger,
 )
-if _pp.returncode == 0 and _pp.stdout.strip():
-    _raw_token = _pp.stdout.strip()
-else:
-    _kc = subprocess.run(
-        [
-            "security",
-            "find-generic-password",
-            "-a",
-            "bryancostanza",
-            "-s",
-            "telegram-bot-token",
-            "-w",
-        ],
-        capture_output=True,
-        text=True,
-    )
-    _raw_token = (
-        _kc.stdout.strip()
-        if _kc.returncode == 0 and _kc.stdout.strip()
-        else os.environ.get("TELEGRAM_BOT_TOKEN", "")
-    )
-    del _kc
-del _pp
-BOT_TOKEN = _SecretStr(_raw_token)
-del _raw_token
-
-if not BOT_TOKEN:
-    print(
-        "ERROR: BOT_TOKEN is empty. Set TELEGRAM_BOT_TOKEN in the environment "
-        "or ensure 'telegram-bot-token' is accessible via Proton Pass or Keychain.",
-        file=sys.stderr,
-    )
-    sys.exit(1)
-
-ALLOWED_USER_IDS: set[int] = set()
-_raw = os.environ.get("ALLOWED_USER_IDS", "")
-if _raw.strip():
-    _parsed_ids: set[int] = set()
-    for _uid_token in _raw.split(","):
-        _uid_token = _uid_token.strip()
-        if not _uid_token:
-            continue
-        try:
-            _parsed_ids.add(int(_uid_token))
-        except ValueError:
-            print(
-                f"ERROR: ALLOWED_USER_IDS contains non-integer value: {_uid_token!r}. "
-                "All entries must be numeric Telegram user IDs (e.g. 123456789,987654321).",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-    ALLOWED_USER_IDS = _parsed_ids
-
-CLAUDE_PATH = os.environ.get("CLAUDE_PATH", "/opt/homebrew/bin/claude")
-WORKING_DIR = os.environ.get("CLAUDE_WORKING_DIR", os.path.expanduser("~/Developer"))
-PA_PLUGIN_DIR = os.environ.get(
-    "PA_PLUGIN_DIR",
-    os.path.expanduser("~/Developer/Fanta"),
+from stargate.sessions import (  # noqa: E402
+    _sanitize_session_key,  # noqa: F401 — used by tests via bridge._sanitize_session_key
+    _session_key,
+    clear_pending,
+    clear_session,
+    get_session_id,
+    save_pending,
+    save_session_id,  # noqa: F401 — used by tests via bridge.save_session_id
 )
-SESSION_EXPIRY = int(os.environ.get("SESSION_EXPIRY", "259200"))  # 3 days
-MAX_TIMEOUT = int(os.environ.get("MAX_TIMEOUT", "2700"))  # 45 min safety valve
-MAX_TURNS = int(os.environ.get("MAX_TURNS", "30"))  # ~10-20 min of typical work
-MAX_WORKERS = int(os.environ.get("MAX_WORKERS", "4"))
-AUTH_BASE_URL = os.environ.get("AUTH_BASE_URL", "https://auth.kj6.dev")
-AUTH_REQUIRED = os.environ.get("AUTH_REQUIRED", "false").lower() == "true"
+from stargate.parser import (  # noqa: E402
+    _parse_events,
+    parse_claude_response,
+)
+from stargate.quota import (  # noqa: E402
+    handoff_to_forge as _handoff_to_forge_impl,
+    is_quota_error as _is_quota_error_impl,
+)
+from stargate.activity import log_activity  # noqa: E402
+from stargate.projects import (  # noqa: E402
+    _load_chat_projects,
+    _parse_project_entry,
+    get_all_projects as _get_all_projects,
+    get_chat_agent,
+    get_chat_working_dir,
+    set_chat_project,
+)
 
-SESSION_DIR = Path(__file__).parent / "sessions"
-SESSION_DIR.mkdir(exist_ok=True)
-PENDING_DIR = Path(__file__).parent / "pending"
-RESTART_NOTIFY_FILE = Path(__file__).parent / "restart_notify.json"
-PENDING_DIR.mkdir(exist_ok=True)
-CHAT_PROJECTS_FILE = Path(__file__).parent / "chat_projects.json"
-FORGE_QUEUE_DIR = Path(PA_PLUGIN_DIR) / "agents" / "dev" / "forge" / "queue"
-QUOTA_HIT_PREFIX = "\x00QUOTA_HIT\x00"  # sentinel prefix for quota errors
+# Backward-compatible names for functions that were renamed
+_is_quota_error = _is_quota_error_impl
+_handoff_to_forge = _handoff_to_forge_impl
+_log_activity = log_activity
 
-
-def _load_chat_projects() -> dict[str, str]:
-    """Load session_key -> relative project path mapping."""
-    if CHAT_PROJECTS_FILE.exists():
-        try:
-            return json.loads(CHAT_PROJECTS_FILE.read_text())
-        except (json.JSONDecodeError, TypeError):
-            return {}
-    return {}
-
-
-def _save_chat_projects(projects: dict[str, str]) -> None:
-    CHAT_PROJECTS_FILE.write_text(json.dumps(projects, indent=2) + "\n")
-
-
-def _parse_project_entry(entry) -> tuple[str | None, str | None]:
-    """Parse a chat_projects entry. Returns (rel_path, agent_name).
-
-    Entries can be:
-      - A string: "Fanta" -> ("Fanta", None)
-      - An object: {"path": "Fanta", "agent": "iron-temple"} -> ("Fanta", "iron-temple")
-    """
-    if isinstance(entry, dict):
-        return entry.get("path"), entry.get("agent")
-    if isinstance(entry, str):
-        return entry, None
-    return None, None
-
-
-def get_chat_working_dir(session_key: str) -> str:
-    """Resolve working directory for a chat. Returns absolute path."""
-    projects = _load_chat_projects()
-    entry = projects.get(session_key)
-    rel_path, _ = _parse_project_entry(entry)
-    if rel_path:
-        return os.path.join(WORKING_DIR, rel_path)
-    return WORKING_DIR
-
-
-def get_chat_agent(session_key: str) -> str | None:
-    """Return the agent name for this chat, if configured."""
-    projects = _load_chat_projects()
-    entry = projects.get(session_key)
-    _, agent = _parse_project_entry(entry)
-    return agent
-
-
-def set_chat_project(session_key: str, rel_path: str | None) -> None:
-    """Set or clear the project directory for a chat."""
-    projects = _load_chat_projects()
-    if rel_path is None:
-        projects.pop(session_key, None)
-    else:
-        projects[session_key] = rel_path
-    _save_chat_projects(projects)
-
+# Module-level _ANSI_RE for backward compat
+_ANSI_RE = ANSI_RE
+_SESSION_KEY_RE = SESSION_KEY_RE
 
 _executor = ThreadPoolExecutor(max_workers=MAX_WORKERS)
 
@@ -230,441 +128,21 @@ _session_start_times: dict[
 ] = {}  # session_key -> time.time() when processing began
 _queued_messages: dict[str, list[str]] = {}
 
-# Stalled process detector: track when each process last had meaningful CPU
-STALL_POLL_INTERVAL = 120  # check every 2 minutes
-STALL_CPU_THRESHOLD = 1.0  # %CPU below this = idle
-STALL_TIMEOUT = 600  # kill after 10 min of near-zero CPU
+# Stalled process detector
 _proc_last_active: dict[
     str, float
 ] = {}  # session_key -> last time CPU was above threshold
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-)
-logger = logging.getLogger("bridge")
-
-TELEGRAM_MSG_LIMIT = 4096
-TYPING_INTERVAL = 4  # seconds between typing indicators
-SEND_RETRY_ATTEMPTS = 3
-SEND_RETRY_BASE_DELAY = 1.0  # seconds; doubles each retry (1s, 2s, 4s)
-
-# Allowed characters in session keys: digits, underscore, hyphen
-_SESSION_KEY_RE = re.compile(r"^[-\w]+$")
-_ANSI_RE = re.compile(r"\x1b(?:\[[0-9;]*[A-Za-z]|\].*?(?:\x07|\x1b\\))")
-PHOTO_DIR = Path(tempfile.gettempdir()) / "claude-telegram-photos"
-PHOTO_DIR.mkdir(exist_ok=True)
-ACTIVITY_LOG = Path(__file__).parent / "activity.jsonl"
-
-
-def _log_activity(event: str, **kwargs) -> None:
-    """Append a structured JSON-lines entry to the activity log."""
-    entry = {"ts": time.time(), "event": event, **kwargs}
-    try:
-        with open(ACTIVITY_LOG, "a") as f:
-            f.write(json.dumps(entry) + "\n")
-    except OSError:
-        logger.debug("Failed to write activity log")
-
-
-def _sanitize_session_key(key: str) -> str:
-    """Sanitize a session key to prevent path traversal.
-
-    Session keys are used in filenames (e.g. sessions/{key}.json).
-    Reject any key containing path separators or traversal sequences,
-    then validate the format is alphanumeric with underscores/hyphens only.
-    """
-    if not key:
-        raise ValueError("Invalid session key format: empty string")
-    # Reject keys that contain path separators or traversal components
-    if "/" in key or "\\" in key or ".." in key:
-        raise ValueError(f"Invalid session key format: {key!r}")
-    # Reject anything that doesn't match the expected pattern
-    if not _SESSION_KEY_RE.match(key):
-        raise ValueError(f"Invalid session key format: {key!r}")
-    return key
-
-
 # Flag to block new messages during graceful shutdown
 _shutting_down = False
 
-
-def _session_key(chat_id: int, thread_id: int | None) -> str:
-    """Build a unique session key from chat ID and optional forum topic thread ID."""
-    if thread_id is not None:
-        return f"{chat_id}_{thread_id}"
-    return str(chat_id)
-
-
-def get_session_id(session_key: str) -> str | None:
-    session_key = _sanitize_session_key(session_key)
-    session_file = SESSION_DIR / f"{session_key}.json"
-    if not session_file.exists():
-        return None
-    try:
-        data = json.loads(session_file.read_text())
-    except (json.JSONDecodeError, KeyError):
-        session_file.unlink()
-        return None
-    if time.time() - data["last_active"] > SESSION_EXPIRY:
-        session_file.unlink()
-        logger.info("Session expired for %s", session_key)
-        return None
-    return data["session_id"]
-
-
-def save_session_id(session_key: str, session_id: str) -> None:
-    session_key = _sanitize_session_key(session_key)
-    (SESSION_DIR / f"{session_key}.json").write_text(
-        json.dumps({"session_id": session_id, "last_active": time.time()})
-    )
-
-
-def clear_session(session_key: str) -> None:
-    session_key = _sanitize_session_key(session_key)
-    session_file = SESSION_DIR / f"{session_key}.json"
-    if session_file.exists():
-        session_file.unlink()
-
-
-def save_pending(
-    chat_id: int, thread_id: int | None, text: str, session_key: str
-) -> str:
-    """Save a message as pending before processing. Returns pending ID."""
-    pending_id = uuid.uuid4().hex[:12]
-    (PENDING_DIR / f"{pending_id}.json").write_text(
-        json.dumps(
-            {
-                "chat_id": chat_id,
-                "thread_id": thread_id,
-                "text": text,
-                "session_key": session_key,
-                "timestamp": time.time(),
-            }
-        )
-    )
-    return pending_id
-
-
-def clear_pending(pending_id: str) -> None:
-    (PENDING_DIR / f"{pending_id}.json").unlink(missing_ok=True)
-
-
-async def replay_pending(bot) -> None:
-    """Replay messages that were lost when the bridge was killed mid-processing."""
-    pending_files = sorted(PENDING_DIR.glob("*.json"))
-    if not pending_files:
-        return
-
-    logger.info("Found %d pending messages to replay", len(pending_files))
-
-    for f in pending_files:
-        try:
-            data = json.loads(f.read_text())
-        except (json.JSONDecodeError, KeyError):
-            f.unlink()
-            continue
-
-        if not all(k in data for k in ("chat_id", "session_key", "text", "timestamp")):
-            logger.warning("Skipping malformed pending file %s", f.name)
-            f.unlink(missing_ok=True)
-            continue
-
-        if time.time() - data["timestamp"] > SESSION_EXPIRY:
-            f.unlink(missing_ok=True)
-            logger.info("Discarding expired pending message %s", f.stem)
-            continue
-
-        chat_id = data["chat_id"]
-        thread_id = data.get("thread_id")
-        session_key = data["session_key"]
-        text = data["text"]
-
-        logger.info("Replaying message for %s: %s", session_key, text[:80])
-
-        # Delete pending file BEFORE processing to prevent crash loops.
-        # If run_claude kills the bridge (e.g. "restart gateway"), the file
-        # won't survive to be replayed on the next restart.
-        f.unlink()
-
-        stop_typing = asyncio.Event()
-        typing_task = asyncio.create_task(
-            keep_typing(chat_id, thread_id, stop_typing, bot)
-        )
-
-        loop = asyncio.get_running_loop()
-        try:
-            response = await loop.run_in_executor(
-                _executor, run_claude, text, session_key
-            )
-        except Exception as e:
-            logger.error("Error replaying %s: %s", f.stem, e)
-            response = f"Error: {e}"
-        finally:
-            stop_typing.set()
-            await typing_task
-
-        full_response = "[Recovered after bridge restart]\n\n" + response
-
-        send_kwargs = {"chat_id": chat_id}
-        if thread_id is not None:
-            send_kwargs["message_thread_id"] = thread_id
-
-        for i in range(0, len(full_response), TELEGRAM_MSG_LIMIT):
-            await bot.send_message(
-                text=full_response[i : i + TELEGRAM_MSG_LIMIT], **send_kwargs
-            )
-
-        logger.info("Replayed pending message %s", f.stem)
-
-
-def _parse_events(stdout: str) -> list[dict]:
-    """Parse stdout from --output-format json into a list of event dicts."""
-    stripped = stdout.strip()
-    if not stripped:
-        return []
-    try:
-        parsed = json.loads(stripped)
-        if isinstance(parsed, dict):
-            return [parsed]
-        if isinstance(parsed, list):
-            return [e for e in parsed if isinstance(e, dict)]
-    except (json.JSONDecodeError, TypeError):
-        pass
-    # Try NDJSON (newline-delimited JSON — one event per line)
-    events = []
-    for line in stripped.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            obj = json.loads(line)
-            if isinstance(obj, dict):
-                events.append(obj)
-        except (json.JSONDecodeError, TypeError):
-            continue
-    return events
-
-
-def _extract_text_from_events(events: list[dict]) -> str | None:
-    """Extract text from claude output events.
-
-    With --output-format json, the result is typically a single result event
-    whose "result" field contains Claude's final response. The assistant event
-    path handles any edge cases where intermediate events are present.
-    """
-    # Walk backwards to find the last assistant event with text
-    for e in reversed(events):
-        if e.get("type") != "assistant":
-            continue
-        msg = e.get("message", {})
-        content = msg.get("content", []) if isinstance(msg, dict) else []
-        texts = [
-            c["text"]
-            for c in content
-            if isinstance(c, dict) and c.get("type") == "text"
-        ]
-        if texts:
-            return "\n".join(texts)
-
-    # Fall back to result event's inline text (single-turn or non-standard format)
-    result_event = next(
-        (e for e in reversed(events) if e.get("type") == "result"), None
-    )
-    if result_event:
-        result_text = result_event.get("result")
-        if result_text:
-            return result_text
-        logger.info(
-            "Result event found but 'result' field is empty/missing. Keys: %s",
-            list(result_event.keys()),
-        )
-
-    return None
-
-
-def parse_claude_response(stdout: str, session_key: str) -> str:
-    """Extract text and session_id from claude --output-format json output."""
-    events = _parse_events(stdout)
-    if not events:
-        return stdout.strip() or "(no parseable response)"
-
-    event_types = {}
-    for e in events:
-        t = e.get("type", "unknown")
-        event_types[t] = event_types.get(t, 0) + 1
-    logger.info("Parsed %d events for %s: %s", len(events), session_key, event_types)
-
-    # Save session_id if present
-    result_event = next(
-        (e for e in reversed(events) if e.get("type") == "result"), None
-    )
-    if result_event:
-        new_session_id = result_event.get("session_id")
-        if new_session_id:
-            save_session_id(session_key, new_session_id)
-            logger.info("Saved session %s for %s", new_session_id[:12], session_key)
-        else:
-            logger.error(
-                "Result event has no session_id for %s — continuity will break",
-                session_key,
-            )
-
-    text = _extract_text_from_events(events)
-
-    # Detect max_turns and append a notice
-    if result_event:
-        subtype = result_event.get("subtype") or result_event.get("result_subtype")
-        if subtype == "max_turns":
-            notice = f"\n\n[Reached {MAX_TURNS}-turn limit. Session preserved — reply to continue or check beads for queued tasks.]"
-            return (text + notice) if text else notice
-        elif subtype:
-            logger.info("Result subtype for %s: %s", session_key, subtype)
-
-    if text:
-        return text
-
-    # Check for error info in result event before giving up
-    if result_event:
-        error = result_event.get("error")
-        if error:
-            logger.warning("Result event has error for %s: %s", session_key, error)
-            return f"(Claude error: {error})"
-        # Log the full result event for debugging
-        logger.warning(
-            "No text extracted for %s. Result event keys: %s, values preview: %s",
-            session_key,
-            list(result_event.keys()),
-            {k: str(v)[:100] for k, v in result_event.items()},
-        )
-
-    return "(no parseable response)"
+# Bot instance (set in post_init)
+_bot_instance = None
 
 
 # ---------------------------------------------------------------------------
-# Quota / rate-limit detection & Forge handoff
+# Claude invocation
 # ---------------------------------------------------------------------------
-
-# Patterns confirmed from Claude CLI source:
-#   stderr: "Please wait and try again later"
-#   API error type: "rate_limit_error" (429), "overloaded_error" (529)
-#   API message: "Rate limited. Please try again later."
-_QUOTA_PATTERNS_STDERR = [
-    "please wait and try again later",  # exact CLI stderr message
-    "rate limit",
-    "rate_limit",
-]
-_QUOTA_PATTERNS_ERROR = [
-    "rate_limit_error",
-    "overloaded_error",
-    "rate limit",
-    "rate limited",
-    "too many requests",
-    "usage limit",
-]
-
-
-def _is_quota_error(events: list[dict], stderr: str) -> bool:
-    """Detect whether a Claude invocation failed due to quota or rate limiting."""
-    haystack = stderr.lower()
-    if any(p in haystack for p in _QUOTA_PATTERNS_STDERR):
-        return True
-    # Check result event error field
-    result = next((e for e in reversed(events) if e.get("type") == "result"), None)
-    if result:
-        error = str(result.get("error", "")).lower()
-        if any(p in error for p in _QUOTA_PATTERNS_ERROR):
-            return True
-    # Check if the assistant's final text is itself a quota notice (short + matches)
-    text = _extract_text_from_events(events)
-    if text and len(text) < 300:
-        text_lower = text.lower()
-        if any(p in text_lower for p in _QUOTA_PATTERNS_ERROR):
-            return True
-    return False
-
-
-def _handoff_to_forge(
-    session_key: str,
-    message: str,
-    chat_id: int,
-    thread_id: int | None,
-    session_id: str | None,
-    working_dir: str,
-) -> bool:
-    """Write a Forge queue file so the task can be resumed later.
-
-    Returns True if the queue file was written successfully.
-    """
-    now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    today = datetime.date.today().isoformat()
-
-    # Sanitize message for safe embedding in markdown code fence.
-    # Find the longest run of backticks in the message and use a fence
-    # that's strictly longer, so the user can't break out of the block.
-    backtick_runs = re.findall(r"`+", message)
-    max_backticks = max((len(r) for r in backtick_runs), default=0)
-    fence = "`" * max(3, max_backticks + 1)
-
-    # Build the queue file
-    lines = [
-        "# Bridge Quota Recovery",
-        f"Updated: {today}",
-        "Priority: critical",
-        "",
-        "## Tasks (ordered)",
-        f"1. (no bead) Resume interrupted Telegram session {session_key}",
-        "",
-        "## Notes",
-        "This task was created automatically by the Telegram bridge because a quota",
-        "or rate limit was hit mid-conversation. The user's request may be partially",
-        "complete — there could be in-progress work (uncommitted code, half-written",
-        "responses, open tool calls). Pick up where the previous session left off.",
-        "",
-        "**Do not start from scratch.** Check the repo for uncommitted changes, open",
-        "branches, and any context from the session before continuing.",
-        "",
-        f"- **Quota hit at:** {now}",
-        f"- **Session key:** {session_key}",
-        f"- **Session ID:** {session_id or 'none (fresh session)'}",
-        f"- **Working directory:** {working_dir}",
-        f"- **Chat ID:** {chat_id}",
-        f"- **Thread ID:** {thread_id}",
-        "",
-        "**Original message from Bryan:**",
-        fence,
-        message,
-        fence,
-        "",
-        "**Response routing:** When done, send the response back to Telegram.",
-        "Use the bot API:",
-        "```bash",
-        "BOT_TOKEN=$(grep TELEGRAM_BOT_TOKEN ~/Developer/claude-telegram-bridge/.env | cut -d= -f2-)",
-        'curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" \\',
-        f"  -d chat_id={chat_id} \\",
-        f"  -d message_thread_id={thread_id} \\",
-        '  -d text="YOUR_RESPONSE_HERE"',
-        "```",
-    ]
-
-    queue_file = (
-        FORGE_QUEUE_DIR / f"bridge-recovery-{session_key.replace('-', '')[:20]}.md"
-    )
-    try:
-        FORGE_QUEUE_DIR.mkdir(parents=True, exist_ok=True)
-        queue_file.write_text("\n".join(lines) + "\n")
-        logger.info("Wrote Forge queue file: %s", queue_file.name)
-        _log_activity(
-            "forge_handoff",
-            session_key=session_key,
-            queue_file=str(queue_file.name),
-            chat_id=chat_id,
-            thread_id=thread_id,
-        )
-        return True
-    except Exception as e:
-        logger.error("Failed to write Forge queue file: %s", e)
-        return False
 
 
 def run_claude(message: str, session_key: str) -> str:
@@ -737,8 +215,6 @@ def run_claude(message: str, session_key: str) -> str:
         system_prompt,
     ]
 
-    model = None
-
     if session_id:
         cmd.extend(["--resume", session_id])
         logger.info("Resuming session %s for %s", session_id[:12], session_key)
@@ -749,7 +225,7 @@ def run_claude(message: str, session_key: str) -> str:
         "claude_invoke",
         session_key=session_key,
         cwd=chat_cwd,
-        model=model or "default",
+        model="default",
         resume=bool(session_id),
     )
 
@@ -834,7 +310,6 @@ def run_claude(message: str, session_key: str) -> str:
             duration=duration,
             source="events+stderr",
         )
-        # Still save session_id if available
         parse_claude_response(stdout, session_key)  # side-effect: saves session_id
         return QUOTA_HIT_PREFIX + message
 
@@ -844,6 +319,11 @@ def run_claude(message: str, session_key: str) -> str:
     if response == "(no parseable response)" and proc.returncode != 0 and stderr:
         return f"(Claude exited with error: {stderr[:500]})"
     return response
+
+
+# ---------------------------------------------------------------------------
+# Telegram helpers
+# ---------------------------------------------------------------------------
 
 
 async def keep_typing(
@@ -894,54 +374,13 @@ async def _send_auth_link(update: Update) -> None:
     )
 
 
-async def cmd_auth(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Send an authentication link."""
-    user_id = update.effective_user.id
-    if ALLOWED_USER_IDS and user_id not in ALLOWED_USER_IDS:
-        return
-    if auth.is_authenticated(user_id):
-        info = auth.get_session_info(user_id)
-        if info:
-            authed_at = datetime.datetime.fromtimestamp(
-                info["authenticated_at"], tz=datetime.timezone.utc
-            )
-            expires_at = authed_at + datetime.timedelta(
-                seconds=auth.SESSION_EXPIRY_SECONDS
-            )
-            await update.message.reply_text(
-                f"Already authenticated.\n"
-                f"Since: {authed_at.strftime('%Y-%m-%d %H:%M UTC')}\n"
-                f"Expires: {expires_at.strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-                f"Use /lock to end your session."
-            )
-            return
-    await _send_auth_link(update)
-
-
-async def cmd_lock(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Lock the current session immediately."""
-    user_id = update.effective_user.id
-    if ALLOWED_USER_IDS and user_id not in ALLOWED_USER_IDS:
-        return
-
-    args = context.args
-    if args and args[0] == "all":
-        count = auth.lock_all_sessions()
-        await update.message.reply_text(f"Locked {count} session(s).")
-        logger.info("User %d locked all sessions", user_id)
-    else:
-        auth.lock_session(user_id)
-        await update.message.reply_text("Session locked. Use /auth to re-authenticate.")
-        logger.info("User %d locked their session", user_id)
-
-
 async def _send_response(
     bot, chat_id: int, thread_id: int | None, response: str
 ) -> None:
     """Send a response, splitting at Telegram's message limit.
 
     Retries each chunk up to SEND_RETRY_ATTEMPTS times with exponential
-    backoff (1s, 2s, 4s) before giving up.
+    backoff before giving up.
     """
     send_kwargs: dict = {"chat_id": chat_id}
     if thread_id is not None:
@@ -956,7 +395,7 @@ async def _send_response(
                 break
             except Exception as e:
                 last_exc = e
-                delay = SEND_RETRY_BASE_DELAY * (2 ** attempt)
+                delay = SEND_RETRY_BASE_DELAY * (2**attempt)
                 logger.warning(
                     "Telegram send failed (attempt %d/%d) for chat=%s thread=%s "
                     "chunk_start=%d: %s — retrying in %.1fs",
@@ -986,11 +425,7 @@ async def _send_response(
 async def _notify_delivery_failure(
     bot, chat_id: int, thread_id: int | None, label: str
 ) -> None:
-    """Attempt to notify the user that a response failed to deliver.
-
-    Best-effort: logs and suppresses any secondary failure so callers never
-    need to handle exceptions from this function.
-    """
+    """Attempt to notify the user that a response failed to deliver."""
     send_kwargs: dict = {"chat_id": chat_id}
     if thread_id is not None:
         send_kwargs["message_thread_id"] = thread_id
@@ -1005,6 +440,82 @@ async def _notify_delivery_failure(
             label,
             notify_exc,
         )
+
+
+# ---------------------------------------------------------------------------
+# Pending message replay
+# ---------------------------------------------------------------------------
+
+
+async def replay_pending(bot) -> None:
+    """Replay messages that were lost when the bridge was killed mid-processing."""
+    pending_files = sorted(PENDING_DIR.glob("*.json"))
+    if not pending_files:
+        return
+
+    logger.info("Found %d pending messages to replay", len(pending_files))
+
+    for f in pending_files:
+        try:
+            data = json.loads(f.read_text())
+        except (json.JSONDecodeError, KeyError):
+            f.unlink()
+            continue
+
+        if not all(k in data for k in ("chat_id", "session_key", "text", "timestamp")):
+            logger.warning("Skipping malformed pending file %s", f.name)
+            f.unlink(missing_ok=True)
+            continue
+
+        if time.time() - data["timestamp"] > SESSION_EXPIRY:
+            f.unlink(missing_ok=True)
+            logger.info("Discarding expired pending message %s", f.stem)
+            continue
+
+        chat_id = data["chat_id"]
+        thread_id = data.get("thread_id")
+        session_key = data["session_key"]
+        text = data["text"]
+
+        logger.info("Replaying message for %s: %s", session_key, text[:80])
+
+        # Delete pending file BEFORE processing to prevent crash loops.
+        f.unlink()
+
+        stop_typing = asyncio.Event()
+        typing_task = asyncio.create_task(
+            keep_typing(chat_id, thread_id, stop_typing, bot)
+        )
+
+        loop = asyncio.get_running_loop()
+        try:
+            response = await loop.run_in_executor(
+                _executor, run_claude, text, session_key
+            )
+        except Exception as e:
+            logger.error("Error replaying %s: %s", f.stem, e)
+            response = f"Error: {e}"
+        finally:
+            stop_typing.set()
+            await typing_task
+
+        full_response = "[Recovered after bridge restart]\n\n" + response
+
+        send_kwargs = {"chat_id": chat_id}
+        if thread_id is not None:
+            send_kwargs["message_thread_id"] = thread_id
+
+        for i in range(0, len(full_response), TELEGRAM_MSG_LIMIT):
+            await bot.send_message(
+                text=full_response[i : i + TELEGRAM_MSG_LIMIT], **send_kwargs
+            )
+
+        logger.info("Replayed pending message %s", f.stem)
+
+
+# ---------------------------------------------------------------------------
+# Message and photo handlers
+# ---------------------------------------------------------------------------
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1064,7 +575,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
         # Quota hit — hand off to Forge instead of sending error to user
         if response.startswith(QUOTA_HIT_PREFIX):
-            original_msg = response[len(QUOTA_HIT_PREFIX) :]
+            original_msg = response[len(QUOTA_HIT_PREFIX):]
             session_id = get_session_id(key)
             chat_cwd = get_chat_working_dir(key)
             handed_off = _handoff_to_forge(
@@ -1186,6 +697,11 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         local_path.unlink(missing_ok=True)
 
 
+# ---------------------------------------------------------------------------
+# Command handlers
+# ---------------------------------------------------------------------------
+
+
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     uid = update.effective_user.id
     await update.message.reply_text(
@@ -1215,18 +731,6 @@ async def cmd_clearnew(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     logger.info("Session cleared for %s", key)
 
 
-def _get_all_projects() -> list[str]:
-    """Return all project directory names sorted alphabetically."""
-    dev_path = Path(WORKING_DIR)
-    dirs = [
-        d.name
-        for d in dev_path.iterdir()
-        if d.is_dir() and not d.name.startswith((".", "_"))
-    ]
-    dirs.sort(key=str.lower)
-    return dirs
-
-
 async def cmd_setproject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     thread_id = update.message.message_thread_id
@@ -1234,7 +738,6 @@ async def cmd_setproject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     args = context.args
     if not args:
-        # No args: show project picker buttons
         projects = _get_all_projects()
         buttons = [
             [InlineKeyboardButton(name, callback_data=f"setproject:{name}")]
@@ -1313,7 +816,6 @@ async def cmd_project(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     chat_id = update.effective_chat.id
     thread_id = update.message.message_thread_id
     key = _session_key(chat_id, thread_id)
-    rel_path = get_chat_working_dir(key)
     agent = get_chat_agent(key)
     rel_path_entry, _ = _parse_project_entry(_load_chat_projects().get(key))
     if rel_path_entry:
@@ -1323,6 +825,49 @@ async def cmd_project(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await update.message.reply_text(label)
     else:
         await update.message.reply_text("No project set. Using default: ~/Developer")
+
+
+async def cmd_auth(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send an authentication link."""
+    import datetime
+
+    user_id = update.effective_user.id
+    if ALLOWED_USER_IDS and user_id not in ALLOWED_USER_IDS:
+        return
+    if auth.is_authenticated(user_id):
+        info = auth.get_session_info(user_id)
+        if info:
+            authed_at = datetime.datetime.fromtimestamp(
+                info["authenticated_at"], tz=datetime.timezone.utc
+            )
+            expires_at = authed_at + datetime.timedelta(
+                seconds=auth.SESSION_EXPIRY_SECONDS
+            )
+            await update.message.reply_text(
+                f"Already authenticated.\n"
+                f"Since: {authed_at.strftime('%Y-%m-%d %H:%M UTC')}\n"
+                f"Expires: {expires_at.strftime('%Y-%m-%d %H:%M UTC')}\n\n"
+                f"Use /lock to end your session."
+            )
+            return
+    await _send_auth_link(update)
+
+
+async def cmd_lock(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Lock the current session immediately."""
+    user_id = update.effective_user.id
+    if ALLOWED_USER_IDS and user_id not in ALLOWED_USER_IDS:
+        return
+
+    args = context.args
+    if args and args[0] == "all":
+        count = auth.lock_all_sessions()
+        await update.message.reply_text(f"Locked {count} session(s).")
+        logger.info("User %d locked all sessions", user_id)
+    else:
+        auth.lock_session(user_id)
+        await update.message.reply_text("Session locked. Use /auth to re-authenticate.")
+        logger.info("User %d locked their session", user_id)
 
 
 async def cmd_kill(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1364,18 +909,15 @@ async def cmd_restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await update.message.reply_text("Restarting bridge...")
     logger.info("User %d triggered bridge restart", user_id)
 
-    # Terminate all active Claude processes first
     for key, proc in list(_active_procs.items()):
         if proc.poll() is None:
             proc.terminate()
             logger.info("Terminated Claude process for %s (pid %d)", key, proc.pid)
 
-    # Terminate remote-control process if running
     if _remote_proc and _remote_proc.poll() is None:
         _remote_proc.terminate()
         logger.info("Terminated remote-control process (pid %d)", _remote_proc.pid)
 
-    # Write restart notify so the new process can ping this chat on startup
     restart_notify = RESTART_NOTIFY_FILE
     restart_notify.write_text(
         json.dumps(
@@ -1386,15 +928,13 @@ async def cmd_restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         )
     )
 
-    # Exit non-zero so launchd respawns us (SIGTERM exits 0, which launchd
-    # treats as successful and won't respawn)
     os._exit(1)
 
 
 async def cmd_remote_control(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Start or stop claude remote-control in this topic's project dir. Use 'stop' arg to stop."""
+    """Start or stop claude remote-control in this topic's project dir."""
     global _remote_proc, _remote_proc_key
 
     user_id = update.effective_user.id
@@ -1405,7 +945,6 @@ async def cmd_remote_control(
     thread_id = update.message.message_thread_id
     key = _session_key(chat_id, thread_id)
 
-    # If "stop" argument, kill existing remote-control process
     args = (update.message.text or "").split()
     if len(args) > 1 and args[1].lower() == "stop":
         if _remote_proc and _remote_proc.poll() is None:
@@ -1422,7 +961,6 @@ async def cmd_remote_control(
             await update.message.reply_text("No remote-control process running.")
         return
 
-    # Kill existing remote-control if one is already running
     if _remote_proc and _remote_proc.poll() is None:
         _remote_proc.terminate()
         try:
@@ -1448,9 +986,7 @@ async def cmd_remote_control(
     logger.info("Started claude remote-control (pid %d) in %s", proc.pid, chat_cwd)
     _log_activity("remote_control_start", session_key=key, cwd=chat_cwd, pid=proc.pid)
 
-    # Read initial output for up to 10 seconds to capture connection info
     loop = asyncio.get_running_loop()
-    lines: list[str] = []
 
     def _read_initial_output() -> list[str]:
         collected = []
@@ -1466,9 +1002,6 @@ async def cmd_remote_control(
                 line = proc.stdout.readline()
                 if line:
                     collected.append(line.rstrip())
-        # Strip ANSI escape sequences and deduplicate — remote-control uses a
-        # TUI that cursor-up overwrites its own output, producing repeated
-        # refresh cycles with raw escape codes in the captured text.
         seen: set[str] = set()
         result: list[str] = []
         for raw in collected:
@@ -1481,7 +1014,6 @@ async def cmd_remote_control(
     lines = await loop.run_in_executor(_executor, _read_initial_output)
 
     if proc.poll() is not None:
-        # Process already exited
         output = "\n".join(lines) if lines else "(no output)"
         await update.message.reply_text(
             f"Remote control exited (code {proc.returncode}):\n{output}"
@@ -1512,6 +1044,11 @@ async def cmd_ping(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("\n".join(lines))
 
 
+# ---------------------------------------------------------------------------
+# Infrastructure: auth notification, stall detector, lifecycle
+# ---------------------------------------------------------------------------
+
+
 async def _auth_notify(
     event_type: str, telegram_user_id: int, details: str = ""
 ) -> None:
@@ -1532,9 +1069,6 @@ async def _auth_notify(
             await _bot_instance.send_message(chat_id=admin_id, text=msg)
         except Exception:
             logger.debug("Failed to send auth alert to %d", admin_id)
-
-
-_bot_instance = None
 
 
 def _get_proc_cpu(pid: int) -> float | None:
@@ -1568,7 +1102,6 @@ async def _stall_detector() -> None:
             if cpu >= STALL_CPU_THRESHOLD:
                 _proc_last_active[key] = now
                 continue
-            # CPU is below threshold
             last_active = _proc_last_active.get(key, now)
             if key not in _proc_last_active:
                 _proc_last_active[key] = now
@@ -1623,7 +1156,6 @@ async def post_init(app: Application) -> None:
         BotCommandScopeDefault,
     )
 
-    # Clear stale commands from all scopes (including per-chat overrides) before re-registering
     generic_scopes = [
         BotCommandScopeDefault(),
         BotCommandScopeAllPrivateChats(),
@@ -1632,7 +1164,6 @@ async def post_init(app: Application) -> None:
     ]
     for scope in generic_scopes:
         await app.bot.delete_my_commands(scope=scope)
-    # Also clear any per-chat overrides for known group chats
     known_chat_ids = {int(k.split("_")[0]) for k in _load_chat_projects()}
     for chat_id in known_chat_ids:
         try:
@@ -1663,7 +1194,6 @@ async def post_init(app: Application) -> None:
 
     await replay_pending(app.bot)
 
-    # Ping the chat that triggered /restart, if any
     restart_notify = RESTART_NOTIFY_FILE
     if restart_notify.exists():
         try:
@@ -1680,9 +1210,6 @@ async def post_init(app: Application) -> None:
         restart_notify.unlink(missing_ok=True)
 
 
-SHUTDOWN_PROCESS_TIMEOUT = 30  # seconds to wait for active Claude processes
-
-
 def _graceful_shutdown(signum: int, frame) -> None:
     """Handle SIGTERM/SIGINT: stop accepting new messages, wait for active
     processes, clean up temp files, then exit."""
@@ -1691,13 +1218,11 @@ def _graceful_shutdown(signum: int, frame) -> None:
     logger.info("Received %s — starting graceful shutdown", sig_name)
     _shutting_down = True
 
-    # Terminate all active Claude subprocesses (SIGTERM first, then SIGKILL)
     for key, proc in list(_active_procs.items()):
         if proc.poll() is None:
             logger.info("Sending SIGTERM to Claude process for %s (pid %d)", key, proc.pid)
             proc.terminate()
 
-    # Wait for active processes to finish (with timeout)
     deadline = time.time() + SHUTDOWN_PROCESS_TIMEOUT
     for key, proc in list(_active_procs.items()):
         remaining = max(0, deadline - time.time())
@@ -1709,7 +1234,6 @@ def _graceful_shutdown(signum: int, frame) -> None:
             proc.kill()
             proc.wait()
 
-    # Terminate remote-control process if running
     if _remote_proc and _remote_proc.poll() is None:
         logger.info("Terminating remote-control process (pid %d)", _remote_proc.pid)
         _remote_proc.terminate()
@@ -1718,7 +1242,6 @@ def _graceful_shutdown(signum: int, frame) -> None:
         except subprocess.TimeoutExpired:
             _remote_proc.kill()
 
-    # Clean up temp photo files
     try:
         for f in PHOTO_DIR.glob("*.jpg"):
             f.unlink(missing_ok=True)
@@ -1731,7 +1254,6 @@ def _graceful_shutdown(signum: int, frame) -> None:
 
 
 def main() -> None:
-    # Install signal handlers for graceful shutdown
     signal.signal(signal.SIGTERM, _graceful_shutdown)
     signal.signal(signal.SIGINT, _graceful_shutdown)
 

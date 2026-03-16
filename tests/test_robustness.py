@@ -1,12 +1,8 @@
 """Tests for P1 robustness fixes: retry logic, file locking, graceful shutdown,
 and session key sanitization."""
 
-import asyncio
-import json
 import signal
-import time
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -22,9 +18,10 @@ class TestSendRetry:
     @pytest.fixture(autouse=True)
     def _isolate(self, tmp_path, monkeypatch):
         import bridge
+        import stargate.sessions
 
-        monkeypatch.setattr(bridge, "SESSION_DIR", tmp_path / "sessions")
-        bridge.SESSION_DIR.mkdir()
+        monkeypatch.setattr(stargate.sessions, "SESSION_DIR", tmp_path / "sessions")
+        (tmp_path / "sessions").mkdir()
         # Speed up retries for tests
         monkeypatch.setattr(bridge, "SEND_RETRY_BASE_DELAY", 0.01)
 
@@ -158,11 +155,12 @@ class TestGracefulShutdown:
     @pytest.fixture(autouse=True)
     def _isolate(self, tmp_path, monkeypatch):
         import bridge
+        import stargate.sessions
 
-        monkeypatch.setattr(bridge, "SESSION_DIR", tmp_path / "sessions")
-        bridge.SESSION_DIR.mkdir()
+        monkeypatch.setattr(stargate.sessions, "SESSION_DIR", tmp_path / "sessions")
+        (tmp_path / "sessions").mkdir()
         monkeypatch.setattr(bridge, "PHOTO_DIR", tmp_path / "photos")
-        bridge.PHOTO_DIR.mkdir()
+        (tmp_path / "photos").mkdir()
         # Reset shutdown flag
         bridge._shutting_down = False
 
@@ -244,10 +242,10 @@ class TestSessionKeySanitization:
 
     @pytest.fixture(autouse=True)
     def _isolate(self, tmp_path, monkeypatch):
-        import bridge
+        import stargate.sessions
 
-        monkeypatch.setattr(bridge, "SESSION_DIR", tmp_path / "sessions")
-        bridge.SESSION_DIR.mkdir()
+        monkeypatch.setattr(stargate.sessions, "SESSION_DIR", tmp_path / "sessions")
+        (tmp_path / "sessions").mkdir()
 
     def test_normal_key_passes(self):
         import bridge

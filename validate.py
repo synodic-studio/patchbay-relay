@@ -160,7 +160,6 @@ def check_parser(mod) -> bool:
 def check_helpers(mod) -> bool:
     """Test helper functions that are in the critical message-handling path."""
     import logging
-    import tempfile
 
     ok = True
 
@@ -230,6 +229,46 @@ def check_helpers(mod) -> bool:
     return ok
 
 
+def check_package_modules() -> bool:
+    """Verify all stargate package modules can be imported."""
+    import logging
+
+    logging.disable(logging.CRITICAL)
+    ok = True
+    modules = [
+        "stargate",
+        "stargate.config",
+        "stargate.sessions",
+        "stargate.parser",
+        "stargate.quota",
+        "stargate.activity",
+        "stargate.projects",
+    ]
+    for name in modules:
+        try:
+            sys.modules.pop(name, None)
+            importlib.import_module(name)
+        except Exception as exc:
+            print(f"PACKAGE IMPORT FAIL: {name}: {type(exc).__name__}: {exc}")
+            ok = False
+    logging.disable(logging.NOTSET)
+
+    if ok:
+        # Cross-module integration: verify parser can call save_session_id
+        try:
+            from stargate.parser import _parse_events
+
+            events = _parse_events('{"type":"result","result":"ok","session_id":"v","is_error":false}')
+            if len(events) != 1:
+                print("PACKAGE TEST FAIL: _parse_events returned unexpected result")
+                ok = False
+        except Exception as exc:
+            print(f"PACKAGE TEST FAIL: cross-module test: {type(exc).__name__}: {exc}")
+            ok = False
+
+    return ok
+
+
 def main() -> int:
     print("Validating bridge.py...")
 
@@ -237,16 +276,20 @@ def main() -> int:
     if not check_syntax():
         return 1
 
-    # 2. Import
+    # 2. Package modules
+    if not check_package_modules():
+        return 2
+
+    # 3. Import bridge (depends on package modules)
     mod = check_import()
     if mod is None:
         return 2
 
-    # 3. Parser smoke tests
+    # 4. Parser smoke tests
     if not check_parser(mod):
         return 3
 
-    # 4. Critical-path helper tests
+    # 5. Critical-path helper tests
     if not check_helpers(mod):
         return 3
 

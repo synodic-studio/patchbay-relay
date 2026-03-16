@@ -1,18 +1,18 @@
-"""Test that _log_activity writes valid JSON-lines to activity.jsonl."""
+"""Test that log_activity writes valid JSON-lines to activity.jsonl."""
 
 import json
 import time
 
 from unittest.mock import patch
 
-from bridge import _log_activity
+from stargate.activity import log_activity
 
 
 def test_log_activity_writes_valid_json_line(tmp_path):
     log_file = tmp_path / "activity.jsonl"
 
-    with patch("bridge.ACTIVITY_LOG", log_file):
-        _log_activity("test_event", user="alice", chat_id=42)
+    with patch("stargate.activity.ACTIVITY_LOG", log_file):
+        log_activity("test_event", user="alice", chat_id=42)
 
     lines = log_file.read_text().splitlines()
     assert len(lines) == 1
@@ -27,9 +27,9 @@ def test_log_activity_writes_valid_json_line(tmp_path):
 def test_log_activity_appends_multiple_lines(tmp_path):
     log_file = tmp_path / "activity.jsonl"
 
-    with patch("bridge.ACTIVITY_LOG", log_file):
-        _log_activity("first")
-        _log_activity("second", extra="data")
+    with patch("stargate.activity.ACTIVITY_LOG", log_file):
+        log_activity("first")
+        log_activity("second", extra="data")
 
     lines = log_file.read_text().splitlines()
     assert len(lines) == 2
@@ -44,15 +44,15 @@ def test_log_activity_appends_multiple_lines(tmp_path):
 def test_log_activity_each_line_is_valid_json(tmp_path):
     log_file = tmp_path / "activity.jsonl"
 
-    with patch("bridge.ACTIVITY_LOG", log_file):
+    with patch("stargate.activity.ACTIVITY_LOG", log_file):
         for i in range(5):
-            _log_activity("batch", index=i)
+            log_activity("batch", index=i)
 
     lines = log_file.read_text().splitlines()
     assert len(lines) == 5
 
     for i, line in enumerate(lines):
-        entry = json.loads(line)  # Raises if not valid JSON
+        entry = json.loads(line)
         assert entry["event"] == "batch"
         assert entry["index"] == i
 
@@ -61,8 +61,8 @@ def test_log_activity_ts_is_recent(tmp_path):
     log_file = tmp_path / "activity.jsonl"
     before = time.time()
 
-    with patch("bridge.ACTIVITY_LOG", log_file):
-        _log_activity("timing")
+    with patch("stargate.activity.ACTIVITY_LOG", log_file):
+        log_activity("timing")
 
     after = time.time()
     entry = json.loads(log_file.read_text().strip())
@@ -73,5 +73,5 @@ def test_log_activity_handles_os_error(tmp_path):
     """OSError during write should not raise — just log debug."""
     bad_path = tmp_path / "no-such-dir" / "activity.jsonl"
 
-    with patch("bridge.ACTIVITY_LOG", bad_path):
-        _log_activity("should_not_crash")  # No exception raised
+    with patch("stargate.activity.ACTIVITY_LOG", bad_path):
+        log_activity("should_not_crash")  # No exception raised

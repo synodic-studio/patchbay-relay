@@ -5,20 +5,22 @@ import time
 
 import pytest
 
+import stargate.sessions
+
 
 @pytest.fixture(autouse=True)
 def _isolate_session_dir(tmp_path, monkeypatch):
     """Redirect SESSION_DIR to a temp directory so tests don't touch real sessions."""
-    import bridge
-
-    monkeypatch.setattr(bridge, "SESSION_DIR", tmp_path)
+    monkeypatch.setattr(stargate.sessions, "SESSION_DIR", tmp_path)
 
 
 @pytest.fixture
 def session_fns():
-    import bridge
-
-    return bridge.get_session_id, bridge.save_session_id, bridge.clear_session
+    return (
+        stargate.sessions.get_session_id,
+        stargate.sessions.save_session_id,
+        stargate.sessions.clear_session,
+    )
 
 
 class TestSessionRoundTrip:
@@ -57,8 +59,7 @@ class TestSessionRoundTrip:
 
 
 class TestSessionExpiry:
-    def test_expired_session_returns_none(self, tmp_path, session_fns, monkeypatch):
-
+    def test_expired_session_returns_none(self, tmp_path, session_fns):
         get, _, _ = session_fns
         # Write a session file that expired long ago
         session_file = tmp_path / "old_chat.json"

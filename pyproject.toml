@@ -1,7 +1,7 @@
 [project]
 name = "stargate"
-version = "0.1.0"
-description = "Add your description here"
+version = "0.2.0"
+description = "Claude Code Telegram Bridge — relay Telegram messages to Claude Code sessions"
 requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.129.2",
@@ -20,6 +20,7 @@ dependencies = [
 dev = [
     "pytest>=9.0.2",
     "pytest-asyncio>=1.3.0",
+    "pytest-cov>=7.0.0",
     "pytest-mock>=3.15.1",
     "ruff>=0.9",
 ]
@@ -27,3 +28,23 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+asyncio_mode = "auto"
+
+[tool.coverage.run]
+source = ["bridge", "auth", "auth_server", "stargate"]
+omit = ["tests/*", "setup_totp.py", "tcc-approve.py", "validate.py"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 75
+
+[tool.ruff]
+target-version = "py313"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+ignore = ["E402", "E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"bridge.py" = ["F401"]
