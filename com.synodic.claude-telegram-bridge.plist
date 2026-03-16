@@ -21,6 +21,8 @@
     <string>/Users/bryancostanza/Developer/stargate/logs/bridge.err</string>
     <key>WorkingDirectory</key>
     <string>/Users/bryancostanza/Developer/stargate</string>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>

@@ -41,43 +41,49 @@ class _SecretStr:
 
 def _load_bot_token() -> _SecretStr:
     """Load the Telegram bot token from pass-cli, keychain, or env var."""
-    pp = subprocess.run(
-        [
-            "pass-cli",
-            "item",
-            "view",
-            "--vault-name",
-            "Developer Secrets",
-            "--item-title",
-            "telegram-bot-token",
-            "--field",
-            "note",
-        ],
-        capture_output=True,
-        text=True,
-    )
-    if pp.returncode == 0 and pp.stdout.strip():
-        return _SecretStr(pp.stdout.strip())
+    try:
+        pp = subprocess.run(
+            [
+                "pass-cli",
+                "item",
+                "view",
+                "--vault-name",
+                "Developer Secrets",
+                "--item-title",
+                "telegram-bot-token",
+                "--field",
+                "note",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if pp.returncode == 0 and pp.stdout.strip():
+            return _SecretStr(pp.stdout.strip())
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
 
-    kc = subprocess.run(
-        [
-            "security",
-            "find-generic-password",
-            "-a",
-            "bryancostanza",
-            "-s",
-            "telegram-bot-token",
-            "-w",
-        ],
-        capture_output=True,
-        text=True,
-    )
-    raw = (
-        kc.stdout.strip()
-        if kc.returncode == 0 and kc.stdout.strip()
-        else os.environ.get("TELEGRAM_BOT_TOKEN", "")
-    )
-    return _SecretStr(raw)
+    try:
+        kc = subprocess.run(
+            [
+                "security",
+                "find-generic-password",
+                "-a",
+                "bryancostanza",
+                "-s",
+                "telegram-bot-token",
+                "-w",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if kc.returncode == 0 and kc.stdout.strip():
+            return _SecretStr(kc.stdout.strip())
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+
+    return _SecretStr(os.environ.get("TELEGRAM_BOT_TOKEN", ""))
 
 
 def _load_allowed_user_ids() -> set[int]:
@@ -148,6 +154,7 @@ TELEGRAM_MSG_LIMIT = 4096
 TYPING_INTERVAL = 4  # seconds between typing indicators
 SEND_RETRY_ATTEMPTS = 3
 SEND_RETRY_BASE_DELAY = 1.0  # seconds; doubles each retry
+MAX_QUEUED_MESSAGES = 20  # max pending messages per session before dropping
 
 # --- Stall detection ---
 STALL_POLL_INTERVAL = 120  # check every 2 minutes

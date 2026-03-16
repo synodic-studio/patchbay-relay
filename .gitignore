@@ -1,4 +1,5 @@
 .env
+.env.test
 __pycache__/
 *.pyc
 logs/
@@ -13,3 +14,8 @@ activity.jsonl
 .aider*
 .crash-timestamps
 .bridge-known-good.py
+.pytest_cache/
+.ruff_cache/
+.coverage
+.DS_Store
+.opencode/

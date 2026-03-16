@@ -22,5 +22,8 @@ jobs:
       - name: Lint
         run: uv run ruff check .
 
+      - name: Validate (pre-flight smoke tests)
+        run: uv run python validate.py
+
       - name: Test
-        run: uv run pytest test_bridge.py tests/ -v
+        run: uv run pytest tests/ -v

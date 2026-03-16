@@ -1,10 +1,26 @@
 """Chat-to-project directory mapping."""
 
+import fcntl
 import json
 import os
+from contextlib import contextmanager
 from pathlib import Path
 
 from .config import CHAT_PROJECTS_FILE, WORKING_DIR
+
+_PROJECTS_LOCK_FILE = CHAT_PROJECTS_FILE.parent / ".chat_projects.lock"
+
+
+@contextmanager
+def _projects_lock():
+    """Acquire exclusive lock for chat_projects read-modify-write cycles."""
+    fd = os.open(_PROJECTS_LOCK_FILE, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
 
 
 def _load_chat_projects() -> dict[str, str]:
@@ -55,13 +71,14 @@ def get_chat_agent(session_key: str) -> str | None:
 
 
 def set_chat_project(session_key: str, rel_path: str | None) -> None:
-    """Set or clear the project directory for a chat."""
-    projects = _load_chat_projects()
-    if rel_path is None:
-        projects.pop(session_key, None)
-    else:
-        projects[session_key] = rel_path
-    _save_chat_projects(projects)
+    """Set or clear the project directory for a chat. Uses file locking."""
+    with _projects_lock():
+        projects = _load_chat_projects()
+        if rel_path is None:
+            projects.pop(session_key, None)
+        else:
+            projects[session_key] = rel_path
+        _save_chat_projects(projects)
 
 
 def get_all_projects() -> list[str]:

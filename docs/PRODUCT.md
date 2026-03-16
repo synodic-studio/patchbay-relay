@@ -13,7 +13,7 @@ Telegram bot that bridges messages to Claude Code sessions. Powers all mobile in
 - **Python 3.13+** with uv
 - **FastAPI** — OAuth callback server
 - **python-telegram-bot 22.6+** — long-polling bot
-- **Sign in with Apple** — authentication (PyJWT)
+- **Sign in with Apple + TOTP** — authentication (PyJWT, pyotp)
 - **Cloudflare Tunnel** — reverse proxy for OAuth callbacks
 - **Uvicorn** — ASGI server
 - **launchd** — two persistent services (bridge + auth)
@@ -22,18 +22,16 @@ Telegram bot that bridges messages to Claude Code sessions. Powers all mobile in
 
 **Status: Production.** Actively maintained, both services running continuously.
 
-- Last commit: 2026-03-04
-- 7 open beads (auth/security features: TOTP, session timeout, /lock)
-- 138 TODOs in codebase (needs triage)
-- Recent: quota/rate-limit detection, Forge handoff
-
 ## Key Architecture
 
-- `bridge.py` — main Telegram bot, long-polling event loop
-- `auth.py` / `auth_server.py` — Sign in with Apple OAuth
+- `bridge.py` — main Telegram bot entrypoint, long-polling event loop
+- `stargate/` — core package (config, sessions, parser, quota, activity, projects)
+- `auth.py` / `auth_server.py` — Sign in with Apple OAuth + TOTP
+- `validate.py` — pre-flight validation, run before every bridge start and in CI
 - `chat_projects.json` — topic → project/agent routing
 - Activity logging to `activity.jsonl`
-- Two launchd services: `com.synodic.claude-telegram-bridge` (bot) + `dev.kj6.auth-bridge` (OAuth + tunnel)
+- Two launchd services: `com.synodic.stargate` (bot) + `dev.kj6.auth-bridge` (OAuth + tunnel)
+- Self-healing: crash-loop detection triggers Claude Code auto-fix sessions
 
 ## Known Trajectory
 

@@ -55,6 +55,7 @@ from stargate.config import (  # noqa: E402
     CHAT_PROJECTS_FILE,
     CLAUDE_PATH,
     FORGE_QUEUE_DIR,  # noqa: F401 — used by tests via bridge.FORGE_QUEUE_DIR
+    MAX_QUEUED_MESSAGES,
     MAX_TIMEOUT,
     MAX_TURNS,
     MAX_WORKERS,
@@ -145,7 +146,7 @@ _bot_instance = None
 # ---------------------------------------------------------------------------
 
 
-def run_claude(message: str, session_key: str) -> str:
+def run_claude(message: str, session_key: str, _retry: bool = False) -> str:
     """Invoke claude CLI via Popen. Does not kill on timeout."""
     session_id = get_session_id(session_key)
     chat_cwd = get_chat_working_dir(session_key)
@@ -258,12 +259,12 @@ def run_claude(message: str, session_key: str) -> str:
     stdout = stdout.strip()
     if not stdout:
         # Stale session: Claude couldn't find the conversation. Clear and retry.
-        if stderr and "No conversation found" in stderr and session_id:
+        if stderr and "No conversation found" in stderr and session_id and not _retry:
             logger.warning(
                 "Stale session %s for %s, retrying fresh", session_id[:12], session_key
             )
             clear_session(session_key)
-            return run_claude(message, session_key)
+            return run_claude(message, session_key, _retry=True)
         # Check for quota error in stderr even when stdout is empty
         if _is_quota_error([], stderr):
             logger.warning(
@@ -547,8 +548,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     # Debounce: if Claude is already processing for this session, queue the message
     if key in _processing_sessions:
-        _queued_messages.setdefault(key, []).append(text)
-        depth = len(_queued_messages[key])
+        queue = _queued_messages.setdefault(key, [])
+        if len(queue) >= MAX_QUEUED_MESSAGES:
+            await update.message.reply_text(
+                f"Queue full ({MAX_QUEUED_MESSAGES}) — message dropped. Wait for current response to finish."
+            )
+            logger.warning("Queue full for %s, dropping message", key)
+            _log_activity("message_dropped", session_key=key, depth=len(queue))
+            return
+        queue.append(text)
+        depth = len(queue)
         await update.message.reply_text(
             f"Queued ({depth}) — will send when current response finishes."
         )

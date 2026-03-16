@@ -34,6 +34,17 @@ _shutdown() {
 trap '_shutdown' TERM INT
 
 while true; do
+    # Pre-flight validation — if validate.py fails, try rolling back to known-good
+    if ! uv run --project "$SCRIPT_DIR" python "$SCRIPT_DIR/validate.py"; then
+        echo "Validation failed. Checking for known-good backup..." >&2
+        if [[ -f "$SCRIPT_DIR/.bridge-known-good.py" ]]; then
+            echo "Rolling back bridge.py to .bridge-known-good.py" >&2
+            cp "$SCRIPT_DIR/.bridge-known-good.py" "$SCRIPT_DIR/bridge.py"
+        else
+            echo "No known-good backup available. Starting bridge anyway..." >&2
+        fi
+    fi
+
     uv run --project "$SCRIPT_DIR" python "$SCRIPT_DIR/bridge.py" &
     _child_pid=$!
     wait "$_child_pid"

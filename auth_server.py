@@ -145,17 +145,28 @@ def _get_apple_client_secret() -> str:
 
 
 async def _fetch_apple_keys() -> dict:
-    """Fetch Apple's public keys for JWT verification. Cached for 1 hour."""
+    """Fetch Apple's public keys for JWT verification. Cached for 1 hour.
+
+    Falls back to cached keys if the network request fails. Raises on first
+    fetch failure when no cache exists.
+    """
     global _apple_keys_cache, _apple_keys_fetched
     if _apple_keys_cache and time.time() - _apple_keys_fetched < 3600:
         return _apple_keys_cache
 
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(APPLE_KEYS_URL)
-        resp.raise_for_status()
-        _apple_keys_cache = resp.json()
-        _apple_keys_fetched = time.time()
-        return _apple_keys_cache
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(APPLE_KEYS_URL)
+            resp.raise_for_status()
+            _apple_keys_cache = resp.json()
+            _apple_keys_fetched = time.time()
+            return _apple_keys_cache
+    except (httpx.HTTPError, httpx.TimeoutException) as e:
+        logger.error("Failed to fetch Apple public keys: %s", e)
+        if _apple_keys_cache:
+            logger.warning("Using stale Apple public keys from cache")
+            return _apple_keys_cache
+        raise
 
 
 async def _verify_apple_id_token(id_token: str) -> dict:
@@ -311,7 +322,7 @@ async def apple_callback(
     except Exception as e:
         logger.error("Apple token verification failed: %s", e)
         auth.record_failed_attempt(telegram_user_id)
-        return HTMLResponse(f"<h1>Verification failed</h1><p>{e}</p>", status_code=400)
+        return HTMLResponse("<h1>Verification failed</h1><p>Authentication could not be completed. Please try again.</p>", status_code=400)
 
     apple_subject = claims.get("sub", "")
 
