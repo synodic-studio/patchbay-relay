@@ -69,7 +69,7 @@ def _load_bot_token() -> _SecretStr:
                 "security",
                 "find-generic-password",
                 "-a",
-                "bryancostanza",
+                os.getlogin(),
                 "-s",
                 "telegram-bot-token",
                 "-w",

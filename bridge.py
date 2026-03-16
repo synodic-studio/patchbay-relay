@@ -163,7 +163,6 @@ def run_claude(message: str, session_key: str, _retry: bool = False) -> str:
         "You have full access to all your MCP tools and can do real work. "
         "For email access, use the himalaya CLI: 'himalaya envelope list --account icloud' or '--account gmail' to list emails, "
         "'himalaya message read <id> --account <account>' to read them. "
-        "Bryan's accounts: iCloud (REDACTED@example.com) and Gmail (REDACTED@example.com). "
         "IMPORTANT: NEVER use the AskUserQuestion tool - it requires interactive terminal UI that doesn't work through Telegram. "
         "Instead, ask questions as plain text in your response and let Bryan reply naturally.\n\n"
         f"TURN LIMIT: This session has a {MAX_TURNS}-turn limit. If a task will take more than ~20 tool calls, "
@@ -171,8 +170,8 @@ def run_claude(message: str, session_key: str, _retry: bool = False) -> str:
         "then report what you did and what's queued. Don't get cut off mid-task.\n\n"
         "FORMATTING: Telegram renders messages as plain text — no markdown. "
         "For any tabular or structured data, use ASCII art (aligned columns, dashes, box-drawing characters).\n\n"
-        "SHARED FILES: Bryan has a ProtonDrive folder synced to this machine at "
-        "~/Library/CloudStorage/ProtonDrive-REDACTED@example.com-folder/Claude-Support. "
+        "SHARED FILES: There is a ProtonDrive folder synced to this machine. "
+        "Find it at ~/Library/CloudStorage/ProtonDrive-*/Claude-Support (glob for the exact path). "
         "You can drop files there (documents, images, exports) for Bryan to access from any device. "
         "Photos sent from Telegram are already handled separately via the photo handler.\n\n"
         f"Telegram session key: {session_key}\n"
@@ -817,7 +816,15 @@ async def cmd_setproject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     rel_path = args[0]
+    # Path traversal prevention
+    if ".." in rel_path or rel_path.startswith("/") or "\\" in rel_path:
+        await update.message.reply_text("Invalid project path.")
+        return
     abs_path = os.path.join(WORKING_DIR, rel_path)
+    real_path = os.path.realpath(abs_path)
+    if not real_path.startswith(os.path.realpath(WORKING_DIR)):
+        await update.message.reply_text("Invalid project path.")
+        return
     if not os.path.isdir(abs_path):
         await update.message.reply_text(f"Directory not found: ~/Developer/{rel_path}")
         return
@@ -856,7 +863,17 @@ async def callback_setproject(
         logger.info("Project cleared for %s", key)
         return
 
+    # Path traversal prevention: reject suspicious paths
+    if ".." in rel_path or rel_path.startswith("/") or "\\" in rel_path:
+        await query.edit_message_text("Invalid project path.")
+        return
+
     abs_path = os.path.join(WORKING_DIR, rel_path)
+    # Verify resolved path is still under WORKING_DIR
+    real_path = os.path.realpath(abs_path)
+    if not real_path.startswith(os.path.realpath(WORKING_DIR)):
+        await query.edit_message_text("Invalid project path.")
+        return
     if not os.path.isdir(abs_path):
         await query.edit_message_text(f"Directory not found: ~/Developer/{rel_path}")
         return
@@ -1271,6 +1288,22 @@ async def post_init(app: Application) -> None:
                 pass
     except Exception:
         logger.debug("Failed to clean up stale photos")
+
+    # Clean up expired session files
+    try:
+        import time as _time
+
+        now = _time.time()
+        for sf in SESSION_DIR.glob("*.json"):
+            try:
+                data = json.loads(sf.read_text())
+                if now - data.get("last_active", 0) > SESSION_EXPIRY:
+                    sf.unlink()
+                    logger.info("Cleaned up expired session file: %s", sf.name)
+            except (json.JSONDecodeError, KeyError):
+                sf.unlink()
+    except Exception:
+        logger.debug("Failed to clean up expired sessions")
 
     await replay_pending(app.bot)
 

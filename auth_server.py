@@ -77,7 +77,7 @@ else:
             "security",
             "find-generic-password",
             "-a",
-            "bryancostanza",
+            os.getlogin(),
             "-s",
             "apple-subject-allowlist",
             "-w",
