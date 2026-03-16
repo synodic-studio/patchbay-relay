@@ -495,7 +495,11 @@ async def replay_pending(bot) -> None:
             )
         except Exception as e:
             logger.error("Error replaying %s: %s", f.stem, e)
-            response = f"Error: {e}"
+            response = (
+                f"Error replaying your message after bridge restart.\n"
+                f"Original message: {text[:200]}\n"
+                f"Error: {type(e).__name__}: {e}"
+            )
         finally:
             stop_typing.set()
             await typing_task
@@ -679,6 +683,28 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         f"use the Read tool to view it before responding.]"
     )
 
+    # Debounce: if Claude is already processing for this session, queue the photo prompt
+    if key in _processing_sessions:
+        queue = _queued_messages.setdefault(key, [])
+        if len(queue) >= MAX_QUEUED_MESSAGES:
+            await update.message.reply_text(
+                f"Queue full ({MAX_QUEUED_MESSAGES}) — photo dropped. Wait for current response to finish."
+            )
+            logger.warning("Queue full for %s, dropping photo", key)
+            _log_activity("photo_dropped", session_key=key, depth=len(queue))
+            local_path.unlink(missing_ok=True)
+            return
+        queue.append(prompt)
+        depth = len(queue)
+        await update.message.reply_text(
+            f"Photo queued ({depth}) — will send when current response finishes."
+        )
+        logger.info("Queued photo for %s (depth: %d)", key, depth)
+        _log_activity("photo_queued", session_key=key, depth=depth)
+        return
+
+    _processing_sessions.add(key)
+    _session_start_times[key] = time.time()
     pending_id = save_pending(chat_id, thread_id, prompt, key)
 
     stop_typing = asyncio.Event()
@@ -700,9 +726,34 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         except Exception as e:
             logger.error("Failed to send photo response for %s: %s", key, e)
             await _notify_delivery_failure(context.bot, chat_id, thread_id, key)
+
+        # Drain queued messages (same as handle_message)
+        while _queued_messages.get(key):
+            batch = _queued_messages.pop(key)
+            logger.info("Processing %d queued message(s) for %s", len(batch), key)
+            if len(batch) == 1:
+                combined = batch[0]
+            else:
+                combined = "\n\n---\n\n".join(
+                    f"[Follow-up {i + 1}]\n{msg}" for i, msg in enumerate(batch)
+                )
+            try:
+                response = await loop.run_in_executor(
+                    _executor, run_claude, combined, key
+                )
+            except Exception as e:
+                logger.error("Error running claude for queued batch %s: %s", key, e)
+                response = f"Error: {e}"
+            try:
+                await _send_response(context.bot, chat_id, thread_id, response)
+            except Exception as e:
+                logger.error("Failed to send queued response for %s: %s", key, e)
+                await _notify_delivery_failure(context.bot, chat_id, thread_id, key)
     finally:
         stop_typing.set()
         await typing_task
+        _processing_sessions.discard(key)
+        _session_start_times.pop(key, None)
         local_path.unlink(missing_ok=True)
 
 
@@ -1137,6 +1188,12 @@ async def _stall_detector() -> None:
                         parts = key.split("_", 1)
                         chat_id = int(parts[0])
                         thread_id = int(parts[1]) if len(parts) > 1 else None
+                    except (ValueError, IndexError):
+                        logger.warning(
+                            "Cannot parse session key %r for stall notification", key
+                        )
+                        continue
+                    try:
                         send_kwargs: dict = {"chat_id": chat_id}
                         if thread_id is not None:
                             send_kwargs["message_thread_id"] = thread_id
@@ -1200,6 +1257,20 @@ async def post_init(app: Application) -> None:
         STALL_POLL_INTERVAL,
         STALL_TIMEOUT,
     )
+
+    # Clean up stale photo files from prior crash/SIGKILL (older than 1 hour)
+    try:
+        now = time.time()
+        for photo_file in PHOTO_DIR.glob("*.jpg"):
+            try:
+                age = now - photo_file.stat().st_mtime
+                if age > 3600:
+                    photo_file.unlink(missing_ok=True)
+                    logger.info("Cleaned up stale photo: %s (age %.0fs)", photo_file.name, age)
+            except OSError:
+                pass
+    except Exception:
+        logger.debug("Failed to clean up stale photos")
 
     await replay_pending(app.bot)
 
