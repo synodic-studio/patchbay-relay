@@ -86,28 +86,6 @@ def _load_bot_token() -> _SecretStr:
     return _SecretStr(os.environ.get("TELEGRAM_BOT_TOKEN", ""))
 
 
-def _load_allowed_user_ids() -> set[int]:
-    """Parse ALLOWED_USER_IDS from env var. Exits on invalid input."""
-    raw = os.environ.get("ALLOWED_USER_IDS", "")
-    if not raw.strip():
-        return set()
-    parsed: set[int] = set()
-    for token in raw.split(","):
-        token = token.strip()
-        if not token:
-            continue
-        try:
-            parsed.add(int(token))
-        except ValueError:
-            print(
-                f"ERROR: ALLOWED_USER_IDS contains non-integer value: {token!r}. "
-                "All entries must be numeric Telegram user IDs (e.g. 123456789,987654321).",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-    return parsed
-
-
 # --- Bot token ---
 BOT_TOKEN = _load_bot_token()
 if not BOT_TOKEN:
@@ -117,9 +95,6 @@ if not BOT_TOKEN:
         file=sys.stderr,
     )
     sys.exit(1)
-
-# --- User allowlist ---
-ALLOWED_USER_IDS = _load_allowed_user_ids()
 
 # --- Paths ---
 CLAUDE_PATH = os.environ.get("CLAUDE_PATH", "/opt/homebrew/bin/claude")
@@ -146,8 +121,6 @@ SESSION_EXPIRY = int(os.environ.get("SESSION_EXPIRY", "259200"))  # 3 days
 MAX_TIMEOUT = int(os.environ.get("MAX_TIMEOUT", "2700"))  # 45 min safety valve
 MAX_TURNS = int(os.environ.get("MAX_TURNS", "30"))
 MAX_WORKERS = int(os.environ.get("MAX_WORKERS", "4"))
-AUTH_BASE_URL = os.environ.get("AUTH_BASE_URL", "https://auth.kj6.dev")
-AUTH_REQUIRED = os.environ.get("AUTH_REQUIRED", "false").lower() == "true"
 
 # --- Telegram constants ---
 TELEGRAM_MSG_LIMIT = 4096

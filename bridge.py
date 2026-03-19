@@ -38,8 +38,6 @@ from telegram.ext import (  # noqa: E402
     filters,
 )
 
-import auth  # noqa: E402
-
 # ---------------------------------------------------------------------------
 # Import from package modules — these are the canonical implementations.
 # Re-export at module level for backward compatibility with existing tests
@@ -47,10 +45,7 @@ import auth  # noqa: E402
 # ---------------------------------------------------------------------------
 from stargate.config import (  # noqa: E402
     ACTIVITY_LOG,  # noqa: F401 — used by tests via bridge.ACTIVITY_LOG
-    ALLOWED_USER_IDS,
     ANSI_RE,
-    AUTH_BASE_URL,
-    AUTH_REQUIRED,
     BOT_TOKEN,
     CHAT_PROJECTS_FILE,
     CLAUDE_PATH,
@@ -350,30 +345,6 @@ async def keep_typing(
             continue
 
 
-async def _check_auth(update: Update) -> bool:
-    """Check if user is authenticated. Returns True if authorized to proceed."""
-    if not AUTH_REQUIRED:
-        return True
-    user_id = update.effective_user.id
-    if not auth.is_authenticated(user_id):
-        return False
-    auth.touch_session(user_id)
-    return True
-
-
-async def _send_auth_link(update: Update) -> None:
-    """Generate and send an auth link to the user."""
-    user_id = update.effective_user.id
-    if auth.is_rate_limited(user_id):
-        await update.message.reply_text(
-            "Too many failed attempts. Account temporarily locked. Try again in 15 minutes."
-        )
-        return
-    token = auth.generate_auth_token(user_id)
-    link = f"{AUTH_BASE_URL}/login?token={token}"
-    await update.message.reply_text(f"Authentication required.\n\n{link}\n\nLink expires in 15 minutes.")
-
-
 async def _send_response(bot, chat_id: int, thread_id: int | None, response: str) -> None:
     """Send a response, splitting at Telegram's message limit.
 
@@ -515,16 +486,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text("Bridge is shutting down. Message not processed — please resend in a moment.")
         return
 
-    user_id = update.effective_user.id
-
-    if ALLOWED_USER_IDS and user_id not in ALLOWED_USER_IDS:
-        logger.warning("Unauthorized user %d attempted access", user_id)
-        return
-
-    if not await _check_auth(update):
-        await _send_auth_link(update)
-        return
-
     text = update.message.text
     if not text:
         return
@@ -632,16 +593,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await update.message.reply_text("Bridge is shutting down. Photo not processed — please resend in a moment.")
         return
 
-    user_id = update.effective_user.id
-
-    if ALLOWED_USER_IDS and user_id not in ALLOWED_USER_IDS:
-        logger.warning("Unauthorized user %d attempted photo access", user_id)
-        return
-
-    if not await _check_auth(update):
-        await _send_auth_link(update)
-        return
-
     photo = update.message.photo[-1]  # highest resolution
     caption = update.message.caption or "Describe this image."
 
@@ -742,8 +693,6 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/remote-control stop - Stop remote-control\n"
         "/kill - Kill active Claude process\n"
         "/restart - Restart the bridge\n"
-        "/auth - Authenticate or check auth status\n"
-        "/lock - Lock session (/lock all for all sessions)\n"
         "/ping - Check if bridge is alive\n\n"
         "Each forum topic runs as an independent Claude session."
     )
@@ -855,51 +804,8 @@ async def cmd_project(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await update.message.reply_text("No project set. Using default: ~/Developer")
 
 
-async def cmd_auth(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Send an authentication link."""
-    import datetime
-
-    user_id = update.effective_user.id
-    if ALLOWED_USER_IDS and user_id not in ALLOWED_USER_IDS:
-        return
-    if auth.is_authenticated(user_id):
-        info = auth.get_session_info(user_id)
-        if info:
-            authed_at = datetime.datetime.fromtimestamp(info["authenticated_at"], tz=datetime.timezone.utc)
-            expires_at = authed_at + datetime.timedelta(seconds=auth.SESSION_EXPIRY_SECONDS)
-            await update.message.reply_text(
-                f"Already authenticated.\n"
-                f"Since: {authed_at.strftime('%Y-%m-%d %H:%M UTC')}\n"
-                f"Expires: {expires_at.strftime('%Y-%m-%d %H:%M UTC')}\n\n"
-                f"Use /lock to end your session."
-            )
-            return
-    await _send_auth_link(update)
-
-
-async def cmd_lock(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Lock the current session immediately."""
-    user_id = update.effective_user.id
-    if ALLOWED_USER_IDS and user_id not in ALLOWED_USER_IDS:
-        return
-
-    args = context.args
-    if args and args[0] == "all":
-        count = auth.lock_all_sessions()
-        await update.message.reply_text(f"Locked {count} session(s).")
-        logger.info("User %d locked all sessions", user_id)
-    else:
-        auth.lock_session(user_id)
-        await update.message.reply_text("Session locked. Use /auth to re-authenticate.")
-        logger.info("User %d locked their session", user_id)
-
-
 async def cmd_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Set or show the model for this chat/topic."""
-    user_id = update.effective_user.id
-    if ALLOWED_USER_IDS and user_id not in ALLOWED_USER_IDS:
-        return
-
     chat_id = update.effective_chat.id
     thread_id = update.message.message_thread_id
     key = _session_key(chat_id, thread_id)
@@ -963,9 +869,6 @@ async def callback_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 async def cmd_kill(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Kill the active Claude process for this chat/topic."""
     user_id = update.effective_user.id
-    if ALLOWED_USER_IDS and user_id not in ALLOWED_USER_IDS:
-        return
-
     chat_id = update.effective_chat.id
     thread_id = update.message.message_thread_id
     key = _session_key(chat_id, thread_id)
@@ -989,9 +892,6 @@ async def cmd_kill(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def cmd_restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Restart the bridge process. Launchd will respawn it."""
     user_id = update.effective_user.id
-    if ALLOWED_USER_IDS and user_id not in ALLOWED_USER_IDS:
-        return
-
     await update.message.reply_text("Restarting bridge...")
     logger.info("User %d triggered bridge restart", user_id)
 
@@ -1022,9 +922,6 @@ async def cmd_remote_control(update: Update, context: ContextTypes.DEFAULT_TYPE)
     global _remote_proc, _remote_proc_key
 
     user_id = update.effective_user.id
-    if ALLOWED_USER_IDS and user_id not in ALLOWED_USER_IDS:
-        return
-
     chat_id = update.effective_chat.id
     thread_id = update.message.message_thread_id
     key = _session_key(chat_id, thread_id)
@@ -1125,28 +1022,8 @@ async def cmd_ping(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Infrastructure: auth notification, stall detector, lifecycle
+# Infrastructure: stall detector, lifecycle
 # ---------------------------------------------------------------------------
-
-
-async def _auth_notify(event_type: str, telegram_user_id: int, details: str = "") -> None:
-    """Send auth event alerts to the admin via Telegram."""
-    if not ALLOWED_USER_IDS:
-        return
-    labels = {
-        "authenticated": "NEW AUTH",
-        "denied": "ACCESS DENIED",
-        "ip_changed": "IP CHANGE",
-        "locked": "SESSION LOCKED",
-        "expired": "SESSION EXPIRED",
-    }
-    label = labels.get(event_type, event_type.upper())
-    msg = f"[{label}] User {telegram_user_id}\n{details}"
-    for admin_id in ALLOWED_USER_IDS:
-        try:
-            await _bot_instance.send_message(chat_id=admin_id, text=msg)
-        except Exception:
-            logger.debug("Failed to send auth alert to %d", admin_id)
 
 
 def _get_proc_cpu(pid: int) -> float | None:
@@ -1225,7 +1102,6 @@ async def post_init(app: Application) -> None:
     """Register bot commands and replay any messages lost during previous crash."""
     global _bot_instance
     _bot_instance = app.bot
-    auth.set_notify_callback(_auth_notify)
 
     from telegram import (
         BotCommand,
@@ -1259,8 +1135,6 @@ async def post_init(app: Application) -> None:
         BotCommand("remote_control", "Start/stop claude remote-control in project dir"),
         BotCommand("kill", "Kill active Claude process"),
         BotCommand("restart", "Restart the bridge"),
-        BotCommand("auth", "Authenticate or check auth status"),
-        BotCommand("lock", "Lock session (use 'lock all' for all sessions)"),
         BotCommand("ping", "Check if bridge is alive"),
     ]
     await app.bot.set_my_commands(commands)
@@ -1374,8 +1248,6 @@ def main() -> None:
     app.add_handler(CommandHandler("setproject", cmd_setproject))
     app.add_handler(CallbackQueryHandler(callback_setproject, pattern=r"^setproject:"))
     app.add_handler(CommandHandler("project", cmd_project))
-    app.add_handler(CommandHandler("auth", cmd_auth))
-    app.add_handler(CommandHandler("lock", cmd_lock))
     app.add_handler(CommandHandler("kill", cmd_kill))
     app.add_handler(CommandHandler("model", cmd_model))
     app.add_handler(CallbackQueryHandler(callback_model, pattern=r"^model:"))
