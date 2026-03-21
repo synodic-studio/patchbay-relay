@@ -490,6 +490,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not text:
         return
 
+    user_id = update.effective_user.id
     chat_id = update.effective_chat.id
     thread_id = update.message.message_thread_id
     key = _session_key(chat_id, thread_id)
@@ -600,6 +601,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     thread_id = update.message.message_thread_id
     key = _session_key(chat_id, thread_id)
 
+    user_id = update.effective_user.id
     tg_file = await context.bot.get_file(photo.file_id)
     local_path = PHOTO_DIR / f"{photo.file_unique_id}.jpg"
     await tg_file.download_to_drive(local_path)
