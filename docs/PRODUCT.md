@@ -2,9 +2,9 @@
 
 ## What It Is
 
-Telegram bot that bridges messages to Claude Code sessions. Powers all mobile interaction with Bryan's Fanta agent system. Routes Telegram topic messages to the correct Claude Code instance with per-topic project/agent mapping.
+Telegram bot that bridges messages to Claude Code sessions. Powers all mobile interaction with agent systems. Routes Telegram topic messages to the correct Claude Code instance with per-topic project/agent mapping.
 
-**Audience:** Single-user infrastructure (Bryan).
+**Audience:** Single-user infrastructure.
 
 **Role:** Critical path — if this breaks, mobile access to all agents is down.
 

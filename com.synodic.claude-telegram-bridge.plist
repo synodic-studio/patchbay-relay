@@ -6,7 +6,8 @@
     <string>com.synodic.stargate</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/bryancostanza/Developer/stargate/run.sh</string>
+        <!-- UPDATE: Replace with the absolute path to your stargate checkout -->
+        <string>/Users/YOURUSER/Developer/stargate/run.sh</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
@@ -16,11 +17,14 @@
         <false/>
     </dict>
     <key>StandardOutPath</key>
-    <string>/Users/bryancostanza/Developer/stargate/logs/bridge.log</string>
+    <!-- UPDATE: Replace with your stargate path -->
+    <string>/Users/YOURUSER/Developer/stargate/logs/bridge.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/bryancostanza/Developer/stargate/logs/bridge.err</string>
+    <!-- UPDATE: Replace with your stargate path -->
+    <string>/Users/YOURUSER/Developer/stargate/logs/bridge.err</string>
     <key>WorkingDirectory</key>
-    <string>/Users/bryancostanza/Developer/stargate</string>
+    <!-- UPDATE: Replace with your stargate path -->
+    <string>/Users/YOURUSER/Developer/stargate</string>
     <key>ThrottleInterval</key>
     <integer>30</integer>
     <key>EnvironmentVariables</key>
