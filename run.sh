@@ -64,6 +64,7 @@ while true; do
 
         error_tail=$(tail -80 "$LOG" 2>/dev/null)
         nohup "$CLAUDE_BIN" \
+            --bare \
             --dangerously-skip-permissions \
             -p "Stargate (Telegram bridge) has crashed ${recent} times in ${CRASH_WINDOW}s. Investigate the crash, fix the root cause, and open a PR to the develop branch. Do NOT restart the bridge — run.sh respawns it automatically. Repo: $SCRIPT_DIR
 
