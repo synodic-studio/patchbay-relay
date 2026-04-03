@@ -182,16 +182,8 @@ def run_claude(message: str, session_key: str, _retry: bool = False, model: str 
     if agent_name:
         system_prompt += (
             f"\n\nAGENT MODE: You are the '{agent_name}' agent from Fanta. "
-            f"On session start, read your identity stack in this order:\n"
-            f"1. USER.md (global)\n"
-            f"2. TOOLS.md (global)\n"
-            f"3. Find your agent directory (search agents/dev/{agent_name}/, agents/pa/{agent_name}/, or agents/{agent_name}/) and read:\n"
-            f"   - SOUL.md\n"
-            f"   - IDENTITY.md (if it exists)\n"
-            f"   - AGENTS.md\n"
-            f"   - HEARTBEAT.md (if it exists)\n"
+            f"CLAUDE.md has the full loading order — follow it. "
             f"Do NOT read other agents' files. You are ONLY the {agent_name} agent. "
-            f"Adopt the personality and boundaries defined in your SOUL.md. "
             f"Skip MEMORY.md in Telegram context (per Fanta conventions)."
         )
 
