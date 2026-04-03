@@ -40,46 +40,16 @@ class _SecretStr:
 
 
 def _load_bot_token() -> _SecretStr:
-    """Load the Telegram bot token from pass-cli, keychain, or env var."""
+    """Load the Telegram bot token from pass (password-store) or env var."""
     try:
-        pp = subprocess.run(
-            [
-                "pass-cli",
-                "item",
-                "view",
-                "--vault-name",
-                "Developer Secrets",
-                "--item-title",
-                "telegram-bot-token",
-                "--field",
-                "note",
-            ],
+        result = subprocess.run(
+            ["pass", "show", "telegram-bot-token"],
             capture_output=True,
             text=True,
             timeout=10,
         )
-        if pp.returncode == 0 and pp.stdout.strip():
-            return _SecretStr(pp.stdout.strip())
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        pass
-
-    try:
-        kc = subprocess.run(
-            [
-                "security",
-                "find-generic-password",
-                "-a",
-                os.getlogin(),
-                "-s",
-                "telegram-bot-token",
-                "-w",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if kc.returncode == 0 and kc.stdout.strip():
-            return _SecretStr(kc.stdout.strip())
+        if result.returncode == 0 and result.stdout.strip():
+            return _SecretStr(result.stdout.strip())
     except (subprocess.TimeoutExpired, FileNotFoundError):
         pass
 
@@ -91,13 +61,13 @@ BOT_TOKEN = _load_bot_token()
 if not BOT_TOKEN:
     print(
         "ERROR: BOT_TOKEN is empty. Set TELEGRAM_BOT_TOKEN in the environment "
-        "or ensure 'telegram-bot-token' is accessible via Proton Pass or Keychain.",
+        "or ensure 'telegram-bot-token' is accessible via `pass show telegram-bot-token`.",
         file=sys.stderr,
     )
     sys.exit(1)
 
 # --- Paths ---
-CLAUDE_PATH = os.environ.get("CLAUDE_PATH", "/opt/homebrew/bin/claude")
+CLAUDE_PATH = os.environ.get("CLAUDE_PATH", os.path.expanduser("~/.local/bin/claude"))
 WORKING_DIR = os.environ.get("CLAUDE_WORKING_DIR", os.path.expanduser("~/Developer"))
 PA_PLUGIN_DIR = os.environ.get(
     "PA_PLUGIN_DIR",

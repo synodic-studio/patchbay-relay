@@ -10,7 +10,7 @@ CRASH_TIMESTAMPS="$SCRIPT_DIR/.crash-timestamps"
 CRASH_WINDOW=300       # seconds — sliding window for crash counting
 CRASH_THRESHOLD=3      # crashes in window before self-heal triggers
 HEAL_BACKOFF=60        # seconds to wait after triggering CC before next respawn
-CLAUDE_BIN="${CLAUDE_PATH:-/opt/homebrew/bin/claude}"
+CLAUDE_BIN="${CLAUDE_PATH:-$HOME/.local/bin/claude}"
 LOG="$SCRIPT_DIR/logs/bridge.err"
 
 # Remove timestamps older than CRASH_WINDOW
