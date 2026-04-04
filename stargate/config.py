@@ -85,6 +85,8 @@ FORGE_QUEUE_DIR = Path(PA_PLUGIN_DIR) / "agents" / "dev" / "forge" / "queue"
 ACTIVITY_LOG = BASE_DIR / "activity.jsonl"
 PHOTO_DIR = Path(tempfile.gettempdir()) / "claude-telegram-photos"
 PHOTO_DIR.mkdir(exist_ok=True)
+DOC_DIR = Path(tempfile.gettempdir()) / "claude-telegram-docs"
+DOC_DIR.mkdir(exist_ok=True)
 
 # --- Tunables ---
 SESSION_EXPIRY = int(os.environ.get("SESSION_EXPIRY", "259200"))  # 3 days

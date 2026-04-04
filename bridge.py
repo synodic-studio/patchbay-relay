@@ -56,6 +56,7 @@ from stargate.config import (  # noqa: E402
     MAX_WORKERS,
     PA_PLUGIN_DIR,
     PENDING_DIR,
+    DOC_DIR,
     PHOTO_DIR,
     QUOTA_HIT_PREFIX,
     RESTART_NOTIFY_FILE,
@@ -668,6 +669,101 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         local_path.unlink(missing_ok=True)
 
 
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle file attachments (documents) sent via Telegram."""
+    if _shutting_down:
+        await update.message.reply_text("Bridge is shutting down. File not processed — please resend in a moment.")
+        return
+
+    doc = update.message.document
+    if not doc:
+        return
+
+    caption = update.message.caption or ""
+    file_name = doc.file_name or f"file_{doc.file_unique_id}"
+
+    chat_id = update.effective_chat.id
+    thread_id = update.message.message_thread_id
+    key = _session_key(chat_id, thread_id)
+    user_id = update.effective_user.id
+
+    tg_file = await context.bot.get_file(doc.file_id)
+    local_path = DOC_DIR / file_name
+    await tg_file.download_to_drive(local_path)
+    logger.info("Downloaded document %s to %s for %s", file_name, local_path, key)
+    _log_activity("document", user_id=user_id, session_key=key, caption_len=len(caption))
+
+    prompt = (
+        f"{caption}\n\n"
+        f"[A file has been saved to {local_path} — "
+        f"use the Read tool or Bash tool to inspect it as appropriate.]"
+    )
+
+    # Debounce: if Claude is already processing for this session, queue the prompt
+    if key in _processing_sessions:
+        queue = _queued_messages.setdefault(key, [])
+        if len(queue) >= MAX_QUEUED_MESSAGES:
+            await update.message.reply_text(
+                f"Queue full ({MAX_QUEUED_MESSAGES}) — file dropped. Wait for current response to finish."
+            )
+            logger.warning("Queue full for %s, dropping document", key)
+            _log_activity("document_dropped", session_key=key, depth=len(queue))
+            local_path.unlink(missing_ok=True)
+            return
+        queue.append(prompt)
+        depth = len(queue)
+        await update.message.reply_text(f"File queued ({depth}) — will process when current response finishes.")
+        logger.info("Queued document for %s (depth: %d)", key, depth)
+        _log_activity("document_queued", session_key=key, depth=depth)
+        return
+
+    _processing_sessions.add(key)
+    _session_start_times[key] = time.time()
+    pending_id = save_pending(chat_id, thread_id, prompt, key)
+
+    stop_typing = asyncio.Event()
+    typing_task = asyncio.create_task(keep_typing(chat_id, thread_id, stop_typing, context.bot))
+
+    try:
+        loop = asyncio.get_running_loop()
+        try:
+            response = await loop.run_in_executor(_executor, run_claude, prompt, key)
+        except Exception as e:
+            logger.error("Error running claude for document %s: %s", key, e)
+            response = f"Error: {e}"
+
+        try:
+            await _send_response(context.bot, chat_id, thread_id, response)
+            clear_pending(pending_id)
+        except Exception as e:
+            logger.error("Failed to send document response for %s: %s", key, e)
+            await _notify_delivery_failure(context.bot, chat_id, thread_id, key)
+
+        # Drain queued messages
+        while _queued_messages.get(key):
+            batch = _queued_messages.pop(key)
+            logger.info("Processing %d queued message(s) for %s", len(batch), key)
+            if len(batch) == 1:
+                combined = batch[0]
+            else:
+                combined = "\n\n---\n\n".join(f"[Follow-up {i + 1}]\n{msg}" for i, msg in enumerate(batch))
+            try:
+                response = await loop.run_in_executor(_executor, run_claude, combined, key)
+            except Exception as e:
+                logger.error("Error running claude for queued batch %s: %s", key, e)
+                response = f"Error: {e}"
+            try:
+                await _send_response(context.bot, chat_id, thread_id, response)
+            except Exception as e:
+                logger.error("Failed to send queued response for %s: %s", key, e)
+                await _notify_delivery_failure(context.bot, chat_id, thread_id, key)
+    finally:
+        stop_typing.set()
+        await typing_task
+        _processing_sessions.discard(key)
+        _session_start_times.pop(key, None)
+
+
 # ---------------------------------------------------------------------------
 # Command handlers
 # ---------------------------------------------------------------------------
@@ -1250,6 +1346,7 @@ def main() -> None:
     app.add_handler(CommandHandler("ping", cmd_ping))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
 
     logger.info(
         "Bridge started (max_workers=%d). Polling for Telegram messages...",
