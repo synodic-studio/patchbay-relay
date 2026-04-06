@@ -120,9 +120,14 @@ def parse_claude_response(stdout: str, session_key: str) -> str:
     # Detect max_turns and append a notice
     if result_event:
         subtype = result_event.get("subtype") or result_event.get("result_subtype")
-        if subtype == "max_turns":
-            notice = f"\n\n[Reached {MAX_TURNS}-turn limit. Session preserved — reply to continue or check beads for queued tasks.]"
-            return (text + notice) if text else notice
+        if subtype in ("max_turns", "error_max_turns"):
+            notice = f"\n\n[Reached {MAX_TURNS}-turn limit. Session preserved — reply to continue.]"
+            if text:
+                return text + notice
+            # No text produced — try to salvage a summary from what happened
+            num_turns = result_event.get("num_turns", "?")
+            cost = result_event.get("total_cost_usd", "?")
+            return f"(Session used {num_turns} turns / ${cost} but produced no text response. Work may have been done via tools — check the agent's files. Reply to continue.)"
         elif subtype:
             logger.info("Result subtype for %s: %s", session_key, subtype)
 
@@ -135,6 +140,17 @@ def parse_claude_response(stdout: str, session_key: str) -> str:
         if error:
             logger.warning("Result event has error for %s: %s", session_key, error)
             return f"(Claude error: {error})"
+
+        # Success but no text — Claude did all work via tools
+        subtype = result_event.get("subtype", "")
+        if subtype == "success":
+            num_turns = result_event.get("num_turns", "?")
+            logger.warning(
+                "Success with no text for %s (%s turns). Claude likely did work via tools only.",
+                session_key, num_turns,
+            )
+            return f"(Completed {num_turns} turns of work but didn't produce a text response. Check agent files for results.)"
+
         logger.warning(
             "No text extracted for %s. Result event keys: %s, values preview: %s",
             session_key,
