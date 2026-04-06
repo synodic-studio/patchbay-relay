@@ -91,7 +91,7 @@ DOC_DIR.mkdir(exist_ok=True)
 # --- Tunables ---
 SESSION_EXPIRY = int(os.environ.get("SESSION_EXPIRY", "259200"))  # 3 days
 MAX_TIMEOUT = int(os.environ.get("MAX_TIMEOUT", "2700"))  # 45 min safety valve
-MAX_TURNS = int(os.environ.get("MAX_TURNS", "60"))
+MAX_TURNS = int(os.environ.get("MAX_TURNS", "500"))
 MAX_WORKERS = int(os.environ.get("MAX_WORKERS", "4"))
 
 # --- Telegram constants ---
