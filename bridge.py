@@ -92,11 +92,19 @@ from stargate.quota import (  # noqa: E402
     is_quota_error as _is_quota_error_impl,
 )
 from stargate.activity import log_activity  # noqa: E402
+from stargate.outbound import get_recent_outbound  # noqa: E402
 from stargate.models import (  # noqa: E402
     VALID_MODELS,
     extract_model_prefix,
     get_chat_model,
     set_chat_model,
+)
+from stargate.efforts import (  # noqa: E402
+    DEFAULT_EFFORT,
+    VALID_EFFORTS,
+    get_chat_effort,
+    resolve_effort,
+    set_chat_effort,
 )
 from stargate.projects import (  # noqa: E402
     _load_chat_projects,
@@ -183,6 +191,22 @@ def run_claude(message: str, session_key: str, _retry: bool = False, model: str 
         "After changing it, tell Bryan to run /clearnew to pick up the new cwd."
     )
 
+    # Inject recent outbound notifications so the session knows what was sent
+    recent = get_recent_outbound(session_key, max_age=86400.0)
+    if recent:
+        from datetime import datetime
+
+        lines = []
+        for entry in recent[-3:]:  # last 3 messages max
+            ts = datetime.fromtimestamp(entry["ts"]).strftime("%H:%M")
+            src = entry.get("source", "?")
+            txt = entry["text"][:500]
+            lines.append(f"  [{ts}] ({src}): {txt}")
+        system_prompt += (
+            "\n\nRECENT NOTIFICATIONS sent to this thread (the user may be replying to one of these):\n"
+            + "\n".join(lines)
+        )
+
     if agent_name:
         system_prompt += (
             f"\n\nAGENT MODE: You are the '{agent_name}' agent from Fanta. "
@@ -214,17 +238,28 @@ def run_claude(message: str, session_key: str, _retry: bool = False, model: str 
     if model:
         cmd.extend(["--model", model])
 
+    # Resolve effort: per-chat sticky setting > DEFAULT_EFFORT
+    effort = resolve_effort(session_key)
+    cmd.extend(["--effort", effort])
+
     if session_id:
         cmd.extend(["--resume", session_id])
         logger.info("Resuming session %s for %s", session_id[:12], session_key)
 
-    logger.info("Launching claude in %s for %s (model=%s)", chat_cwd, session_key, model or "default")
+    logger.info(
+        "Launching claude in %s for %s (model=%s, effort=%s)",
+        chat_cwd,
+        session_key,
+        model or "default",
+        effort,
+    )
     invoke_start = time.time()
     _log_activity(
         "claude_invoke",
         session_key=session_key,
         cwd=chat_cwd,
         model=model or "default",
+        effort=effort,
         resume=bool(session_id),
     )
 
@@ -782,6 +817,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/setproject - Clear project binding (use default)\n"
         "/project - Show current project dir\n"
         "/model - Set model (opus/sonnet/haiku) or prefix with !s !o !h\n"
+        "/effort - Set effort level (low/medium/high/xhigh/max)\n"
         "/remote-control - Start claude remote-control in this topic's project dir\n"
         "/remote-control stop - Stop remote-control\n"
         "/kill - Kill active Claude process\n"
@@ -957,6 +993,63 @@ async def callback_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     set_chat_model(key, choice)
     await query.edit_message_text(f"Model set to {choice}. Takes effect on next message.")
     logger.info("Model set to %s for %s", choice, key)
+
+
+async def cmd_effort(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Set or show the effort level for this chat/topic."""
+    chat_id = update.effective_chat.id
+    thread_id = update.message.message_thread_id
+    key = _session_key(chat_id, thread_id)
+
+    args = context.args
+    if args:
+        choice = args[0].lower()
+        if choice == "default":
+            set_chat_effort(key, None)
+            await update.message.reply_text(f"Effort reset to default ({DEFAULT_EFFORT}).")
+            logger.info("Effort cleared for %s", key)
+            return
+        if choice not in VALID_EFFORTS:
+            await update.message.reply_text(f"Invalid effort. Choose: {', '.join(VALID_EFFORTS)}, default")
+            return
+        set_chat_effort(key, choice)
+        await update.message.reply_text(f"Effort set to {choice}. Takes effect on next message.")
+        logger.info("Effort set to %s for %s", choice, key)
+        return
+
+    current = get_chat_effort(key) or f"default ({DEFAULT_EFFORT})"
+    buttons = [
+        [InlineKeyboardButton(level, callback_data=f"effort:{level}") for level in VALID_EFFORTS],
+        [InlineKeyboardButton("default", callback_data="effort:__default__")],
+    ]
+    await update.message.reply_text(
+        f"Current effort: {current}\nPick an effort level:",
+        reply_markup=InlineKeyboardMarkup(buttons),
+    )
+
+
+async def callback_effort(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle inline keyboard button presses for effort selection."""
+    query = update.callback_query
+    await query.answer()
+
+    chat_id = update.effective_chat.id
+    thread_id = query.message.message_thread_id
+    key = _session_key(chat_id, thread_id)
+
+    choice = query.data.split(":", 1)[1]
+    if choice == "__default__":
+        set_chat_effort(key, None)
+        await query.edit_message_text(f"Effort reset to default ({DEFAULT_EFFORT}).")
+        logger.info("Effort cleared for %s", key)
+        return
+    if choice not in VALID_EFFORTS:
+        await query.edit_message_text(f"Invalid effort: {choice}")
+        return
+
+    set_chat_effort(key, choice)
+    await query.edit_message_text(f"Effort set to {choice}. Takes effect on next message.")
+    logger.info("Effort set to %s for %s", choice, key)
 
 
 async def cmd_kill(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1225,6 +1318,7 @@ async def post_init(app: Application) -> None:
         BotCommand("setproject", "Set project dir (relative to ~/Developer)"),
         BotCommand("project", "Show current project dir"),
         BotCommand("model", "Set model (opus/sonnet/haiku)"),
+        BotCommand("effort", "Set effort level (low/medium/high/xhigh/max)"),
         BotCommand("remote_control", "Start/stop claude remote-control in project dir"),
         BotCommand("kill", "Kill active Claude process"),
         BotCommand("restart", "Restart the bridge"),
@@ -1344,6 +1438,8 @@ def main() -> None:
     app.add_handler(CommandHandler("kill", cmd_kill))
     app.add_handler(CommandHandler("model", cmd_model))
     app.add_handler(CallbackQueryHandler(callback_model, pattern=r"^model:"))
+    app.add_handler(CommandHandler("effort", cmd_effort))
+    app.add_handler(CallbackQueryHandler(callback_effort, pattern=r"^effort:"))
     app.add_handler(CommandHandler("remote_control", cmd_remote_control))
     app.add_handler(CommandHandler("restart", cmd_restart))
     app.add_handler(CommandHandler("ping", cmd_ping))
