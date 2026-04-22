@@ -107,7 +107,7 @@ from stargate.quota import (  # noqa: E402
     is_quota_error as _is_quota_error_impl,
 )
 from stargate.activity import log_activity  # noqa: E402
-from stargate.outbound import get_recent_outbound  # noqa: E402
+from stargate.outbound import get_recent_outbound, log_outbound_response  # noqa: E402
 from stargate.models import (  # noqa: E402
     VALID_MODELS,
     extract_model_prefix,
@@ -432,17 +432,27 @@ async def _send_response(bot, chat_id: int, thread_id: int | None, response: str
     Each chunk is sent with MarkdownV2 formatting when possible, falling
     back to plain text if conversion or rendering fails. Retries each
     chunk up to SEND_RETRY_ATTEMPTS times with exponential backoff.
+
+    Every send attempt's outcome is recorded to the outbound audit log
+    (source="claude-response") for diagnosing client-side render drops
+    — see CTB-80f. Audit failures are swallowed: they must never affect
+    user-visible send behavior.
     """
     send_kwargs: dict = {"chat_id": chat_id}
     if thread_id is not None:
         send_kwargs["message_thread_id"] = thread_id
+    audit_session_key = _session_key(chat_id, thread_id)
+    chunk_total = max(1, (len(response) + TELEGRAM_MSG_LIMIT - 1) // TELEGRAM_MSG_LIMIT)
+    chunk_index = -1
     for i in range(0, len(response), TELEGRAM_MSG_LIMIT):
+        chunk_index += 1
         chunk = response[i : i + TELEGRAM_MSG_LIMIT]
         md_chunk = _to_markdownv2(chunk)
         last_exc: Exception | None = None
         for attempt in range(SEND_RETRY_ATTEMPTS):
+            sent_as_md = md_chunk is not None
             try:
-                if md_chunk is not None:
+                if sent_as_md:
                     await bot.send_message(
                         text=md_chunk,
                         parse_mode=ParseMode.MARKDOWN_V2,
@@ -451,6 +461,18 @@ async def _send_response(bot, chat_id: int, thread_id: int | None, response: str
                 else:
                     await bot.send_message(text=chunk, **send_kwargs)
                 last_exc = None
+                try:
+                    log_outbound_response(
+                        session_key=audit_session_key,
+                        chunk_index=chunk_index,
+                        chunk_total=chunk_total,
+                        raw=chunk,
+                        md=md_chunk if sent_as_md else None,
+                        parse_mode="MarkdownV2" if sent_as_md else "plain",
+                        status="ok",
+                    )
+                except Exception as audit_exc:
+                    logger.debug("outbound audit log failed (success path): %s", audit_exc)
                 break
             except Exception as e:
                 last_exc = e
@@ -481,6 +503,18 @@ async def _send_response(bot, chat_id: int, thread_id: int | None, response: str
                 i,
                 last_exc,
             )
+            try:
+                log_outbound_response(
+                    session_key=audit_session_key,
+                    chunk_index=chunk_index,
+                    chunk_total=chunk_total,
+                    raw=chunk,
+                    md=None,
+                    parse_mode="plain" if md_chunk is None else "MarkdownV2",
+                    status=type(last_exc).__name__,
+                )
+            except Exception as audit_exc:
+                logger.debug("outbound audit log failed (error path): %s", audit_exc)
             raise last_exc
 
 

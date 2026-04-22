@@ -175,6 +175,105 @@ class TestMarkdownV2:
 
 
 # ---------------------------------------------------------------------------
+# Outbound audit logging (CTB-80f)
+# ---------------------------------------------------------------------------
+
+
+class TestOutboundAudit:
+    """_send_response writes an audit entry per chunk to outbound/."""
+
+    @pytest.fixture(autouse=True)
+    def _fast_retries(self, monkeypatch):
+        import bridge
+
+        monkeypatch.setattr(bridge, "SEND_RETRY_BASE_DELAY", 0.0)
+        monkeypatch.setattr(bridge, "SEND_RETRY_ATTEMPTS", 3)
+
+    @pytest.fixture
+    def outbound_dir(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("stargate.outbound.OUTBOUND_DIR", tmp_path)
+        return tmp_path
+
+    @pytest.mark.asyncio
+    async def test_logs_successful_markdownv2_send(self, outbound_dir):
+        import json
+
+        import bridge
+
+        bot = MagicMock()
+        bot.send_message = AsyncMock()
+        await bridge._send_response(bot, 111, None, "**bold**")
+        lines = (outbound_dir / "111.jsonl").read_text().strip().splitlines()
+        assert len(lines) == 1
+        entry = json.loads(lines[0])
+        assert entry["source"] == "claude-response"
+        assert entry["parse_mode"] == "MarkdownV2"
+        assert entry["http_status"] == "ok"
+        assert entry["chunk_index"] == 0
+        assert entry["chunk_total"] == 1
+        assert entry["raw_text"] == "**bold**"
+        assert entry["md_text"] is not None
+
+    @pytest.mark.asyncio
+    async def test_logs_plain_fallback_after_markdownv2_failure(self, outbound_dir):
+        """When MarkdownV2 raises and the plain retry succeeds, the audit
+        entry reflects the parse_mode actually delivered to Telegram (plain)."""
+        import json
+
+        import bridge
+
+        bot = MagicMock()
+        bot.send_message = AsyncMock(side_effect=[Exception("bad entity"), None])
+        await bridge._send_response(bot, 111, None, "whatever")
+        assert bot.send_message.call_count == 2
+        lines = (outbound_dir / "111.jsonl").read_text().strip().splitlines()
+        assert len(lines) == 1
+        entry = json.loads(lines[0])
+        assert entry["parse_mode"] == "plain"
+        assert entry["md_text"] is None
+        assert entry["http_status"] == "ok"
+
+    @pytest.mark.asyncio
+    async def test_logs_failure_after_all_retries(self, outbound_dir):
+        """When every retry fails, a single final audit entry captures
+        the exception class name under http_status."""
+        import json
+
+        import bridge
+
+        bot = MagicMock()
+        bot.send_message = AsyncMock(side_effect=RuntimeError("telegram down"))
+        with pytest.raises(RuntimeError):
+            await bridge._send_response(bot, 111, None, "hello")
+        lines = (outbound_dir / "111.jsonl").read_text().strip().splitlines()
+        assert len(lines) == 1
+        entry = json.loads(lines[0])
+        assert entry["source"] == "claude-response"
+        assert entry["http_status"] == "RuntimeError"
+        assert entry["chunk_index"] == 0
+        assert entry["chunk_total"] == 1
+
+    @pytest.mark.asyncio
+    async def test_logs_one_entry_per_chunk_with_thread_id(self, outbound_dir):
+        """A multi-chunk response produces one audit entry per chunk,
+        with session_key including the thread_id."""
+        import json
+
+        import bridge
+
+        bot = MagicMock()
+        bot.send_message = AsyncMock()
+        text = "X" * (bridge.TELEGRAM_MSG_LIMIT + 50)
+        await bridge._send_response(bot, 111, 42, text)
+        lines = (outbound_dir / "111_42.jsonl").read_text().strip().splitlines()
+        assert len(lines) == 2
+        entries = [json.loads(line) for line in lines]
+        assert [e["chunk_index"] for e in entries] == [0, 1]
+        assert all(e["chunk_total"] == 2 for e in entries)
+        assert all(e["session_key"] == "111_42" for e in entries)
+
+
+# ---------------------------------------------------------------------------
 # keep_typing
 # ---------------------------------------------------------------------------
 
