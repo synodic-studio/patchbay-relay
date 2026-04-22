@@ -1,5 +1,5 @@
 """Tests for Telegram helper functions in bridge.py:
-_send_response, keep_typing, _check_auth, _send_auth_link, _notify_delivery_failure.
+_send_response, keep_typing, _notify_delivery_failure.
 """
 
 import asyncio
@@ -22,6 +22,10 @@ class TestSendResponse:
 
         monkeypatch.setattr(bridge, "SEND_RETRY_BASE_DELAY", 0.0)
         monkeypatch.setattr(bridge, "SEND_RETRY_ATTEMPTS", 3)
+        # Disable MarkdownV2 conversion so chunking tests can assert
+        # verbatim chunk contents. Dedicated markdown tests below cover
+        # the MarkdownV2 send path.
+        monkeypatch.setattr(bridge, "_to_markdownv2", lambda _text: None)
 
     # -- chunking -----------------------------------------------------------
 
@@ -78,13 +82,10 @@ class TestSendResponse:
 
         bot = MagicMock()
         bot.send_message = AsyncMock()
-        # 4096 * 4 + 1 = 16385 -> 5 chunks
         text = "D" * (4096 * 4 + 1)
         await bridge._send_response(bot, 111, None, text)
         assert bot.send_message.call_count == 5
-        reassembled = "".join(
-            call.kwargs["text"] for call in bot.send_message.call_args_list
-        )
+        reassembled = "".join(call.kwargs["text"] for call in bot.send_message.call_args_list)
         assert reassembled == text
 
     # -- thread_id ----------------------------------------------------------
@@ -124,6 +125,56 @@ class TestSendResponse:
 
 
 # ---------------------------------------------------------------------------
+# MarkdownV2 rendering
+# ---------------------------------------------------------------------------
+
+
+class TestMarkdownV2:
+    """_send_response renders MarkdownV2 when conversion succeeds."""
+
+    @pytest.fixture(autouse=True)
+    def _fast_retries(self, monkeypatch):
+        import bridge
+
+        monkeypatch.setattr(bridge, "SEND_RETRY_BASE_DELAY", 0.0)
+        monkeypatch.setattr(bridge, "SEND_RETRY_ATTEMPTS", 3)
+
+    @pytest.mark.asyncio
+    async def test_sends_with_markdownv2_parse_mode(self):
+        import bridge
+        from telegram.constants import ParseMode
+
+        bot = MagicMock()
+        bot.send_message = AsyncMock()
+        await bridge._send_response(bot, 111, None, "**bold** and _italic_")
+        bot.send_message.assert_called_once()
+        assert bot.send_message.call_args.kwargs["parse_mode"] == ParseMode.MARKDOWN_V2
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_plain_on_markdown_send_error(self):
+        import bridge
+
+        bot = MagicMock()
+        # First call (MarkdownV2) raises; subsequent plain call succeeds.
+        bot.send_message = AsyncMock(side_effect=[Exception("bad entity"), None])
+        await bridge._send_response(bot, 111, None, "whatever")
+        assert bot.send_message.call_count == 2
+        assert "parse_mode" in bot.send_message.call_args_list[0].kwargs
+        assert "parse_mode" not in bot.send_message.call_args_list[1].kwargs
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_plain_when_conversion_returns_none(self, monkeypatch):
+        import bridge
+
+        monkeypatch.setattr(bridge, "_to_markdownv2", lambda _text: None)
+        bot = MagicMock()
+        bot.send_message = AsyncMock()
+        await bridge._send_response(bot, 111, None, "plain text")
+        bot.send_message.assert_called_once()
+        assert "parse_mode" not in bot.send_message.call_args.kwargs
+
+
+# ---------------------------------------------------------------------------
 # keep_typing
 # ---------------------------------------------------------------------------
 
@@ -146,8 +197,6 @@ class TestKeepTyping:
         stop = asyncio.Event()
         stop.set()
         await bridge.keep_typing(111, None, stop, bot)
-        # It may send one action before checking the event,
-        # but it must not loop forever.
         assert bot.send_chat_action.call_count <= 1
 
     @pytest.mark.asyncio
@@ -184,132 +233,8 @@ class TestKeepTyping:
             stop.set()
 
         asyncio.create_task(_set_after_brief())
-        # Should not raise
         await bridge.keep_typing(333, None, stop, bot)
-        # It tried at least once
         assert bot.send_chat_action.call_count >= 1
-
-
-# ---------------------------------------------------------------------------
-# _check_auth
-# ---------------------------------------------------------------------------
-
-
-class TestCheckAuth:
-    """_check_auth gates on AUTH_REQUIRED and auth module."""
-
-    @pytest.mark.asyncio
-    async def test_auth_not_required_returns_true(self, monkeypatch):
-        import bridge
-
-        monkeypatch.setattr(bridge, "AUTH_REQUIRED", False)
-        update = MagicMock()
-        result = await bridge._check_auth(update)
-        assert result is True
-
-    @pytest.mark.asyncio
-    async def test_auth_required_authenticated(self, monkeypatch):
-        import auth
-        import bridge
-
-        monkeypatch.setattr(bridge, "AUTH_REQUIRED", True)
-        monkeypatch.setattr(auth, "is_authenticated", lambda uid: True)
-        touch_calls = []
-        monkeypatch.setattr(auth, "touch_session", lambda uid: touch_calls.append(uid))
-
-        update = MagicMock()
-        update.effective_user.id = 42
-        result = await bridge._check_auth(update)
-        assert result is True
-        assert touch_calls == [42]
-
-    @pytest.mark.asyncio
-    async def test_auth_required_not_authenticated(self, monkeypatch):
-        import auth
-        import bridge
-
-        monkeypatch.setattr(bridge, "AUTH_REQUIRED", True)
-        monkeypatch.setattr(auth, "is_authenticated", lambda uid: False)
-
-        update = MagicMock()
-        update.effective_user.id = 99
-        result = await bridge._check_auth(update)
-        assert result is False
-
-    @pytest.mark.asyncio
-    async def test_touch_session_called_on_success(self, monkeypatch):
-        import auth
-        import bridge
-
-        monkeypatch.setattr(bridge, "AUTH_REQUIRED", True)
-        monkeypatch.setattr(auth, "is_authenticated", lambda uid: True)
-        touched = []
-        monkeypatch.setattr(auth, "touch_session", lambda uid: touched.append(uid))
-
-        update = MagicMock()
-        update.effective_user.id = 7
-        await bridge._check_auth(update)
-        assert 7 in touched
-
-    @pytest.mark.asyncio
-    async def test_touch_session_not_called_on_failure(self, monkeypatch):
-        import auth
-        import bridge
-
-        monkeypatch.setattr(bridge, "AUTH_REQUIRED", True)
-        monkeypatch.setattr(auth, "is_authenticated", lambda uid: False)
-        touched = []
-        monkeypatch.setattr(auth, "touch_session", lambda uid: touched.append(uid))
-
-        update = MagicMock()
-        update.effective_user.id = 8
-        await bridge._check_auth(update)
-        assert touched == []
-
-
-# ---------------------------------------------------------------------------
-# _send_auth_link
-# ---------------------------------------------------------------------------
-
-
-class TestSendAuthLink:
-    """_send_auth_link generates a token and sends a link, or rejects rate-limited users."""
-
-    @pytest.mark.asyncio
-    async def test_normal_flow_sends_link(self, monkeypatch):
-        import auth
-        import bridge
-
-        monkeypatch.setattr(auth, "is_rate_limited", lambda uid: False)
-        monkeypatch.setattr(auth, "generate_auth_token", lambda uid: "tok-abc")
-        monkeypatch.setattr(bridge, "AUTH_BASE_URL", "https://auth.example.com")
-
-        update = MagicMock()
-        update.effective_user.id = 50
-        update.message.reply_text = AsyncMock()
-
-        await bridge._send_auth_link(update)
-        update.message.reply_text.assert_called_once()
-        sent_text = update.message.reply_text.call_args[0][0]
-        assert "https://auth.example.com/login?token=tok-abc" in sent_text
-        assert "15 minutes" in sent_text
-
-    @pytest.mark.asyncio
-    async def test_rate_limited_sends_rejection(self, monkeypatch):
-        import auth
-        import bridge
-
-        monkeypatch.setattr(auth, "is_rate_limited", lambda uid: True)
-
-        update = MagicMock()
-        update.effective_user.id = 60
-        update.message.reply_text = AsyncMock()
-
-        await bridge._send_auth_link(update)
-        update.message.reply_text.assert_called_once()
-        sent_text = update.message.reply_text.call_args[0][0]
-        assert "too many failed attempts" in sent_text.lower()
-        assert "15 minutes" in sent_text.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -358,6 +283,5 @@ class TestNotifyDeliveryFailure:
 
         bot = MagicMock()
         bot.send_message = AsyncMock(side_effect=Exception("notification also failed"))
-        # Should NOT raise
         await bridge._notify_delivery_failure(bot, 111, None, "test-label")
         bot.send_message.assert_called_once()

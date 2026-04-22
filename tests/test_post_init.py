@@ -45,9 +45,7 @@ class TestPostInit:
         monkeypatch.setattr(bridge, "STALL_POLL_INTERVAL", 999)
         monkeypatch.setattr(bridge, "STALL_TIMEOUT", 999)
         # Prevent real chat_projects loading
-        monkeypatch.setattr(
-            stargate.projects, "CHAT_PROJECTS_FILE", tmp_path / "cp.json"
-        )
+        monkeypatch.setattr(stargate.projects, "CHAT_PROJECTS_FILE", tmp_path / "cp.json")
         bridge._bot_instance = None
         self._tmp = tmp_path
 
@@ -127,16 +125,6 @@ class TestPostInit:
         assert not notify_file.exists()
 
     @pytest.mark.asyncio
-    async def test_sets_auth_notify_callback(self):
-        app_mock = _make_app_mock()
-        with (
-            patch("bridge._stall_detector", new_callable=AsyncMock),
-            patch("auth.set_notify_callback") as mock_set,
-        ):
-            await bridge.post_init(app_mock)
-        mock_set.assert_called_once_with(bridge._auth_notify)
-
-    @pytest.mark.asyncio
     async def test_starts_stall_detector(self):
         app_mock = _make_app_mock()
         import asyncio
@@ -200,9 +188,7 @@ class TestReplayPendingLive:
             await bridge.replay_pending(bot)
 
         bot.send_message.assert_called()
-        sent_text = bot.send_message.call_args.kwargs.get(
-            "text", bot.send_message.call_args[1].get("text", "")
-        )
+        sent_text = bot.send_message.call_args.kwargs.get("text", bot.send_message.call_args[1].get("text", ""))
         assert "Recovered" in sent_text
         assert "Replayed response" in sent_text
         # Pending file should be deleted
@@ -229,9 +215,7 @@ class TestReplayPendingLive:
             await bridge.replay_pending(bot)
 
         bot.send_message.assert_called()
-        sent_text = bot.send_message.call_args.kwargs.get(
-            "text", bot.send_message.call_args[1].get("text", "")
-        )
+        sent_text = bot.send_message.call_args.kwargs.get("text", bot.send_message.call_args[1].get("text", ""))
         assert "Error" in sent_text
 
     @pytest.mark.asyncio

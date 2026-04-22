@@ -6,7 +6,7 @@ import os
 from contextlib import contextmanager
 from pathlib import Path
 
-from .config import CHAT_PROJECTS_FILE, WORKING_DIR
+from .config import CHAT_PROJECTS_FILE, WORKING_DIR, atomic_write_text, quarantine_file
 
 _PROJECTS_LOCK_FILE = CHAT_PROJECTS_FILE.parent / ".chat_projects.lock"
 
@@ -24,18 +24,23 @@ def _projects_lock():
 
 
 def _load_chat_projects() -> dict[str, str]:
-    """Load session_key -> relative project path mapping."""
-    if CHAT_PROJECTS_FILE.exists():
-        try:
-            return json.loads(CHAT_PROJECTS_FILE.read_text())
-        except (json.JSONDecodeError, TypeError):
-            return {}
-    return {}
+    """Load session_key -> relative project path mapping. Quarantine on corruption."""
+    if not CHAT_PROJECTS_FILE.exists():
+        return {}
+    try:
+        data = json.loads(CHAT_PROJECTS_FILE.read_text())
+        if isinstance(data, dict):
+            return data
+        quarantine_file(CHAT_PROJECTS_FILE, "not a dict")
+        return {}
+    except (json.JSONDecodeError, TypeError, OSError) as e:
+        quarantine_file(CHAT_PROJECTS_FILE, f"corrupt: {e}")
+        return {}
 
 
 def _save_chat_projects(projects: dict[str, str]) -> None:
-    """Write the chat projects mapping to disk."""
-    CHAT_PROJECTS_FILE.write_text(json.dumps(projects, indent=2) + "\n")
+    """Write the chat projects mapping to disk. Atomic."""
+    atomic_write_text(CHAT_PROJECTS_FILE, json.dumps(projects, indent=2) + "\n")
 
 
 def _parse_project_entry(entry) -> tuple[str | None, str | None]:
@@ -84,10 +89,6 @@ def set_chat_project(session_key: str, rel_path: str | None) -> None:
 def get_all_projects() -> list[str]:
     """Return all project directory names sorted alphabetically."""
     dev_path = Path(WORKING_DIR)
-    dirs = [
-        d.name
-        for d in dev_path.iterdir()
-        if d.is_dir() and not d.name.startswith((".", "_"))
-    ]
+    dirs = [d.name for d in dev_path.iterdir() if d.is_dir() and not d.name.startswith((".", "_"))]
     dirs.sort(key=str.lower)
     return dirs

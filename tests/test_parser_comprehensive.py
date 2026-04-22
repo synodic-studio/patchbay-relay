@@ -395,9 +395,8 @@ class TestParseClaudeResponseEdgeCases:
         ]
         stdout = json.dumps(events)
         result = parse_claude_response(stdout, "test_key")
-        assert "turn limit" in result
-        # Should not start with \n\n when there's no preceding text
-        assert result.startswith("\n\n[")
+        assert "produced no text response" in result
+        assert "Reply to continue" in result
 
     @patch("stargate.parser.save_session_id")
     def test_max_turns_via_result_subtype_key(self, mock_save):

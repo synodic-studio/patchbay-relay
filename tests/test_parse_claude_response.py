@@ -125,10 +125,7 @@ class TestParseClaudeResponse:
         result = bridge.parse_claude_response(stdout, session_key)
 
         assert "reached limit" in result
-        assert (
-            "[Reached 30-turn limit. Session preserved — reply to continue or check beads for queued tasks.]"
-            in result
-        )
+        assert "turn limit. Session preserved" in result
 
     def test_no_events_returns_stdout_or_fallback(self):
         """Test that when no events are parsed, returns stdout or fallback."""

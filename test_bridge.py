@@ -11,8 +11,8 @@ BRIDGE_DIR = Path(__file__).parent
 def _import_bridge(env_overrides: dict) -> subprocess.CompletedProcess:
     """Import bridge.py in a subprocess with the given environment overrides.
 
-    pass-cli and security are unavailable in CI, so TELEGRAM_BOT_TOKEN is
-    provided directly to bypass the keychain lookup and the BOT_TOKEN check.
+    pass (password-store) may be unavailable in CI, so TELEGRAM_BOT_TOKEN is
+    provided directly to bypass the secret lookup and the BOT_TOKEN check.
     """
     env = {
         **os.environ,

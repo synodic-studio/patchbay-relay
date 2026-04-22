@@ -28,7 +28,10 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent / ".env")
 
+import telegramify_markdown  # noqa: E402
+from telegramify_markdown.customize import get_runtime_config  # noqa: E402
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update  # noqa: E402
+from telegram.constants import ParseMode  # noqa: E402
 from telegram.ext import (  # noqa: E402
     Application,
     CallbackQueryHandler,
@@ -37,6 +40,16 @@ from telegram.ext import (  # noqa: E402
     MessageHandler,
     filters,
 )
+
+# Configure telegramify-markdown: no emoji prefixes for headings
+_tgmd_config = get_runtime_config()
+_tgmd_sym = _tgmd_config.markdown_symbol
+_tgmd_sym.head_level_1 = ">"
+_tgmd_sym.head_level_2 = ">>"
+_tgmd_sym.head_level_3 = ">>>"
+_tgmd_sym.head_level_4 = ">>>"
+_tgmd_sym.image = ""
+_tgmd_sym.link = ""
 
 # ---------------------------------------------------------------------------
 # Import from package modules — these are the canonical implementations.
@@ -79,7 +92,9 @@ from stargate.sessions import (  # noqa: E402
     _session_key,
     clear_pending,
     clear_session,
+    consume_stall_kill,
     get_session_id,
+    mark_stall_kill,
     save_pending,
     save_session_id,  # noqa: F401 — used by tests via bridge.save_session_id
 )
@@ -177,8 +192,20 @@ def run_claude(message: str, session_key: str, _retry: bool = False, model: str 
         "CRITICAL: Your FINAL output MUST be a text response to Adrien — never end on a tool call. "
         "If you've done work via tools, summarize what you did in a short text message at the end. "
         "If you don't produce text, Adrien sees '(no parseable response)' which is a failure.\n\n"
-        "FORMATTING: Telegram renders messages as plain text — no markdown. "
-        "For any tabular or structured data, use ASCII art (aligned columns, dashes, box-drawing characters).\n\n"
+        "FORMATTING: Telegram renders your replies as MarkdownV2 (converted from standard markdown by the bridge). "
+        "Use normal markdown — `inline code`, ```code blocks```, **bold**, *italic*, bullet lists, and block quotes all render. "
+        "Tables are NOT supported by Telegram and will be rendered as a plain code block, so prefer bullet lists or "
+        "ASCII-aligned columns inside a ``` code block for tabular data.\n\n"
+        "HEADLESS-ONLY — READ THIS CAREFULLY: You are running as a launchd LaunchAgent on a Mac Mini "
+        "that Bryan is NOT sitting in front of. He is on his phone via Telegram. Any command that "
+        "requires GUI interaction, macOS TCC permission dialogs, or Accessibility/Screen Recording "
+        "access will silently hang you for 30 minutes until the stall detector kills the process. "
+        "NEVER run these: XCUITest, `xcodebuild test` with UI test targets, `tuist test` with UI tests, "
+        "`open -a`, `osascript` targeting GUI apps you haven't pre-approved, Simulator boot/launch, "
+        "Instruments, Accessibility Inspector, anything requiring Screen Recording. If a task truly "
+        "requires one of these, STOP and tell Bryan — don't try to run it. Prefer `swift test`, unit "
+        "tests only, `tuist build` over `tuist test`, and static analysis/grep over runtime inspection. "
+        "When in doubt whether a command is headless-safe, ask before running it.\n\n"
         "SHARED FILES: There is a ProtonDrive folder synced to this machine. "
         "Find it at ~/Library/CloudStorage/ProtonDrive-*/Claude-Support (glob for the exact path). "
         "You can drop files there (documents, images, exports) for Bryan to access from any device. "
@@ -213,6 +240,21 @@ def run_claude(message: str, session_key: str, _retry: bool = False, model: str 
             f"CLAUDE.md has the full loading order — follow it. "
             f"Do NOT read other agents' files. You are ONLY the {agent_name} agent. "
             f"Skip MEMORY.md in Telegram context (per Fanta conventions)."
+        )
+
+    # If the previous run was killed by the stall detector, warn this run
+    # against repeating whatever headless-unsafe command likely hung it.
+    stall_info = consume_stall_kill(session_key)
+    if stall_info:
+        idle_min = stall_info.get("idle_minutes", 0)
+        system_prompt += (
+            f"\n\nPRIOR RUN KILLED: Your previous invocation in this session was terminated by the "
+            f"stall detector after {idle_min:.0f} minutes of zero CPU with no output. The most likely "
+            "cause is that you ran a command requiring a macOS TCC/GUI permission dialog (XCUITest, "
+            "`xcodebuild test` with UI tests, `osascript` targeting a GUI app you hadn't pre-approved, "
+            "Simulator boot, Instruments, etc.). Bryan is on his phone — he cannot click the dialog. "
+            "Look at your last tool call in the conversation history, DO NOT RETRY IT, and pick a "
+            "headless-safe alternative (swift test, tuist build, unit tests, static analysis)."
         )
 
     cmd = [
@@ -376,25 +418,47 @@ async def keep_typing(
             continue
 
 
+def _to_markdownv2(text: str) -> str | None:
+    """Convert markdown to Telegram MarkdownV2. Returns None on failure."""
+    try:
+        return telegramify_markdown.markdownify(text)
+    except Exception:
+        return None
+
+
 async def _send_response(bot, chat_id: int, thread_id: int | None, response: str) -> None:
     """Send a response, splitting at Telegram's message limit.
 
-    Retries each chunk up to SEND_RETRY_ATTEMPTS times with exponential
-    backoff before giving up.
+    Each chunk is sent with MarkdownV2 formatting when possible, falling
+    back to plain text if conversion or rendering fails. Retries each
+    chunk up to SEND_RETRY_ATTEMPTS times with exponential backoff.
     """
     send_kwargs: dict = {"chat_id": chat_id}
     if thread_id is not None:
         send_kwargs["message_thread_id"] = thread_id
     for i in range(0, len(response), TELEGRAM_MSG_LIMIT):
         chunk = response[i : i + TELEGRAM_MSG_LIMIT]
+        md_chunk = _to_markdownv2(chunk)
         last_exc: Exception | None = None
         for attempt in range(SEND_RETRY_ATTEMPTS):
             try:
-                await bot.send_message(text=chunk, **send_kwargs)
+                if md_chunk is not None:
+                    await bot.send_message(
+                        text=md_chunk,
+                        parse_mode=ParseMode.MARKDOWN_V2,
+                        **send_kwargs,
+                    )
+                else:
+                    await bot.send_message(text=chunk, **send_kwargs)
                 last_exc = None
                 break
             except Exception as e:
                 last_exc = e
+                # If the markdown variant failed (likely malformed entities),
+                # drop markdown and retry the remaining attempts as plain text.
+                if md_chunk is not None:
+                    logger.debug("MarkdownV2 send failed, falling back to plain: %s", e)
+                    md_chunk = None
                 delay = SEND_RETRY_BASE_DELAY * (2**attempt)
                 logger.warning(
                     "Telegram send failed (attempt %d/%d) for chat=%s thread=%s chunk_start=%d: %s — retrying in %.1fs",
@@ -822,7 +886,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/remote-control stop - Stop remote-control\n"
         "/kill - Kill active Claude process\n"
         "/restart - Restart the bridge\n"
-        "/ping - Check if bridge is alive\n\n"
+        "/ping - Check if bridge is alive\n"
+        "/usage - Show Claude Code usage (cost + tokens)\n\n"
         "Each forum topic runs as an independent Claude session."
     )
 
@@ -1190,6 +1255,83 @@ async def cmd_remote_control(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
 
 
+def _format_usd(amount: float) -> str:
+    return f"${amount:,.2f}"
+
+
+def _format_tokens(n: int) -> str:
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n / 1_000:.1f}K"
+    return str(n)
+
+
+async def cmd_usage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show Claude Code usage: current 5-hour block + today's totals."""
+    try:
+        blocks_proc = await asyncio.to_thread(
+            subprocess.run,
+            ["ccusage", "blocks", "--active", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        daily_proc = await asyncio.to_thread(
+            subprocess.run,
+            ["ccusage", "daily", "--json", "--since", time.strftime("%Y%m%d")],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+        await update.message.reply_text(f"usage check failed: {e}")
+        return
+
+    lines: list[str] = []
+
+    try:
+        blocks = json.loads(blocks_proc.stdout).get("blocks", [])
+        if blocks:
+            b = blocks[0]
+            cost = b.get("costUSD", 0.0)
+            total_tokens = b.get("totalTokens", 0)
+            proj = b.get("projection") or {}
+            burn = b.get("burnRate") or {}
+            remaining = proj.get("remainingMinutes", 0)
+            hrs, mins = divmod(int(remaining), 60)
+            lines.append("Active 5h block:")
+            lines.append(f"  spent:     {_format_usd(cost)} ({_format_tokens(total_tokens)} tok)")
+            if proj.get("totalCost") is not None:
+                lines.append(f"  projected: {_format_usd(proj['totalCost'])} @ end")
+            if burn.get("costPerHour") is not None:
+                lines.append(f"  burn:      {_format_usd(burn['costPerHour'])}/hr")
+            lines.append(f"  remaining: {hrs}h{mins:02d}m")
+        else:
+            lines.append("Active 5h block: (none)")
+    except (json.JSONDecodeError, KeyError, TypeError) as e:
+        lines.append(f"blocks parse error: {e}")
+
+    lines.append("")
+
+    try:
+        daily = json.loads(daily_proc.stdout).get("daily", [])
+        if daily:
+            d = daily[-1]
+            lines.append(f"Today ({d.get('date', '?')}):")
+            lines.append(f"  cost:   {_format_usd(d.get('totalCost', 0.0))}")
+            lines.append(f"  tokens: {_format_tokens(d.get('totalTokens', 0))}")
+            for mb in d.get("modelBreakdowns", []):
+                name = mb.get("modelName", "?").replace("claude-", "").replace("-20251001", "")
+                lines.append(f"    {name:<16} {_format_usd(mb.get('cost', 0.0))}")
+        else:
+            lines.append("Today: (no usage)")
+    except (json.JSONDecodeError, KeyError, TypeError) as e:
+        lines.append(f"daily parse error: {e}")
+
+    await update.message.reply_text("\n".join(lines))
+
+
 async def cmd_ping(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not _processing_sessions:
         await update.message.reply_text("pong — no active sessions")
@@ -1257,6 +1399,10 @@ async def _stall_detector() -> None:
                 )
                 proc.kill()
                 _proc_last_active.pop(key, None)
+                try:
+                    mark_stall_kill(key, stall_duration / 60)
+                except ValueError:
+                    pass  # invalid session key format — skip marker
                 _log_activity(
                     "process_kill",
                     session_key=key,
@@ -1277,7 +1423,7 @@ async def _stall_detector() -> None:
                         if thread_id is not None:
                             send_kwargs["message_thread_id"] = thread_id
                         await _bot_instance.send_message(
-                            text=f"Killed stalled Claude process (idle {stall_duration / 60:.0f} min). Send your message again to retry.",
+                            text=f"Killed stalled Claude ({stall_duration / 60:.0f} min idle). Send again to retry.",
                             **send_kwargs,
                         )
                     except Exception:
@@ -1323,6 +1469,7 @@ async def post_init(app: Application) -> None:
         BotCommand("kill", "Kill active Claude process"),
         BotCommand("restart", "Restart the bridge"),
         BotCommand("ping", "Check if bridge is alive"),
+        BotCommand("usage", "Show Claude Code usage (cost + tokens)"),
     ]
     await app.bot.set_my_commands(commands)
     logger.info("Bot commands registered with Telegram")
@@ -1364,7 +1511,7 @@ async def post_init(app: Application) -> None:
     except Exception:
         logger.debug("Failed to clean up expired sessions")
 
-    await replay_pending(app.bot)
+    asyncio.create_task(replay_pending(app.bot))
 
     restart_notify = RESTART_NOTIFY_FILE
     if restart_notify.exists():
@@ -1426,6 +1573,14 @@ def _graceful_shutdown(signum: int, frame) -> None:
 
 
 def main() -> None:
+    # Single-instance guard FIRST — before any Telegram polling starts.
+    # Prevents two bridges racing on getUpdates (409 storm, CTB-72m).
+    from stargate.log_filters import install_filters
+    from stargate.singleton import acquire_singleton
+
+    acquire_singleton()
+    install_filters()
+
     signal.signal(signal.SIGTERM, _graceful_shutdown)
     signal.signal(signal.SIGINT, _graceful_shutdown)
 
@@ -1443,6 +1598,7 @@ def main() -> None:
     app.add_handler(CommandHandler("remote_control", cmd_remote_control))
     app.add_handler(CommandHandler("restart", cmd_restart))
     app.add_handler(CommandHandler("ping", cmd_ping))
+    app.add_handler(CommandHandler("usage", cmd_usage))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))

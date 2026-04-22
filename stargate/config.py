@@ -4,6 +4,7 @@ All configuration is centralized here. Other modules import from this module
 rather than reading os.environ directly.
 """
 
+import json
 import logging
 import os
 import re
@@ -102,9 +103,13 @@ SEND_RETRY_BASE_DELAY = 1.0  # seconds; doubles each retry
 MAX_QUEUED_MESSAGES = 20  # max pending messages per session before dropping
 
 # --- Stall detection ---
+# Claude CLI is API-bound, so CPU hovers near zero during normal operation.
+# CPU-idleness alone is not a reliable hang signal; legitimate long runs get
+# reaped. Default is 40 min — tolerates real long work while still catching
+# TCC/GUI-dialog hangs eventually. Env-overridable.
 STALL_POLL_INTERVAL = 120  # check every 2 minutes
 STALL_CPU_THRESHOLD = 1.0  # %CPU below this = idle
-STALL_TIMEOUT = 600  # kill after 10 min of near-zero CPU
+STALL_TIMEOUT = int(os.environ.get("STALL_TIMEOUT", "2400"))  # 40 min
 
 # --- Shutdown ---
 SHUTDOWN_PROCESS_TIMEOUT = 30  # seconds to wait for active processes
@@ -122,3 +127,71 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
 )
 logger = logging.getLogger("bridge")
+
+
+# --- Persistence helpers ---
+QUARANTINE_DIR = BASE_DIR / ".quarantine"
+
+
+def atomic_write_text(path: Path, data: str, mode: int = 0o600) -> None:
+    """Atomically write text to path via temp-file + rename.
+
+    Prevents partial writes from poisoning JSON state when the process
+    crashes or the disk fills mid-write. On success the destination has
+    the given mode; on failure the destination is untouched.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
+    try:
+        tmp.write_text(data)
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except OSError:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+def quarantine_file(path: Path, reason: str) -> Path | None:
+    """Move a corrupt state file aside so we stop tripping on it.
+
+    The self-healing principle: we never silently unlink user-reachable
+    data, we move it to a sibling .quarantine/ dir next to the original
+    file with a timestamp so it can be inspected later. Using a sibling
+    (rather than one global dir) keeps tests' tmp paths isolated.
+    Returns the new path, or None if the move failed.
+    """
+    if not path.exists():
+        return None
+    try:
+        quarantine_dir = path.parent / ".quarantine"
+        quarantine_dir.mkdir(parents=True, exist_ok=True)
+        import time as _t
+
+        dest = quarantine_dir / f"{path.name}.{int(_t.time())}.bad"
+        os.replace(path, dest)
+        logger.warning("Quarantined %s -> %s (%s)", path, dest, reason)
+        return dest
+    except OSError as e:
+        logger.error("Failed to quarantine %s: %s", path, e)
+        return None
+
+
+def safe_load_json(path: Path, expected_keys: tuple[str, ...] = ()) -> dict | list | None:
+    """Load JSON, quarantining the file on corruption or schema mismatch.
+
+    Returns the parsed object, or None if the file is missing / invalid
+    (in which case the bad file has been moved to .quarantine/).
+    """
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as e:
+        quarantine_file(path, f"unreadable: {e}")
+        return None
+    if expected_keys and isinstance(data, dict):
+        missing = [k for k in expected_keys if k not in data]
+        if missing:
+            quarantine_file(path, f"missing keys: {missing}")
+            return None
+    return data

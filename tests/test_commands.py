@@ -1,6 +1,7 @@
 """Comprehensive tests for Telegram command handlers in bridge.py."""
 
 import json
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -243,7 +244,7 @@ class TestCallbackSetproject:
 class TestCmdKill:
     @pytest.fixture(autouse=True)
     def _isolate(self, monkeypatch):
-        monkeypatch.setattr(bridge, "ALLOWED_USER_IDS", set())
+        monkeypatch.setattr(bridge, "_active_procs", {})
 
     @pytest.mark.asyncio
     async def test_kills_active_process(self):
@@ -260,8 +261,6 @@ class TestCmdKill:
         reply = update.message.reply_text.call_args[0][0]
         assert "Killed" in reply
 
-        bridge._active_procs.pop("1_2", None)
-
     @pytest.mark.asyncio
     async def test_no_active_process(self):
         update = _make_update(chat_id=1, thread_id=2)
@@ -269,14 +268,6 @@ class TestCmdKill:
         await bridge.cmd_kill(update, ctx)
         reply = update.message.reply_text.call_args[0][0]
         assert "No active" in reply
-
-    @pytest.mark.asyncio
-    async def test_unauthorized_user_silently_ignored(self, monkeypatch):
-        monkeypatch.setattr(bridge, "ALLOWED_USER_IDS", {9999})
-        update = _make_update(user_id=42)
-        ctx = _make_context()
-        await bridge.cmd_kill(update, ctx)
-        update.message.reply_text.assert_not_called()
 
 
 # ── cmd_ping ───────────────────────────────────────────────────────────────
@@ -302,8 +293,6 @@ class TestCmdPing:
 
     @pytest.mark.asyncio
     async def test_with_active_sessions(self):
-        import time
-
         bridge._processing_sessions.add("1_2")
         bridge._session_start_times["1_2"] = time.time() - 65
         update = _make_update()
@@ -315,81 +304,12 @@ class TestCmdPing:
         assert "1m" in reply
 
 
-# ── cmd_auth ───────────────────────────────────────────────────────────────
-
-
-class TestCmdAuth:
-    @pytest.fixture(autouse=True)
-    def _isolate(self, monkeypatch):
-        monkeypatch.setattr(bridge, "ALLOWED_USER_IDS", set())
-
-    @pytest.mark.asyncio
-    async def test_already_authenticated(self, tmp_auth_state):
-        import auth
-
-        auth.create_session(42, "apple-sub", "1.2.3.4")
-        update = _make_update(user_id=42)
-        ctx = _make_context()
-        await bridge.cmd_auth(update, ctx)
-        reply = update.message.reply_text.call_args[0][0]
-        assert "Already authenticated" in reply
-
-    @pytest.mark.asyncio
-    async def test_not_authenticated_sends_link(self, tmp_auth_state):
-        update = _make_update(user_id=42)
-        ctx = _make_context()
-        await bridge.cmd_auth(update, ctx)
-        reply = update.message.reply_text.call_args[0][0]
-        assert "Authentication required" in reply or "auth.kj6.dev" in reply
-
-    @pytest.mark.asyncio
-    async def test_unauthorized_user(self, monkeypatch):
-        monkeypatch.setattr(bridge, "ALLOWED_USER_IDS", {999})
-        update = _make_update(user_id=42)
-        ctx = _make_context()
-        await bridge.cmd_auth(update, ctx)
-        update.message.reply_text.assert_not_called()
-
-
-# ── cmd_lock ───────────────────────────────────────────────────────────────
-
-
-class TestCmdLock:
-    @pytest.fixture(autouse=True)
-    def _isolate(self, tmp_auth_state, monkeypatch):
-        monkeypatch.setattr(bridge, "ALLOWED_USER_IDS", set())
-
-    @pytest.mark.asyncio
-    async def test_lock_own_session(self):
-        import auth
-
-        auth.create_session(42, "sub", "1.1.1.1")
-        update = _make_update(user_id=42)
-        ctx = _make_context(args=[])
-        await bridge.cmd_lock(update, ctx)
-        reply = update.message.reply_text.call_args[0][0]
-        assert "locked" in reply.lower()
-
-    @pytest.mark.asyncio
-    async def test_lock_all(self):
-        import auth
-
-        auth.create_session(42, "sub1", "1.1.1.1")
-        auth.create_session(43, "sub2", "2.2.2.2")
-        update = _make_update(user_id=42)
-        ctx = _make_context(args=["all"])
-        await bridge.cmd_lock(update, ctx)
-        reply = update.message.reply_text.call_args[0][0]
-        assert "2" in reply
-
-
 # ── cmd_restart ────────────────────────────────────────────────────────────
 
 
 class TestCmdRestart:
     @pytest.fixture(autouse=True)
     def _isolate(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(bridge, "ALLOWED_USER_IDS", set())
         monkeypatch.setattr(bridge, "RESTART_NOTIFY_FILE", tmp_path / "restart.json")
         monkeypatch.setattr(bridge, "_active_procs", {})
         monkeypatch.setattr(bridge, "_remote_proc", None)
@@ -418,4 +338,3 @@ class TestCmdRestart:
         with patch("os._exit"):
             await bridge.cmd_restart(update, ctx)
         proc.terminate.assert_called_once()
-        bridge._active_procs.clear()

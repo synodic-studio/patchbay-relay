@@ -207,7 +207,7 @@ class TestSessionKey:
         assert bridge._session_key(123, None) == "123"
 
     def test_negative_chat_id(self):
-        assert bridge._session_key(REDACTED_GROUP_1, 327) == "REDACTED_GROUP_1_327"
+        assert bridge._session_key(-1003707564014, 327) == "-1003707564014_327"
 
     def test_zero_thread_id(self):
         assert bridge._session_key(123, 0) == "123_0"

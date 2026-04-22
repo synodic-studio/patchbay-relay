@@ -22,13 +22,10 @@ def _clean_bridge_state():
     bridge._processing_sessions.clear()
     bridge._queued_messages.clear()
     bridge._session_start_times.clear()
-    original = bridge.ALLOWED_USER_IDS
-    bridge.ALLOWED_USER_IDS = set()  # disable allowlist for tests
     yield
     bridge._processing_sessions.clear()
     bridge._queued_messages.clear()
     bridge._session_start_times.clear()
-    bridge.ALLOWED_USER_IDS = original
 
 
 def _make_update(chat_id=1, thread_id=None, text="hello", user_id=42):
@@ -60,8 +57,7 @@ async def test_message_queued_when_session_processing():
     update = _make_update(text="follow-up")
     ctx = _make_context()
 
-    with patch.object(bridge, "_check_auth", new=AsyncMock(return_value=True)):
-        await bridge.handle_message(update, ctx)
+    await bridge.handle_message(update, ctx)
 
     assert key in bridge._queued_messages
     assert bridge._queued_messages[key] == ["follow-up"]
@@ -78,10 +74,9 @@ async def test_multiple_messages_queue_incrementally():
 
     ctx = _make_context()
 
-    with patch.object(bridge, "_check_auth", new=AsyncMock(return_value=True)):
-        for i in range(3):
-            update = _make_update(text=f"msg-{i}")
-            await bridge.handle_message(update, ctx)
+    for i in range(3):
+        update = _make_update(text=f"msg-{i}")
+        await bridge.handle_message(update, ctx)
 
     assert len(bridge._queued_messages[key]) == 3
     assert bridge._queued_messages[key] == ["msg-0", "msg-1", "msg-2"]
@@ -96,11 +91,10 @@ async def test_queued_reply_shows_depth():
     ctx = _make_context()
     updates = []
 
-    with patch.object(bridge, "_check_auth", new=AsyncMock(return_value=True)):
-        for i in range(3):
-            u = _make_update(text=f"msg-{i}")
-            updates.append(u)
-            await bridge.handle_message(u, ctx)
+    for i in range(3):
+        u = _make_update(text=f"msg-{i}")
+        updates.append(u)
+        await bridge.handle_message(u, ctx)
 
     for i, u in enumerate(updates, start=1):
         reply = u.message.reply_text.call_args[0][0]
@@ -113,17 +107,24 @@ async def test_queued_reply_shows_depth():
 @pytest.mark.asyncio
 async def test_queued_messages_drained_after_processing():
     """After the initial response, queued messages should be processed."""
+    import threading
+
     key = bridge._session_key(1, None)
     ctx = _make_context()
 
     run_claude_calls = []
+    first_entered = threading.Event()
+    release_first = threading.Event()
 
-    def fake_run_claude(message, session_key):
+    def fake_run_claude(message, session_key, model=None):
         run_claude_calls.append(message)
+        if len(run_claude_calls) == 1:
+            first_entered.set()
+            # Block the first invocation until the test has queued a follow-up.
+            release_first.wait(timeout=5)
         return f"response to: {message[:20]}"
 
     with (
-        patch.object(bridge, "_check_auth", new=AsyncMock(return_value=True)),
         patch.object(bridge, "run_claude", side_effect=fake_run_claude),
         patch.object(bridge, "save_pending", return_value="pending-1"),
         patch.object(bridge, "clear_pending"),
@@ -133,11 +134,15 @@ async def test_queued_messages_drained_after_processing():
         first_update = _make_update(text="initial question")
         task = asyncio.create_task(bridge.handle_message(first_update, ctx))
 
-        # Wait for the first message to enter processing
-        await asyncio.sleep(0)
+        # Wait until the first invocation is actually inside the executor.
+        while not first_entered.is_set():
+            await asyncio.sleep(0.01)
 
-        # Simulate follow-up arriving while processing
+        # Queue a follow-up while the first is blocked in the executor.
         bridge._queued_messages.setdefault(key, []).append("follow-up 1")
+
+        # Release the first invocation; drain loop should now pick up the queued message.
+        release_first.set()
 
         await task
 
@@ -154,12 +159,11 @@ async def test_multiple_queued_messages_combined_with_separator():
 
     run_claude_calls = []
 
-    def fake_run_claude(message, session_key):
+    def fake_run_claude(message, session_key, model=None):
         run_claude_calls.append(message)
         return "ok"
 
     with (
-        patch.object(bridge, "_check_auth", new=AsyncMock(return_value=True)),
         patch.object(bridge, "run_claude", side_effect=fake_run_claude),
         patch.object(bridge, "save_pending", return_value="pending-1"),
         patch.object(bridge, "clear_pending"),
@@ -191,12 +195,11 @@ async def test_single_queued_message_sent_without_follow_up_format():
 
     run_claude_calls = []
 
-    def fake_run_claude(message, session_key):
+    def fake_run_claude(message, session_key, model=None):
         run_claude_calls.append(message)
         return "ok"
 
     with (
-        patch.object(bridge, "_check_auth", new=AsyncMock(return_value=True)),
         patch.object(bridge, "run_claude", side_effect=fake_run_claude),
         patch.object(bridge, "save_pending", return_value="pending-1"),
         patch.object(bridge, "clear_pending"),
@@ -225,7 +228,6 @@ async def test_session_cleared_after_processing_completes():
     ctx = _make_context()
 
     with (
-        patch.object(bridge, "_check_auth", new=AsyncMock(return_value=True)),
         patch.object(bridge, "run_claude", return_value="done"),
         patch.object(bridge, "save_pending", return_value="pending-1"),
         patch.object(bridge, "clear_pending"),
@@ -246,7 +248,6 @@ async def test_session_cleared_even_on_error():
     ctx = _make_context()
 
     with (
-        patch.object(bridge, "_check_auth", new=AsyncMock(return_value=True)),
         patch.object(bridge, "run_claude", side_effect=RuntimeError("boom")),
         patch.object(bridge, "save_pending", return_value="pending-1"),
         patch.object(bridge, "clear_pending"),
@@ -269,7 +270,6 @@ async def test_message_not_queued_when_session_idle():
     ctx = _make_context()
 
     with (
-        patch.object(bridge, "_check_auth", new=AsyncMock(return_value=True)),
         patch.object(bridge, "run_claude", return_value="response"),
         patch.object(bridge, "save_pending", return_value="pending-1"),
         patch.object(bridge, "clear_pending"),
@@ -294,7 +294,6 @@ async def test_forum_topic_sessions_queue_independently():
     ctx = _make_context()
 
     with (
-        patch.object(bridge, "_check_auth", new=AsyncMock(return_value=True)),
         patch.object(bridge, "run_claude", return_value="ok"),
         patch.object(bridge, "save_pending", return_value="p1"),
         patch.object(bridge, "clear_pending"),

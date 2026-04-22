@@ -3,7 +3,7 @@
 Covers bypass vectors identified in security audit:
 - Fail-open when allowlist is empty (any Apple ID passes)
 - Empty 'sub' claim in Apple ID token
-- Source failure logging (pass-cli / keychain)
+- Source failure logging (pass / env var)
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -98,12 +98,12 @@ class TestAllowlistEnforcement:
         import logging
         import auth_server
 
-        # Force the warning path directly — independent of whether pass-cli loaded subjects
+        # Force the warning path directly — independent of whether pass loaded subjects
         with patch.object(auth_server, "APPLE_SUBJECT_ALLOWLIST", set()):
             with caplog.at_level(logging.WARNING, logger="bridge.auth_server"):
                 auth_server.logger.warning(
                     "APPLE_SUBJECT_ALLOWLIST is empty — any authenticated Apple ID will be accepted. "
-                    "Configure the allowlist via pass-cli, keychain, or APPLE_SUBJECT_ALLOWLIST env var."
+                    "Configure the allowlist via `pass show apple-subject-allowlist` or APPLE_SUBJECT_ALLOWLIST env var."
                 )
 
         assert any(
@@ -166,43 +166,23 @@ class TestEmptySubjectRejection:
 
 
 class TestAllowlistLoadingLogs:
-    def test_pass_cli_failure_is_logged(self, caplog):
-        """A non-zero pass-cli return code produces a WARNING log entry."""
+    def test_pass_failure_is_logged(self, caplog):
+        """A non-zero pass return code produces a WARNING log entry."""
         import logging
         import auth_server
 
         failing = MagicMock()
         failing.returncode = 1
         failing.stdout = ""
-        failing.stderr = "vault not found"
+        failing.stderr = "not found"
 
         with caplog.at_level(logging.WARNING, logger="bridge.auth_server"):
             if failing.returncode != 0:
                 auth_server.logger.warning(
-                    "pass-cli apple-subject-allowlist lookup failed (rc=%d): %s",
-                    failing.returncode,
-                    failing.stderr.strip() or "(no stderr)",
-                )
-
-        assert any(
-            "pass-cli" in r.message and "rc=1" in r.message for r in caplog.records
-        )
-
-    def test_keychain_failure_is_logged(self, caplog):
-        """A non-zero keychain return code produces a WARNING log entry."""
-        import logging
-        import auth_server
-
-        failing = MagicMock()
-        failing.returncode = 44  # security tool "item not found"
-
-        with caplog.at_level(logging.WARNING, logger="bridge.auth_server"):
-            if failing.returncode != 0:
-                auth_server.logger.warning(
-                    "keychain apple-subject-allowlist lookup failed (rc=%d) — falling back to env var",
+                    "pass show apple-subject-allowlist failed (rc=%d) — falling back to env var",
                     failing.returncode,
                 )
 
         assert any(
-            "keychain" in r.message and "rc=44" in r.message for r in caplog.records
+            "pass show" in r.message and "rc=1" in r.message for r in caplog.records
         )

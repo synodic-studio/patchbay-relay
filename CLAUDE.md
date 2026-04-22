@@ -74,6 +74,7 @@ All commands are registered in `bridge.py` via `CommandHandler`. Auth-gated comm
 | `/remote_control` | Yes | Start `claude remote-control` in this topic's project directory, and report connection info. If one is already running, it is replaced. |
 | `/remote_control stop` | Yes | Stop the running remote-control process. |
 | `/ping` | No | Check liveness. Reports "pong" plus a list of any sessions currently running Claude, with elapsed time. |
+| `/usage` | No | Show Claude Code usage via `ccusage`: current active 5-hour block (spent, projected, burn rate, time remaining) and today's totals with per-model breakdown. |
 
 ### Session model
 

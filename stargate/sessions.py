@@ -4,7 +4,15 @@ import json
 import time
 import uuid
 
-from .config import PENDING_DIR, SESSION_DIR, SESSION_EXPIRY, SESSION_KEY_RE, logger
+from .config import (
+    PENDING_DIR,
+    SESSION_DIR,
+    SESSION_EXPIRY,
+    SESSION_KEY_RE,
+    atomic_write_text,
+    logger,
+    quarantine_file,
+)
 
 
 def _sanitize_session_key(key: str) -> str:
@@ -31,28 +39,38 @@ def _session_key(chat_id: int, thread_id: int | None) -> str:
 
 
 def get_session_id(session_key: str) -> str | None:
-    """Load the Claude session ID for a chat. Returns None if expired or missing."""
+    """Load the Claude session ID for a chat. Returns None if expired or missing.
+
+    Corrupt or schema-violating session files are quarantined (moved to
+    .quarantine/) rather than silently deleted — the self-healing principle.
+    """
     session_key = _sanitize_session_key(session_key)
     session_file = SESSION_DIR / f"{session_key}.json"
     if not session_file.exists():
         return None
     try:
         data = json.loads(session_file.read_text())
-    except (json.JSONDecodeError, KeyError):
-        session_file.unlink()
+        last_active = data["last_active"]
+        session_id = data["session_id"]
+    except (json.JSONDecodeError, KeyError, TypeError, OSError) as e:
+        quarantine_file(session_file, f"corrupt session for {session_key}: {e}")
         return None
-    if time.time() - data["last_active"] > SESSION_EXPIRY:
-        session_file.unlink()
+    if time.time() - last_active > SESSION_EXPIRY:
+        try:
+            session_file.unlink()
+        except OSError:
+            pass
         logger.info("Session expired for %s", session_key)
         return None
-    return data["session_id"]
+    return session_id
 
 
 def save_session_id(session_key: str, session_id: str) -> None:
-    """Persist a Claude session ID for a chat."""
+    """Persist a Claude session ID for a chat. Atomic: crash-safe."""
     session_key = _sanitize_session_key(session_key)
-    (SESSION_DIR / f"{session_key}.json").write_text(
-        json.dumps({"session_id": session_id, "last_active": time.time()})
+    atomic_write_text(
+        SESSION_DIR / f"{session_key}.json",
+        json.dumps({"session_id": session_id, "last_active": time.time()}),
     )
 
 
@@ -64,12 +82,11 @@ def clear_session(session_key: str) -> None:
         session_file.unlink()
 
 
-def save_pending(
-    chat_id: int, thread_id: int | None, text: str, session_key: str
-) -> str:
-    """Save a message as pending before processing. Returns pending ID."""
+def save_pending(chat_id: int, thread_id: int | None, text: str, session_key: str) -> str:
+    """Save a message as pending before processing. Returns pending ID. Atomic."""
     pending_id = uuid.uuid4().hex[:12]
-    (PENDING_DIR / f"{pending_id}.json").write_text(
+    atomic_write_text(
+        PENDING_DIR / f"{pending_id}.json",
         json.dumps(
             {
                 "chat_id": chat_id,
@@ -78,7 +95,7 @@ def save_pending(
                 "session_key": session_key,
                 "timestamp": time.time(),
             }
-        )
+        ),
     )
     return pending_id
 
@@ -86,3 +103,29 @@ def save_pending(
 def clear_pending(pending_id: str) -> None:
     """Remove a pending message file."""
     (PENDING_DIR / f"{pending_id}.json").unlink(missing_ok=True)
+
+
+def mark_stall_kill(session_key: str, idle_minutes: float) -> None:
+    """Record that a session's prior run was killed by the stall detector.
+    Consumed on the next invocation to warn Claude against repeating the
+    headless-unsafe command (XCUITest, GUI osascript, etc.) that likely hung it.
+    """
+    session_key = _sanitize_session_key(session_key)
+    atomic_write_text(
+        SESSION_DIR / f"{session_key}.stalled",
+        json.dumps({"ts": time.time(), "idle_minutes": idle_minutes}),
+    )
+
+
+def consume_stall_kill(session_key: str) -> dict | None:
+    """Read and clear the stall-kill marker, if any."""
+    session_key = _sanitize_session_key(session_key)
+    marker = SESSION_DIR / f"{session_key}.stalled"
+    if not marker.exists():
+        return None
+    try:
+        data = json.loads(marker.read_text())
+    except (json.JSONDecodeError, KeyError):
+        data = None
+    marker.unlink(missing_ok=True)
+    return data

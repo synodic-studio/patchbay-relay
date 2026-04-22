@@ -48,59 +48,27 @@ APPLE_PRIVATE_KEY_PATH = os.environ.get("APPLE_PRIVATE_KEY_PATH", "")
 AUTH_BASE_URL = os.environ.get("AUTH_BASE_URL", "https://auth.kj6.dev")
 AUTH_PORT = int(os.environ.get("AUTH_PORT", "8443"))
 APPLE_SUBJECT_ALLOWLIST: set[str] = set()
-_pp_subj = subprocess.run(
-    [
-        "pass-cli",
-        "item",
-        "view",
-        "--vault-name",
-        "Developer Secrets",
-        "--item-title",
-        "apple-subject-allowlist",
-        "--field",
-        "note",
-    ],
+_subj_result = subprocess.run(
+    ["pass", "show", "apple-subject-allowlist"],
     capture_output=True,
     text=True,
 )
-if _pp_subj.returncode == 0 and _pp_subj.stdout.strip():
-    _raw_subjects = _pp_subj.stdout.strip()
+if _subj_result.returncode == 0 and _subj_result.stdout.strip():
+    _raw_subjects = _subj_result.stdout.strip()
 else:
-    if _pp_subj.returncode != 0:
+    if _subj_result.returncode != 0:
         logger.warning(
-            "pass-cli apple-subject-allowlist lookup failed (rc=%d): %s",
-            _pp_subj.returncode,
-            _pp_subj.stderr.strip() or "(no stderr)",
+            "pass show apple-subject-allowlist failed (rc=%d) — falling back to env var",
+            _subj_result.returncode,
         )
-    _kc_subj = subprocess.run(
-        [
-            "security",
-            "find-generic-password",
-            "-a",
-            os.getlogin(),
-            "-s",
-            "apple-subject-allowlist",
-            "-w",
-        ],
-        capture_output=True,
-        text=True,
-    )
-    if _kc_subj.returncode == 0 and _kc_subj.stdout.strip():
-        _raw_subjects = _kc_subj.stdout.strip()
-    else:
-        if _kc_subj.returncode != 0:
-            logger.warning(
-                "keychain apple-subject-allowlist lookup failed (rc=%d) — falling back to env var",
-                _kc_subj.returncode,
-            )
-        _raw_subjects = os.environ.get("APPLE_SUBJECT_ALLOWLIST", "")
+    _raw_subjects = os.environ.get("APPLE_SUBJECT_ALLOWLIST", "")
 if _raw_subjects.strip():
     APPLE_SUBJECT_ALLOWLIST = {s.strip() for s in _raw_subjects.split(",") if s.strip()}
 
 if not APPLE_SUBJECT_ALLOWLIST:
     logger.warning(
         "APPLE_SUBJECT_ALLOWLIST is empty — any authenticated Apple ID will be accepted. "
-        "Configure the allowlist via pass-cli, keychain, or APPLE_SUBJECT_ALLOWLIST env var."
+        "Configure the allowlist via `pass show apple-subject-allowlist` or APPLE_SUBJECT_ALLOWLIST env var."
     )
 
 # Apple's public keys URL for JWT verification
