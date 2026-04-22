@@ -38,6 +38,17 @@ PATTERNS: list[tuple[str, str]] = [
     (r"\bxcrun\s+simctl\s+boot\b", "`simctl boot` triggers Simulator UI + Screen Recording prompts."),
     (r"\binstruments\b", "Instruments requires Screen Recording TCC."),
     (r"\bscreencapture\b", "`screencapture` triggers the Screen Recording TCC dialog."),
+    (
+        # Only match when the find root is the BARE home dir (no subpath).
+        # `find ~/Developer/stargate` is safe; `find ~` cascades into TCC dirs.
+        r"\bfind\s+(~|\$HOME|/Users/[\w.-]+)(?=\s|$)",
+        "`find ~` / `find $HOME` (bare, no subpath) cascades into macOS "
+        "TCC-protected dirs (Photos, Mail, Messages, etc.) and hangs 20+ min "
+        "until the stall detector kills it. Use a concrete subdirectory "
+        "(e.g. `find ~/.local/bin` or `find ~/Developer`), `which`/`type`, or "
+        "a narrow glob. If you truly need recursion from $HOME, add "
+        "`-not -path ~/Library -prune` style exclusions.",
+    ),
 ]
 
 COMPILED = [(re.compile(pat, re.IGNORECASE), hint) for pat, hint in PATTERNS]
