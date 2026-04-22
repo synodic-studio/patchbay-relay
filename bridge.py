@@ -921,7 +921,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/kill - Kill active Claude process\n"
         "/restart - Restart the bridge\n"
         "/ping - Check if bridge is alive\n"
-        "/usage - Show Claude Code usage (cost + tokens)\n\n"
+        "/usage - Show Claude Code quota (tokens + block time remaining)\n\n"
         "Each forum topic runs as an independent Claude session."
     )
 
@@ -1289,10 +1289,6 @@ async def cmd_remote_control(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
 
 
-def _format_usd(amount: float) -> str:
-    return f"${amount:,.2f}"
-
-
 def _format_tokens(n: int) -> str:
     if n >= 1_000_000:
         return f"{n / 1_000_000:.1f}M"
@@ -1301,22 +1297,44 @@ def _format_tokens(n: int) -> str:
     return str(n)
 
 
+def _week_start_yyyymmdd() -> str:
+    """Return the YYYYMMDD of the most recent Monday (or today if Monday)."""
+    now = time.localtime()
+    day_of_week = now.tm_wday  # 0 = Monday
+    week_start = time.time() - day_of_week * 86400
+    return time.strftime("%Y%m%d", time.localtime(week_start))
+
+
 async def cmd_usage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Show Claude Code usage: current 5-hour block + today's totals."""
+    """Show Claude Code quota: current 5-hour block + today + this week.
+
+    Max-plan focus: tokens and time remaining, not USD cost. Costs are
+    irrelevant on a flat-rate plan — the quota that matters is the token
+    throughput inside the 5-hour billing window and the weekly total.
+    """
     try:
-        blocks_proc = await asyncio.to_thread(
-            subprocess.run,
-            ["ccusage", "blocks", "--active", "--json"],
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-        daily_proc = await asyncio.to_thread(
-            subprocess.run,
-            ["ccusage", "daily", "--json", "--since", time.strftime("%Y%m%d")],
-            capture_output=True,
-            text=True,
-            timeout=15,
+        blocks_proc, daily_proc, weekly_proc = await asyncio.gather(
+            asyncio.to_thread(
+                subprocess.run,
+                ["ccusage", "blocks", "--active", "--json"],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            ),
+            asyncio.to_thread(
+                subprocess.run,
+                ["ccusage", "daily", "--json", "--since", time.strftime("%Y%m%d")],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            ),
+            asyncio.to_thread(
+                subprocess.run,
+                ["ccusage", "weekly", "--json", "--since", _week_start_yyyymmdd()],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            ),
         )
     except (subprocess.TimeoutExpired, FileNotFoundError) as e:
         await update.message.reply_text(f"usage check failed: {e}")
@@ -1328,18 +1346,17 @@ async def cmd_usage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         blocks = json.loads(blocks_proc.stdout).get("blocks", [])
         if blocks:
             b = blocks[0]
-            cost = b.get("costUSD", 0.0)
             total_tokens = b.get("totalTokens", 0)
             proj = b.get("projection") or {}
             burn = b.get("burnRate") or {}
             remaining = proj.get("remainingMinutes", 0)
             hrs, mins = divmod(int(remaining), 60)
             lines.append("Active 5h block:")
-            lines.append(f"  spent:     {_format_usd(cost)} ({_format_tokens(total_tokens)} tok)")
-            if proj.get("totalCost") is not None:
-                lines.append(f"  projected: {_format_usd(proj['totalCost'])} @ end")
-            if burn.get("costPerHour") is not None:
-                lines.append(f"  burn:      {_format_usd(burn['costPerHour'])}/hr")
+            lines.append(f"  used:      {_format_tokens(total_tokens)} tok")
+            if proj.get("totalTokens") is not None:
+                lines.append(f"  projected: {_format_tokens(proj['totalTokens'])} tok @ end")
+            if burn.get("tokensPerMinute") is not None:
+                lines.append(f"  burn:      {_format_tokens(int(burn['tokensPerMinute']))}/min")
             lines.append(f"  remaining: {hrs}h{mins:02d}m")
         else:
             lines.append("Active 5h block: (none)")
@@ -1353,15 +1370,33 @@ async def cmd_usage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if daily:
             d = daily[-1]
             lines.append(f"Today ({d.get('date', '?')}):")
-            lines.append(f"  cost:   {_format_usd(d.get('totalCost', 0.0))}")
             lines.append(f"  tokens: {_format_tokens(d.get('totalTokens', 0))}")
             for mb in d.get("modelBreakdowns", []):
                 name = mb.get("modelName", "?").replace("claude-", "").replace("-20251001", "")
-                lines.append(f"    {name:<16} {_format_usd(mb.get('cost', 0.0))}")
+                mb_tokens = (
+                    mb.get("inputTokens", 0)
+                    + mb.get("outputTokens", 0)
+                    + mb.get("cacheCreationTokens", 0)
+                    + mb.get("cacheReadTokens", 0)
+                )
+                lines.append(f"    {name:<16} {_format_tokens(mb_tokens)}")
         else:
             lines.append("Today: (no usage)")
     except (json.JSONDecodeError, KeyError, TypeError) as e:
         lines.append(f"daily parse error: {e}")
+
+    lines.append("")
+
+    try:
+        weekly = json.loads(weekly_proc.stdout).get("weekly", [])
+        if weekly:
+            w = weekly[-1]
+            lines.append(f"This week ({w.get('week', '?')}):")
+            lines.append(f"  tokens: {_format_tokens(w.get('totalTokens', 0))}")
+        else:
+            lines.append("This week: (no usage)")
+    except (json.JSONDecodeError, KeyError, TypeError) as e:
+        lines.append(f"weekly parse error: {e}")
 
     await update.message.reply_text("\n".join(lines))
 
@@ -1503,7 +1538,7 @@ async def post_init(app: Application) -> None:
         BotCommand("kill", "Kill active Claude process"),
         BotCommand("restart", "Restart the bridge"),
         BotCommand("ping", "Check if bridge is alive"),
-        BotCommand("usage", "Show Claude Code usage (cost + tokens)"),
+        BotCommand("usage", "Show Claude Code quota (tokens + block time)"),
     ]
     await app.bot.set_my_commands(commands)
     logger.info("Bot commands registered with Telegram")
