@@ -31,6 +31,10 @@
     <dict>
         <key>PATH</key>
         <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <!-- UPDATE: path to picurious' claude-pi-shim if you want pi-backed topics.
+             Leave unset (or commented out) to route every topic to real claude. -->
+        <key>CLAUDE_PATH</key>
+        <string>/Users/YOURUSER/Developer/picurious/bin/claude-pi-shim</string>
     </dict>
 </dict>
 </plist>
