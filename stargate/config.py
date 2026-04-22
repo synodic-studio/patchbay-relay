@@ -95,6 +95,13 @@ MAX_TIMEOUT = int(os.environ.get("MAX_TIMEOUT", "2700"))  # 45 min safety valve
 MAX_TURNS = int(os.environ.get("MAX_TURNS", "500"))
 MAX_WORKERS = int(os.environ.get("MAX_WORKERS", "4"))
 
+# /usage weekly-cap estimate. Anthropic does not publish a weekly token cap
+# for Max plans — the closest public data (Portkey's community-measured
+# numbers) quotes hours/week, not tokens. Defaulting to 3B as a rough
+# Max 20x ballpark; override via env once real data firms up. Displayed
+# with an "(est)" marker in /usage output so it never reads as official.
+USAGE_WEEKLY_TOKEN_CAP = int(os.environ.get("USAGE_WEEKLY_TOKEN_CAP", "3000000000"))
+
 # --- Telegram constants ---
 TELEGRAM_MSG_LIMIT = 4096
 TYPING_INTERVAL = 4  # seconds between typing indicators

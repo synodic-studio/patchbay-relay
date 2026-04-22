@@ -22,6 +22,7 @@ import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -84,6 +85,7 @@ from stargate.config import (  # noqa: E402
     STALL_TIMEOUT,
     TELEGRAM_MSG_LIMIT,
     TYPING_INTERVAL,
+    USAGE_WEEKLY_TOKEN_CAP,
     WORKING_DIR,
     logger,
 )
@@ -228,8 +230,6 @@ def run_claude(message: str, session_key: str, _retry: bool = False, model: str 
     # Inject recent outbound notifications so the session knows what was sent
     recent = get_recent_outbound(session_key, max_age=86400.0)
     if recent:
-        from datetime import datetime
-
         lines = []
         for entry in recent[-3:]:  # last 3 messages max
             ts = datetime.fromtimestamp(entry["ts"]).strftime("%H:%M")
@@ -1297,6 +1297,8 @@ async def cmd_remote_control(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 def _format_tokens(n: int) -> str:
+    if n >= 1_000_000_000:
+        return f"{n / 1_000_000_000:.1f}B"
     if n >= 1_000_000:
         return f"{n / 1_000_000:.1f}M"
     if n >= 1_000:
@@ -1312,25 +1314,50 @@ def _week_start_yyyymmdd() -> str:
     return time.strftime("%Y%m%d", time.localtime(week_start))
 
 
-async def cmd_usage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Show Claude Code quota: current 5-hour block + today + this week.
+def _bar(pct: float, width: int = 12) -> str:
+    """Render a percent as a unicode progress bar."""
+    pct = max(0.0, min(100.0, pct))
+    filled = int(round(pct / 100 * width))
+    return "█" * filled + "░" * (width - filled)
 
-    Max-plan focus: tokens and time remaining, not USD cost. Costs are
-    irrelevant on a flat-rate plan — the quota that matters is the token
-    throughput inside the 5-hour billing window and the weekly total.
+
+def _block_time_percent(start_iso: str, end_iso: str) -> float | None:
+    """Return percent of the 5h block elapsed (0..100), or None on parse error."""
+    try:
+        start = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
+        end = datetime.fromisoformat(end_iso.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return None
+    now = datetime.now(start.tzinfo)
+    span = (end - start).total_seconds()
+    if span <= 0:
+        return None
+    return max(0.0, min(100.0, (now - start).total_seconds() / span * 100))
+
+
+def _week_time_percent() -> float:
+    """Return percent of the current Mon→Mon week elapsed (local time)."""
+    now = datetime.now()
+    monday = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+    next_mon = monday + timedelta(days=7)
+    span = (next_mon - monday).total_seconds()
+    return max(0.0, min(100.0, (now - monday).total_seconds() / span * 100))
+
+
+async def cmd_usage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show Claude Code quota: 5h block + week, each as a token-bar and time-bar.
+
+    Max-plan focus: how much of the quota is consumed vs. how much of the
+    period has elapsed. Costs are irrelevant on a flat-rate plan. The
+    weekly cap is an estimate (USAGE_WEEKLY_TOKEN_CAP env var, default 3B)
+    because Anthropic does not publish a weekly token cap — their weekly
+    limits are expressed in hours of active session time, not tokens.
     """
     try:
-        blocks_proc, daily_proc, weekly_proc = await asyncio.gather(
+        blocks_proc, weekly_proc = await asyncio.gather(
             asyncio.to_thread(
                 subprocess.run,
-                ["ccusage", "blocks", "--active", "--json"],
-                capture_output=True,
-                text=True,
-                timeout=15,
-            ),
-            asyncio.to_thread(
-                subprocess.run,
-                ["ccusage", "daily", "--json", "--since", time.strftime("%Y%m%d")],
+                ["ccusage", "blocks", "--active", "--token-limit", "max", "--json"],
                 capture_output=True,
                 text=True,
                 timeout=15,
@@ -1349,59 +1376,46 @@ async def cmd_usage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     lines: list[str] = []
 
+    # --- Active 5h block ---
     try:
         blocks = json.loads(blocks_proc.stdout).get("blocks", [])
         if blocks:
             b = blocks[0]
-            total_tokens = b.get("totalTokens", 0)
+            used = b.get("totalTokens", 0)
+            tls = b.get("tokenLimitStatus") or {}
+            limit = tls.get("limit")
+            tok_pct = tls.get("percentUsed")
+            time_pct = _block_time_percent(b.get("startTime", ""), b.get("endTime", ""))
             proj = b.get("projection") or {}
-            burn = b.get("burnRate") or {}
-            remaining = proj.get("remainingMinutes", 0)
-            hrs, mins = divmod(int(remaining), 60)
-            lines.append("Active 5h block:")
-            lines.append(f"  used:      {_format_tokens(total_tokens)} tok")
-            if proj.get("totalTokens") is not None:
-                lines.append(f"  projected: {_format_tokens(proj['totalTokens'])} tok @ end")
-            if burn.get("tokensPerMinute") is not None:
-                lines.append(f"  burn:      {_format_tokens(int(burn['tokensPerMinute']))}/min")
-            lines.append(f"  remaining: {hrs}h{mins:02d}m")
+            remaining = int(proj.get("remainingMinutes", 0))
+            hrs, mins = divmod(remaining, 60)
+            lines.append("5h block:")
+            if tok_pct is not None and limit:
+                lines.append(
+                    f"  tokens  {_bar(tok_pct)} {tok_pct:4.1f}%  ({_format_tokens(used)}/{_format_tokens(limit)})"
+                )
+            else:
+                lines.append(f"  tokens  {_format_tokens(used)}")
+            if time_pct is not None:
+                lines.append(f"  time    {_bar(time_pct)} {time_pct:4.1f}%  ({hrs}h{mins:02d}m left)")
         else:
-            lines.append("Active 5h block: (none)")
+            lines.append("5h block: (none)")
     except (json.JSONDecodeError, KeyError, TypeError) as e:
         lines.append(f"blocks parse error: {e}")
 
     lines.append("")
 
-    try:
-        daily = json.loads(daily_proc.stdout).get("daily", [])
-        if daily:
-            d = daily[-1]
-            lines.append(f"Today ({d.get('date', '?')}):")
-            lines.append(f"  tokens: {_format_tokens(d.get('totalTokens', 0))}")
-            for mb in d.get("modelBreakdowns", []):
-                name = mb.get("modelName", "?").replace("claude-", "").replace("-20251001", "")
-                mb_tokens = (
-                    mb.get("inputTokens", 0)
-                    + mb.get("outputTokens", 0)
-                    + mb.get("cacheCreationTokens", 0)
-                    + mb.get("cacheReadTokens", 0)
-                )
-                lines.append(f"    {name:<16} {_format_tokens(mb_tokens)}")
-        else:
-            lines.append("Today: (no usage)")
-    except (json.JSONDecodeError, KeyError, TypeError) as e:
-        lines.append(f"daily parse error: {e}")
-
-    lines.append("")
-
+    # --- This week ---
     try:
         weekly = json.loads(weekly_proc.stdout).get("weekly", [])
-        if weekly:
-            w = weekly[-1]
-            lines.append(f"This week ({w.get('week', '?')}):")
-            lines.append(f"  tokens: {_format_tokens(w.get('totalTokens', 0))}")
-        else:
-            lines.append("This week: (no usage)")
+        w = weekly[-1] if weekly else None
+        used = w.get("totalTokens", 0) if w else 0
+        cap = USAGE_WEEKLY_TOKEN_CAP
+        wk_tok_pct = used / cap * 100 if cap else 0
+        wk_time_pct = _week_time_percent()
+        lines.append(f"Week (cap {_format_tokens(cap)} est):")
+        lines.append(f"  tokens  {_bar(wk_tok_pct)} {wk_tok_pct:4.1f}%  ({_format_tokens(used)}/{_format_tokens(cap)})")
+        lines.append(f"  time    {_bar(wk_time_pct)} {wk_time_pct:4.1f}%")
     except (json.JSONDecodeError, KeyError, TypeError) as e:
         lines.append(f"weekly parse error: {e}")
 
