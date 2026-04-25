@@ -17,6 +17,7 @@ import asyncio
 import json
 import os
 import select
+import shutil
 import signal
 import subprocess
 import sys
@@ -249,6 +250,9 @@ _shutting_down = False
 
 # Bot instance (set in post_init)
 _bot_instance = None
+
+# Captured once at import time — used by /health to report process uptime.
+_BRIDGE_STARTED_AT = time.time()
 
 
 # ---------------------------------------------------------------------------
@@ -1117,6 +1121,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/kill - Kill active Claude process\n"
         "/restart - Restart the bridge\n"
         "/ping - Check if bridge is alive\n"
+        "/health - Disk, queues, uptime, counts\n"
         "/usage - Show Claude Code quota (tokens + block time remaining)\n\n"
         "Each forum topic runs as an independent Claude session."
     )
@@ -1612,6 +1617,71 @@ async def cmd_usage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("\n".join(lines))
 
 
+def _format_uptime(seconds: float) -> str:
+    s = int(seconds)
+    days, s = divmod(s, 86400)
+    hours, s = divmod(s, 3600)
+    mins, _ = divmod(s, 60)
+    if days:
+        return f"{days}d{hours}h{mins:02d}m"
+    if hours:
+        return f"{hours}h{mins:02d}m"
+    return f"{mins}m"
+
+
+def _format_bytes(n: int) -> str:
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if abs(n) < 1024:
+            return f"{n:.1f}{unit}" if unit != "B" else f"{n}{unit}"
+        n /= 1024
+    return f"{n:.1f}PiB"
+
+
+def _safe_count(path: Path, pattern: str) -> int:
+    """Count files matching pattern, or -1 on error (directory missing etc.)."""
+    try:
+        return sum(1 for _ in path.glob(pattern))
+    except OSError as exc:
+        logger.warning("Could not count %s/%s: %s", path, pattern, exc)
+        return -1
+
+
+async def cmd_health(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Report bridge liveness: uptime, queues, disk free, last error."""
+    from stargate.config import BASE_DIR
+
+    now = time.time()
+    uptime = _format_uptime(now - _BRIDGE_STARTED_AT)
+
+    active = [k for k, s in _sessions.items() if s.processing]
+
+    try:
+        usage = shutil.disk_usage(BASE_DIR)
+        disk_free = _format_bytes(usage.free)
+        disk_line = f"disk free: {disk_free} ({100 * usage.free / usage.total:.0f}%)"
+    except OSError as exc:
+        logger.warning("disk_usage failed for %s: %s", BASE_DIR, exc)
+        disk_line = "disk free: unknown (check logs)"
+
+    session_count = _safe_count(SESSION_DIR, "*.json")
+    pending_count = _safe_count(PENDING_DIR, "*.json")
+    failed_dir = PENDING_DIR / "failed"
+    failed_count = _safe_count(failed_dir, "*.json") if failed_dir.exists() else 0
+
+    lines = [
+        "bridge /health",
+        f"uptime: {uptime}",
+        f"active sessions: {len(active)}",
+        f"session files on disk: {session_count}",
+        f"pending messages: {pending_count}",
+        f"failed pending (archived): {failed_count}",
+        disk_line,
+    ]
+    if active:
+        lines.append("active keys: " + ", ".join(sorted(active)))
+    await update.message.reply_text("\n".join(lines))
+
+
 async def cmd_ping(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not any(s.processing for s in _sessions.values()):
         await update.message.reply_text("pong — no active sessions")
@@ -1879,6 +1949,7 @@ def main() -> None:
     app.add_handler(CommandHandler("remote_control", cmd_remote_control))
     app.add_handler(CommandHandler("restart", cmd_restart))
     app.add_handler(CommandHandler("ping", cmd_ping))
+    app.add_handler(CommandHandler("health", cmd_health))
     app.add_handler(CommandHandler("usage", cmd_usage))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))

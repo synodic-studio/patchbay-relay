@@ -74,6 +74,7 @@ All commands are registered in `bridge.py` via `CommandHandler`. Auth-gated comm
 | `/remote_control` | Yes | Start `claude remote-control` in this topic's project directory, and report connection info. If one is already running, it is replaced. |
 | `/remote_control stop` | Yes | Stop the running remote-control process. |
 | `/ping` | No | Check liveness. Reports "pong" plus a list of any sessions currently running Claude, with elapsed time. |
+| `/health` | No | Observability snapshot: bridge uptime, active session count, session files on disk, pending messages, failed-pending (archived) count, free disk on the data dir. Logs a warning if disk_usage fails and reports "disk free: unknown" rather than erroring. |
 | `/usage` | No | Show Claude Code quota via `ccusage` as two periods (active 5h block, current Mon→Mon week). Each period shows a token bar (used / cap) and a time bar (period elapsed). The 5h block cap comes from `ccusage --token-limit max`; the weekly cap is an estimate (env var `USAGE_WEEKLY_TOKEN_CAP`, default 3B, marked `(est)` in output) because Anthropic does not publish a weekly token cap for Max plans. |
 
 ### Session model
