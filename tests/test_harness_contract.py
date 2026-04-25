@@ -277,7 +277,8 @@ class TestCmdConstruction:
         assert "-p" in cmd
         assert req.prompt in cmd
         assert "--output-format" in cmd
-        assert "json" in cmd
+        assert "stream-json" in cmd  # see bridge.run_claude — stall-detector requires per-event cadence
+        assert "--verbose" in cmd  # required by claude CLI when output-format is stream-json
         assert "--dangerously-skip-permissions" in cmd
         assert "--max-turns" in cmd
         assert "5" in cmd  # from req.max_turns

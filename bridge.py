@@ -453,12 +453,19 @@ def run_claude(
             "headless-safe alternative (swift test, tuist build, unit tests, static analysis)."
         )
 
+    # stream-json (not json) so each tool-use / assistant chunk / result lands
+    # as its own NDJSON line in real time. The stall detector relies on stdout
+    # cadence (state.last_event_at) to tell a hung process from a working one;
+    # plain `json` mode buffers everything until the run ends, which produces
+    # false-positive stall kills on long-but-progressing turns. parser.py's
+    # NDJSON path already handles this shape.
     cmd = [
         CLAUDE_PATH,
         "-p",
         message,
         "--output-format",
-        "json",
+        "stream-json",
+        "--verbose",
         "--dangerously-skip-permissions",
         "--disallowed-tools",
         "AskUserQuestion,EnterPlanMode,ExitPlanMode",

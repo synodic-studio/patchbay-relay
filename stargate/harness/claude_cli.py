@@ -249,12 +249,16 @@ class ClaudeCliHarness:
     def _build_cmd(self, req: TurnRequest) -> list[str]:
         """Construct the `claude -p ...` argv. Mirrors bridge.run_claude today."""
         max_turns = req.max_turns if req.max_turns is not None else self._max_turns_default
+        # stream-json (not json) so the bridge's stall detector gets per-event
+        # stdout cadence. See bridge.run_claude for the same change with
+        # context.
         cmd: list[str] = [
             self._claude_path,
             "-p",
             req.prompt,
             "--output-format",
-            "json",
+            "stream-json",
+            "--verbose",
             "--dangerously-skip-permissions",
             "--max-turns",
             str(max_turns),

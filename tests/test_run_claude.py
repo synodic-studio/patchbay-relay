@@ -418,7 +418,13 @@ class TestCommandConstruction:
 
         assert captured_kwargs["cwd"] == "/home/test/project"
 
-    def test_output_format_json(self):
+    def test_output_format_stream_json(self):
+        """stream-json (with --verbose) — needed for stall-detector cadence.
+
+        See the long comment in bridge.run_claude: plain `json` mode buffers
+        until the run ends, which produces false-positive stall kills on
+        long-but-progressing turns.
+        """
         proc = _make_proc(stdout=_valid_json_stdout())
         captured_cmd = None
 
@@ -431,7 +437,8 @@ class TestCommandConstruction:
             bridge.run_claude(MESSAGE, SESSION_KEY)
 
         idx = captured_cmd.index("--output-format")
-        assert captured_cmd[idx + 1] == "json"
+        assert captured_cmd[idx + 1] == "stream-json"
+        assert "--verbose" in captured_cmd
 
 
 # ---------------------------------------------------------------------------
