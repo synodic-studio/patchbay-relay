@@ -10,6 +10,17 @@ import json
 from .config import MAX_TURNS, logger
 from .sessions import save_session_id
 
+# User-visible placeholder for the success-with-no-text case. Exported so
+# bridge.run_claude can detect it and trigger a one-shot summary retry.
+EMPTY_SUCCESS_PREFIX = "(Completed "
+EMPTY_SUCCESS_MARKER = " turns of work but didn't produce a text response"
+
+
+def is_empty_success_response(text: str) -> bool:
+    """Return True if `text` is the placeholder we emit when Claude exits
+    successfully but produced no final assistant text."""
+    return text.startswith(EMPTY_SUCCESS_PREFIX) and EMPTY_SUCCESS_MARKER in text
+
 
 def _parse_events(stdout: str) -> list[dict]:
     """Parse stdout from --output-format json into a list of event dicts.
@@ -56,17 +67,11 @@ def _extract_text_from_events(events: list[dict]) -> str | None:
             continue
         msg = e.get("message", {})
         content = msg.get("content", []) if isinstance(msg, dict) else []
-        texts = [
-            c["text"]
-            for c in content
-            if isinstance(c, dict) and c.get("type") == "text"
-        ]
+        texts = [c["text"] for c in content if isinstance(c, dict) and c.get("type") == "text"]
         if texts:
             return "\n".join(texts)
 
-    result_event = next(
-        (e for e in reversed(events) if e.get("type") == "result"), None
-    )
+    result_event = next((e for e in reversed(events) if e.get("type") == "result"), None)
     if result_event:
         result_text = result_event.get("result")
         if result_text:
@@ -101,9 +106,7 @@ def parse_claude_response(stdout: str, session_key: str) -> str:
     logger.info("Parsed %d events for %s: %s", len(events), session_key, event_types)
 
     # Save session_id if present
-    result_event = next(
-        (e for e in reversed(events) if e.get("type") == "result"), None
-    )
+    result_event = next((e for e in reversed(events) if e.get("type") == "result"), None)
     if result_event:
         new_session_id = result_event.get("session_id")
         if new_session_id:
@@ -147,7 +150,8 @@ def parse_claude_response(stdout: str, session_key: str) -> str:
             num_turns = result_event.get("num_turns", "?")
             logger.warning(
                 "Success with no text for %s (%s turns). Claude likely did work via tools only.",
-                session_key, num_turns,
+                session_key,
+                num_turns,
             )
             return f"(Completed {num_turns} turns of work but didn't produce a text response. Check agent files for results.)"
 

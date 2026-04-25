@@ -108,6 +108,7 @@ from stargate.sessions import (  # noqa: E402
 )
 from stargate.parser import (  # noqa: E402
     _parse_events,
+    is_empty_success_response,
     parse_claude_response,
 )
 from stargate.quota import (  # noqa: E402
@@ -492,7 +493,66 @@ def run_claude(message: str, session_key: str, _retry: bool = False, model: str 
     # If parsing produced nothing useful and Claude errored, surface stderr
     if response == "(no parseable response)" and proc.returncode != 0 and stderr:
         return f"(Claude exited with error: {stderr[:500]})"
+
+    # Empty-success: claude finished cleanly but produced no final text.
+    # One-shot summary retry against the freshly-saved session_id; gives
+    # Adrien a real reply instead of the "(Completed N turns…)" placeholder.
+    if is_empty_success_response(response) and not _retry:
+        new_session_id = get_session_id(session_key)
+        if new_session_id:
+            summary = _request_summary(session_key, new_session_id, chat_cwd)
+            if summary:
+                _log_activity(
+                    "summary_retry_success",
+                    session_key=session_key,
+                    response_len=len(summary),
+                )
+                return summary
+            _log_activity("summary_retry_empty", session_key=session_key)
+        else:
+            _log_activity("summary_retry_skipped_no_session", session_key=session_key)
+
     return response
+
+
+def _request_summary(session_key: str, session_id: str, chat_cwd: str) -> str | None:
+    """Re-invoke claude --resume <id> with a short summarize prompt.
+
+    Used when the primary invocation finished successfully but produced no
+    final text. Returns the summary string on success, or None if the
+    summary attempt also yielded no usable text. Bounded by --max-turns 5
+    and a 120s wall-clock timeout — this should be one quick text turn."""
+    summary_cmd = [
+        CLAUDE_PATH,
+        "-p",
+        "Summarize what you just did in 1-3 sentences. End with a plain text reply.",
+        "--output-format",
+        "json",
+        "--dangerously-skip-permissions",
+        "--max-turns",
+        "5",
+        "--resume",
+        session_id,
+    ]
+    logger.info("Empty-success retry for %s — requesting summary", session_key)
+    try:
+        proc = subprocess.run(
+            summary_cmd,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            cwd=chat_cwd,
+        )
+    except subprocess.TimeoutExpired:
+        logger.warning("Summary retry for %s timed out", session_key)
+        return None
+    if proc.returncode != 0:
+        logger.warning("Summary retry for %s exited %d", session_key, proc.returncode)
+        return None
+    summary = parse_claude_response(proc.stdout, session_key)
+    if is_empty_success_response(summary) or summary.startswith("(no "):
+        return None
+    return summary
 
 
 # ---------------------------------------------------------------------------
