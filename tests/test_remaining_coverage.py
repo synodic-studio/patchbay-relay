@@ -74,7 +74,7 @@ class TestGracefulShutdownRemoteTimeout:
         (tmp_path / "sessions").mkdir()
         monkeypatch.setattr(bridge, "PHOTO_DIR", tmp_path / "photos")
         (tmp_path / "photos").mkdir()
-        monkeypatch.setattr(bridge, "_active_procs", {})
+        monkeypatch.setattr(bridge, "_sessions", {})
         bridge._shutting_down = False
 
     def test_remote_proc_wait_timeout_kills(self, monkeypatch):

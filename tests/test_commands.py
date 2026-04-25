@@ -244,14 +244,14 @@ class TestCallbackSetproject:
 class TestCmdKill:
     @pytest.fixture(autouse=True)
     def _isolate(self, monkeypatch):
-        monkeypatch.setattr(bridge, "_active_procs", {})
+        monkeypatch.setattr(bridge, "_sessions", {})
 
     @pytest.mark.asyncio
     async def test_kills_active_process(self):
         proc = MagicMock()
         proc.poll.return_value = None
         proc.pid = 999
-        bridge._active_procs["1_2"] = proc
+        bridge._get_session_state("1_2").proc = proc
 
         update = _make_update(chat_id=1, thread_id=2)
         ctx = _make_context()
@@ -311,7 +311,7 @@ class TestCmdRestart:
     @pytest.fixture(autouse=True)
     def _isolate(self, tmp_path, monkeypatch):
         monkeypatch.setattr(bridge, "RESTART_NOTIFY_FILE", tmp_path / "restart.json")
-        monkeypatch.setattr(bridge, "_active_procs", {})
+        monkeypatch.setattr(bridge, "_sessions", {})
         monkeypatch.setattr(bridge, "_remote_proc", None)
         self._tmp = tmp_path
 
@@ -332,7 +332,7 @@ class TestCmdRestart:
     async def test_terminates_active_procs(self):
         proc = MagicMock()
         proc.poll.return_value = None
-        bridge._active_procs["test"] = proc
+        bridge._get_session_state("test").proc = proc
         update = _make_update()
         ctx = _make_context()
         with patch("os._exit"):

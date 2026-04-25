@@ -51,7 +51,7 @@ class TestNotifyDeliveryFailure:
 class TestStallDetectorNotify:
     @pytest.fixture(autouse=True)
     def _isolate(self, monkeypatch):
-        monkeypatch.setattr(bridge, "_active_procs", {})
+        monkeypatch.setattr(bridge, "_sessions", {})
         monkeypatch.setattr(bridge, "_proc_last_active", {})
         monkeypatch.setattr(bridge, "STALL_POLL_INTERVAL", 0.01)
         monkeypatch.setattr(bridge, "STALL_TIMEOUT", 0.01)
@@ -67,7 +67,7 @@ class TestStallDetectorNotify:
         proc = MagicMock()
         proc.poll.return_value = None
         proc.pid = 777
-        bridge._active_procs["100_200"] = proc
+        bridge._get_session_state("100_200").proc = proc
         bridge._proc_last_active["100_200"] = time.time() - 10000
 
         with patch.object(bridge, "_get_proc_cpu", return_value=0.0):
@@ -95,7 +95,7 @@ class TestStallDetectorNotify:
         proc = MagicMock()
         proc.poll.return_value = None
         proc.pid = 888
-        bridge._active_procs["100_200"] = proc
+        bridge._get_session_state("100_200").proc = proc
         bridge._proc_last_active["100_200"] = time.time() - 10000
 
         with patch.object(bridge, "_get_proc_cpu", return_value=0.0):
@@ -120,7 +120,7 @@ class TestStallDetectorNotify:
         proc = MagicMock()
         proc.poll.return_value = None
         proc.pid = 999
-        bridge._active_procs["100"] = proc
+        bridge._get_session_state("100").proc = proc
         bridge._proc_last_active["100"] = time.time() - 10000
 
         with patch.object(bridge, "_get_proc_cpu", return_value=0.0):
@@ -144,7 +144,7 @@ class TestStallDetectorNotify:
         proc = MagicMock()
         proc.poll.return_value = None
         proc.pid = 555
-        bridge._active_procs["100"] = proc
+        bridge._get_session_state("100").proc = proc
         bridge._proc_last_active["100"] = time.time() - 10000
 
         with patch.object(bridge, "_get_proc_cpu", return_value=None):
@@ -168,7 +168,7 @@ class TestStallDetectorNotify:
         proc = MagicMock()
         proc.poll.return_value = None
         proc.pid = 444
-        bridge._active_procs["100"] = proc
+        bridge._get_session_state("100").proc = proc
         # Don't pre-set _proc_last_active — first reading
 
         with patch.object(bridge, "_get_proc_cpu", return_value=0.0):

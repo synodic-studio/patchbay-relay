@@ -199,7 +199,7 @@ class TestGracefulShutdown:
         import bridge
 
         # Prevent sys.exit from actually exiting
-        monkeypatch.setattr(bridge, "_active_procs", {})
+        monkeypatch.setattr(bridge, "_sessions", {})
         monkeypatch.setattr(bridge, "_remote_proc", None)
         with pytest.raises(SystemExit):
             bridge._graceful_shutdown(signal.SIGTERM, None)
@@ -211,7 +211,7 @@ class TestGracefulShutdown:
         mock_proc = MagicMock()
         mock_proc.poll.return_value = None  # still running
         mock_proc.wait.return_value = None
-        monkeypatch.setattr(bridge, "_active_procs", {"test_key": mock_proc})
+        monkeypatch.setattr(bridge, "_sessions", {"test_key": bridge.SessionState(proc=mock_proc)})
         monkeypatch.setattr(bridge, "_remote_proc", None)
         with pytest.raises(SystemExit):
             bridge._graceful_shutdown(signal.SIGTERM, None)
@@ -225,7 +225,7 @@ class TestGracefulShutdown:
         (photo_dir / "test1.jpg").write_text("fake")
         (photo_dir / "test2.jpg").write_text("fake")
         monkeypatch.setattr(bridge, "PHOTO_DIR", photo_dir)
-        monkeypatch.setattr(bridge, "_active_procs", {})
+        monkeypatch.setattr(bridge, "_sessions", {})
         monkeypatch.setattr(bridge, "_remote_proc", None)
         with pytest.raises(SystemExit):
             bridge._graceful_shutdown(signal.SIGTERM, None)

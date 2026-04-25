@@ -179,8 +179,11 @@ def _get_session_state(key: str) -> SessionState:
     return state
 
 
-# Track active Claude subprocesses per session key so /kill can terminate them
-_active_procs: dict[str, subprocess.Popen] = {}
+def _iter_active_procs() -> list[tuple[str, subprocess.Popen]]:
+    """Snapshot of (session_key, proc) for every session with a live subprocess."""
+    return [(k, s.proc) for k, s in _sessions.items() if s.proc is not None]
+
+
 # Track remote-control process (only one at a time, keyed by session key)
 _remote_proc: subprocess.Popen | None = None
 _remote_proc_key: str | None = None
@@ -355,7 +358,7 @@ def run_claude(message: str, session_key: str, _retry: bool = False, model: str 
         text=True,
         cwd=chat_cwd,
     )
-    _active_procs[session_key] = proc
+    _get_session_state(session_key).proc = proc
     _proc_last_active[session_key] = time.time()
 
     try:
@@ -367,7 +370,9 @@ def run_claude(message: str, session_key: str, _retry: bool = False, model: str 
         _log_activity("claude_timeout", session_key=session_key, pid=proc.pid, duration=duration)
         return f"[Timed out after {MAX_TIMEOUT // 60} min] Session preserved — send your message again to resume."
     finally:
-        _active_procs.pop(session_key, None)
+        state = _sessions.get(session_key)
+        if state is not None:
+            state.proc = None
         _proc_last_active.pop(session_key, None)
 
     duration = time.time() - invoke_start
@@ -1201,7 +1206,8 @@ async def cmd_kill(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     thread_id = update.message.message_thread_id
     key = _session_key(chat_id, thread_id)
 
-    proc = _active_procs.get(key)
+    state = _sessions.get(key)
+    proc = state.proc if state else None
     if proc and proc.poll() is None:
         proc.kill()
         await update.message.reply_text("Killed active Claude process. Session preserved — next message resumes.")
@@ -1223,7 +1229,7 @@ async def cmd_restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await update.message.reply_text("Restarting bridge...")
     logger.info("User %d triggered bridge restart", user_id)
 
-    for key, proc in list(_active_procs.items()):
+    for key, proc in _iter_active_procs():
         if proc.poll() is None:
             proc.terminate()
             logger.info("Terminated Claude process for %s (pid %d)", key, proc.pid)
@@ -1501,7 +1507,7 @@ async def _stall_detector() -> None:
     while True:
         await asyncio.sleep(STALL_POLL_INTERVAL)
         now = time.time()
-        for key, proc in list(_active_procs.items()):
+        for key, proc in _iter_active_procs():
             if proc.poll() is not None:
                 _proc_last_active.pop(key, None)
                 continue
@@ -1663,13 +1669,13 @@ def _graceful_shutdown(signum: int, frame) -> None:
     logger.info("Received %s — starting graceful shutdown", sig_name)
     _shutting_down = True
 
-    for key, proc in list(_active_procs.items()):
+    for key, proc in _iter_active_procs():
         if proc.poll() is None:
             logger.info("Sending SIGTERM to Claude process for %s (pid %d)", key, proc.pid)
             proc.terminate()
 
     deadline = time.time() + SHUTDOWN_PROCESS_TIMEOUT
-    for key, proc in list(_active_procs.items()):
+    for key, proc in _iter_active_procs():
         remaining = max(0, deadline - time.time())
         try:
             proc.wait(timeout=remaining)

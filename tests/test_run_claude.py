@@ -32,19 +32,21 @@ def _make_proc(stdout="", stderr="", returncode=0):
 
 def _valid_json_stdout(text="Hi there", session_id="sess-abc-123"):
     """Return a JSON stdout string that parse_claude_response can handle."""
-    return json.dumps([
-        {
-            "type": "assistant",
-            "message": {
-                "content": [{"type": "text", "text": text}],
+    return json.dumps(
+        [
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [{"type": "text", "text": text}],
+                },
             },
-        },
-        {
-            "type": "result",
-            "session_id": session_id,
-            "result": text,
-        },
-    ])
+            {
+                "type": "result",
+                "session_id": session_id,
+                "result": text,
+            },
+        ]
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -55,7 +57,7 @@ def _valid_json_stdout(text="Hi there", session_id="sess-abc-123"):
 @pytest.fixture(autouse=True)
 def _isolate_bridge_state(monkeypatch):
     """Reset mutable module-level dicts so tests don't leak into each other."""
-    monkeypatch.setattr(bridge, "_active_procs", {})
+    monkeypatch.setattr(bridge, "_sessions", {})
     monkeypatch.setattr(bridge, "_proc_last_active", {})
 
 
@@ -441,7 +443,7 @@ class TestProcessTracking:
 
         def spy_communicate(**kwargs):
             # Snapshot the state while "inside" communicate
-            recorded_state["active"] = dict(bridge._active_procs)
+            recorded_state["active"] = {k: s.proc for k, s in bridge._sessions.items() if s.proc is not None}
             recorded_state["last_active"] = dict(bridge._proc_last_active)
             return original_communicate(**kwargs)
 
@@ -454,13 +456,17 @@ class TestProcessTracking:
         assert recorded_state["active"][SESSION_KEY] is proc
         assert SESSION_KEY in recorded_state["last_active"]
 
+    def _proc_cleared(self, key):
+        state = bridge._sessions.get(key)
+        return state is None or state.proc is None
+
     def test_proc_cleared_after_success(self):
         proc = _make_proc(stdout=_valid_json_stdout())
 
         with patch("bridge.subprocess.Popen", return_value=proc):
             bridge.run_claude(MESSAGE, SESSION_KEY)
 
-        assert SESSION_KEY not in bridge._active_procs
+        assert self._proc_cleared(SESSION_KEY)
         assert SESSION_KEY not in bridge._proc_last_active
 
     def test_proc_cleared_after_timeout(self):
@@ -473,7 +479,7 @@ class TestProcessTracking:
         with patch("bridge.subprocess.Popen", return_value=proc):
             bridge.run_claude(MESSAGE, SESSION_KEY)
 
-        assert SESSION_KEY not in bridge._active_procs
+        assert self._proc_cleared(SESSION_KEY)
         assert SESSION_KEY not in bridge._proc_last_active
 
     def test_proc_cleared_after_empty_output(self):
@@ -482,7 +488,7 @@ class TestProcessTracking:
         with patch("bridge.subprocess.Popen", return_value=proc):
             bridge.run_claude(MESSAGE, SESSION_KEY)
 
-        assert SESSION_KEY not in bridge._active_procs
+        assert self._proc_cleared(SESSION_KEY)
         assert SESSION_KEY not in bridge._proc_last_active
 
 

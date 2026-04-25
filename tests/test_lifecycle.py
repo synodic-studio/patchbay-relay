@@ -56,7 +56,7 @@ class TestGracefulShutdown:
         (tmp_path / "sessions").mkdir()
         monkeypatch.setattr(bridge, "PHOTO_DIR", tmp_path / "photos")
         (tmp_path / "photos").mkdir()
-        monkeypatch.setattr(bridge, "_active_procs", {})
+        monkeypatch.setattr(bridge, "_sessions", {})
         monkeypatch.setattr(bridge, "_remote_proc", None)
         bridge._shutting_down = False
 
@@ -69,7 +69,7 @@ class TestGracefulShutdown:
         proc = MagicMock()
         proc.poll.return_value = None
         proc.wait.return_value = None
-        bridge._active_procs["key1"] = proc
+        bridge._get_session_state("key1").proc = proc
         with pytest.raises(SystemExit):
             bridge._graceful_shutdown(signal.SIGTERM, None)
         proc.terminate.assert_called_once()
@@ -82,7 +82,7 @@ class TestGracefulShutdown:
             subprocess.TimeoutExpired(cmd="", timeout=0),
             None,
         ]
-        bridge._active_procs["key1"] = proc
+        bridge._get_session_state("key1").proc = proc
         with pytest.raises(SystemExit):
             bridge._graceful_shutdown(signal.SIGTERM, None)
         proc.kill.assert_called_once()
@@ -122,7 +122,7 @@ class TestGracefulShutdown:
 class TestStallDetector:
     @pytest.fixture(autouse=True)
     def _isolate(self, monkeypatch):
-        monkeypatch.setattr(bridge, "_active_procs", {})
+        monkeypatch.setattr(bridge, "_sessions", {})
         monkeypatch.setattr(bridge, "_proc_last_active", {})
         monkeypatch.setattr(bridge, "_bot_instance", None)
         monkeypatch.setattr(bridge, "STALL_POLL_INTERVAL", 0.01)
@@ -133,7 +133,7 @@ class TestStallDetector:
         """Finished processes should be removed from _proc_last_active."""
         proc = MagicMock()
         proc.poll.return_value = 0  # already finished
-        bridge._active_procs["done_key"] = proc
+        bridge._get_session_state("done_key").proc = proc
         bridge._proc_last_active["done_key"] = 1000.0
 
         import asyncio
@@ -155,7 +155,7 @@ class TestStallDetector:
         proc = MagicMock()
         proc.poll.return_value = None
         proc.pid = 999
-        bridge._active_procs["stalled"] = proc
+        bridge._get_session_state("stalled").proc = proc
         bridge._proc_last_active["stalled"] = time.time() - 1000  # way past timeout
 
         with patch.object(bridge, "_get_proc_cpu", return_value=0.0):
@@ -179,7 +179,7 @@ class TestStallDetector:
         proc = MagicMock()
         proc.poll.return_value = None
         proc.pid = 888
-        bridge._active_procs["active"] = proc
+        bridge._get_session_state("active").proc = proc
         bridge._proc_last_active["active"] = time.time() - 1000
 
         with patch.object(bridge, "_get_proc_cpu", return_value=50.0):
