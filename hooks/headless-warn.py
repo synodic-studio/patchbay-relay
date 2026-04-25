@@ -2,7 +2,7 @@
 """PreToolUse hook: warn (never block) when a Bash command is likely to
 trigger a macOS TCC / GUI dialog that will hang a headless Claude process.
 
-The user runs Claude headlessly on a Mac Mini via launchd while on a
+Bryan runs Claude headlessly on a Mac Mini via launchd while he's on his
 phone (Telegram bridge). Any command that requires GUI interaction,
 Accessibility, Automation, or Screen Recording access will pop a system
 dialog nobody can click, and the subprocess sits until the stall detector
@@ -72,7 +72,7 @@ def main() -> int:
         return 0
 
     warning = (
-        "HEADLESS WARNING: " + " ".join(hits) + " The user is on a phone and cannot click macOS permission dialogs. "
+        "HEADLESS WARNING: " + " ".join(hits) + " Bryan is on his phone and cannot click macOS permission dialogs. "
         "If you're not certain this binary is already TCC-approved for the "
         "permissions it needs, pick a headless-safe alternative."
     )

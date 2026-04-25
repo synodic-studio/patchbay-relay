@@ -87,7 +87,7 @@ def handoff_to_forge(
         f"- **Chat ID:** {chat_id}",
         f"- **Thread ID:** {thread_id}",
         "",
-        "**Original message from the user:**",
+        "**Original message from Bryan:**",
         fence,
         message,
         fence,
@@ -103,7 +103,9 @@ def handoff_to_forge(
         "```",
     ]
 
-    queue_file = FORGE_QUEUE_DIR / f"bridge-recovery-{session_key.replace('-', '')[:20]}.md"
+    queue_file = (
+        FORGE_QUEUE_DIR / f"bridge-recovery-{session_key.replace('-', '')[:20]}.md"
+    )
     try:
         FORGE_QUEUE_DIR.mkdir(parents=True, exist_ok=True)
         queue_file.write_text("\n".join(lines) + "\n")
