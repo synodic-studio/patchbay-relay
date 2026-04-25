@@ -17,6 +17,8 @@ activity.jsonl
 .crash-timestamps
 .bridge-known-good.py
 .bridge.lock
+.chat_efforts.lock
+.chat_projects.lock
 .quarantine/
 .pytest_cache/
 .ruff_cache/
