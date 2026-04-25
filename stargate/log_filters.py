@@ -29,13 +29,22 @@ class ConflictAggregator(logging.Filter):
 
     Attaches to the root logger so it catches python-telegram-bot's
     `telegram.ext.Updater` and `httpx` emissions equally.
+
+    Beyond rate-limiting the log spam, the aggregator also keeps a sliding
+    window of recent conflict timestamps so a self-heal watcher (see
+    bridge._conflict_storm_watcher) can detect a sustained storm and
+    trigger the stale-poller repair (CTB-die).
     """
+
+    # Drop entries older than this from the sliding window.
+    RECENT_WINDOW_SEC = 60.0
 
     def __init__(self) -> None:
         super().__init__()
         self._count = 0
         self._first_ts: float | None = None
         self._last_summary_ts = 0.0
+        self._recent_ts: list[float] = []
 
     def filter(self, record: logging.LogRecord) -> bool:
         msg = record.getMessage()
@@ -43,6 +52,11 @@ class ConflictAggregator(logging.Filter):
             return True  # pass-through non-matching records
 
         now = time.time()
+        self._recent_ts.append(now)
+        # Keep the sliding window pruned cheaply on every hit.
+        cutoff = now - self.RECENT_WINDOW_SEC
+        self._recent_ts = [ts for ts in self._recent_ts if ts >= cutoff]
+
         if self._count == 0:
             # First occurrence in this window — let it through, start counting.
             self._count = 1
@@ -63,6 +77,21 @@ class ConflictAggregator(logging.Filter):
             )
             self._last_summary_ts = now
         return False  # suppress this individual record
+
+    def recent_count(self, window_sec: float | None = None) -> int:
+        """Return the number of conflicts seen in the last `window_sec`
+        seconds (default: RECENT_WINDOW_SEC). Cheap; used by the storm
+        watcher to decide whether to dispatch a repair."""
+        if window_sec is None:
+            window_sec = self.RECENT_WINDOW_SEC
+        cutoff = time.time() - window_sec
+        return sum(1 for ts in self._recent_ts if ts >= cutoff)
+
+    def reset_recent(self) -> None:
+        """Clear the sliding window. The storm watcher calls this after a
+        successful self-heal so a subsequent storm is detected fresh
+        rather than triggering immediately on the residue."""
+        self._recent_ts.clear()
 
 
 def install_filters() -> ConflictAggregator:

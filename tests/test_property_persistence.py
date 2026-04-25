@@ -26,13 +26,16 @@ import stargate.sessions
 # A "session key" matches stargate.config.SESSION_KEY_RE: alphanumeric,
 # underscore, hyphen. Use a narrow alphabet so generated keys are valid
 # both as map keys and (for sessions.py) as filename components.
-# ASCII-only to dodge macOS HFS+/APFS unicode normalization, which can
-# collapse two distinct unicode session keys onto the same filename and
-# break the round-trip (one save overwrites the other on disk).
+# Lowercase-ASCII only. macOS HFS+/APFS filesystems are case-insensitive
+# *and* normalize unicode, so "B" and "b" or "Ŏ" and "ŏ" can collapse onto
+# the same filename and break the roundtrip when two keys are distinct in
+# Python but identical on disk. Constraining the alphabet here keeps the
+# property test focused on the persistence layer's invariants, not on
+# filesystem quirks.
 session_keys = st.text(
     alphabet=st.characters(
         whitelist_categories=(),
-        whitelist_characters="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-",
+        whitelist_characters="abcdefghijklmnopqrstuvwxyz0123456789_-",
     ),
     min_size=1,
     max_size=24,

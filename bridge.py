@@ -1909,6 +1909,54 @@ async def cmd_ping(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 # ---------------------------------------------------------------------------
 
 
+# Set in main() when install_filters runs; consumed by the storm watcher.
+_conflict_aggregator = None  # type: ignore[var-annotated]
+
+# Storm watcher tunables — env-overridable for testing.
+CONFLICT_STORM_POLL_INTERVAL = max(1, int(os.environ.get("CONFLICT_STORM_POLL_INTERVAL", "30")))
+CONFLICT_STORM_THRESHOLD = max(1, int(os.environ.get("CONFLICT_STORM_THRESHOLD", "10")))
+CONFLICT_STORM_COOLDOWN = max(1, int(os.environ.get("CONFLICT_STORM_COOLDOWN", "120")))
+
+
+async def _conflict_storm_watcher() -> None:
+    """Watch the conflict aggregator for sustained 409 Conflict storms and
+    trigger the stale_telegram_poller self-heal when the rate spikes.
+
+    Closes the loop on CTB-die part 2: the handler exists; this is what
+    actually calls it. A storm means another process is also polling
+    Telegram's getUpdates — usually a stale bridge that didn't release
+    cleanly. The handler signals SIGTERM via the singleton lockfile and
+    polling resumes. After firing, we wait at least CONFLICT_STORM_COOLDOWN
+    seconds before considering another storm to give the previous repair
+    time to settle.
+    """
+    from stargate.self_heal import dispatch_repair
+
+    last_fired = 0.0
+    while True:
+        await asyncio.sleep(CONFLICT_STORM_POLL_INTERVAL)
+        if _conflict_aggregator is None:
+            continue
+        recent = _conflict_aggregator.recent_count()
+        if recent < CONFLICT_STORM_THRESHOLD:
+            continue
+        now = time.time()
+        if now - last_fired < CONFLICT_STORM_COOLDOWN:
+            continue
+        logger.warning(
+            "409 Conflict storm detected (%d in last %ds) — dispatching self-heal",
+            recent,
+            int(_conflict_aggregator.RECENT_WINDOW_SEC),
+        )
+        result = dispatch_repair(
+            "stale_telegram_poller",
+            {"conflict_count": recent},
+        )
+        last_fired = now
+        if result.fixed:
+            _conflict_aggregator.reset_recent()
+
+
 async def _stall_detector() -> None:
     """Background task: kill claude processes that have gone silent.
 
@@ -2020,6 +2068,13 @@ async def post_init(app: Application) -> None:
         STALL_POLL_INTERVAL,
         STALL_TIMEOUT,
     )
+    asyncio.create_task(_conflict_storm_watcher())
+    logger.info(
+        "Conflict storm watcher started (poll=%ds, threshold=%d/min, cooldown=%ds)",
+        CONFLICT_STORM_POLL_INTERVAL,
+        CONFLICT_STORM_THRESHOLD,
+        CONFLICT_STORM_COOLDOWN,
+    )
 
     # Clean up stale photo files from prior crash/SIGKILL (older than 1 hour)
     try:
@@ -2121,7 +2176,8 @@ def main() -> None:
     from stargate.singleton import acquire_singleton
 
     acquire_singleton()
-    install_filters()
+    global _conflict_aggregator
+    _conflict_aggregator = install_filters()
 
     # Rotate oversize bridge.err / bridge.log and re-point sys.stdout/stderr
     # at fresh files. Launchd's stderr redirect happens at exec time, so the

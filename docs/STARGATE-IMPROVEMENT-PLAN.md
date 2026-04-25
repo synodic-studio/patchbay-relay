@@ -92,6 +92,18 @@ what's landed and what's still open. Full audit detail follows unchanged.
   (40 min) to 600s (10 min) — env-overridable. Catches genuine hangs
   *and* TCC-dialog blocks (both produce no events) sooner without
   reaping legitimate long runs (which stream events continuously).
+- **409 Conflict storm watcher** (CTB-die runtime trigger): the
+  `stale_telegram_poller` self-heal handler now actually fires.
+  `ConflictAggregator` keeps a 60s sliding window of recent conflict
+  log records; `_conflict_storm_watcher` polls it every 30s and, when
+  10+ conflicts land in the window, calls
+  `dispatch_repair("stale_telegram_poller")` which signals the stale
+  PID via the singleton lockfile. 120s cooldown keeps us from re-firing
+  while a previous repair settles. Closes the loop on the original
+  pathology behind the 04-18 outage.
+- **Three-handler consolidation** (audit §14): single
+  `_process_with_claude_turn` shared by message / photo / document.
+  Handlers are now adapters that build a prompt + label and delegate.
 
 ### Still open (audit items not yet addressed)
 
@@ -101,7 +113,7 @@ what's landed and what's still open. Full audit detail follows unchanged.
 | §11 / §5 | Channels MCP plan can't run on `claude -p` | Blocked on Agent SDK migration (§4a). |
 | §12 | `max_turns=500` runaway risk | Decision 2026-04-24: don't lower until we have data. Add `turns_used` / `elapsed_ms` to `activity.jsonl` first; revisit once real distribution is known. |
 | §13 | `_to_markdownv2` partial-render leaks | **Resolved 2026-04-25** — markdown vs plain decided once per response; mid-response downgrade propagates to remaining chunks. |
-| §14 | Three handler duplication | Open. The CTB-ucw helpers (`_claim_or_queue`, `_drain_next`, `_release_processing`) are a partial down-payment but the wider `_process_with_claude` extraction is still ahead. |
+| §14 | Three handler duplication | **Resolved 2026-04-25** — `_process_with_claude_turn` is the shared lifecycle; the three handlers are thin adapters that build a prompt + label and delegate. Net −28 lines, single source of truth. |
 | §15 | auth_server reflected XSS via raw `error` | **Moot 2026-04-24** — auth_server.py and the entire auth layer deleted from the repo. See `docs/apple-auth-implementation.md`. |
 | §16 | IPv6 prefix rotation locking mobile sessions | Open. |
 | §17 | `cmd_remote_control` stdout-only deadlock | Open. |
