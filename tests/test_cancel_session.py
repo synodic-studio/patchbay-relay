@@ -189,3 +189,53 @@ def test_iter_active_sessions_skips_idle_state():
     bridge._sessions["c"] = bridge.SessionState()
     pairs = bridge._iter_active_sessions()
     assert pairs == []
+
+
+# ---------------------------------------------------------------------------
+# /kill end-to-end on a cc-sdk session: harness.cancel runs on the worker loop
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cmd_kill_cancels_cc_sdk_harness_across_loops():
+    """Simulate an in-flight cc-sdk turn, /kill it, confirm harness.cancel
+    ran on the worker loop (not the main loop)."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    worker_loop, worker_thread = _spin_up_worker_loop()
+    try:
+        cancel_called_on: dict[str, asyncio.AbstractEventLoop | None] = {"loop": None}
+
+        class _SdkLikeHarness:
+            name = "cc-sdk"
+
+            async def cancel(self) -> None:
+                cancel_called_on["loop"] = asyncio.get_running_loop()
+
+        # Set up the session as if a cc-sdk turn is in flight.
+        state = bridge._get_session_state("99_88")
+        state.harness = _SdkLikeHarness()
+        state.worker_loop = worker_loop
+        # state.proc stays None — that's the cc-sdk shape.
+
+        update = SimpleNamespace(
+            effective_user=SimpleNamespace(id=42),
+            effective_chat=SimpleNamespace(id=99),
+            message=SimpleNamespace(
+                message_thread_id=88,
+                reply_text=AsyncMock(),
+            ),
+        )
+        context = SimpleNamespace()
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(bridge, "_log_activity", lambda *a, **kw: None)
+            await bridge.cmd_kill(update, context)
+
+        assert cancel_called_on["loop"] is worker_loop
+        # User saw the killed message, not "no active process"
+        sent = update.message.reply_text.call_args[0][0]
+        assert "Killed" in sent
+    finally:
+        _stop_worker_loop(worker_loop, worker_thread)

@@ -17,7 +17,7 @@ See docs/HARNESS-DESIGN.md for the protocol contract.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 
 from ..config import CLAUDE_PATH, MAX_TIMEOUT, MAX_TURNS, logger
 from ..quota import is_quota_error
@@ -55,10 +55,15 @@ class ClaudeSdkHarness:
         cli_path: str = CLAUDE_PATH,
         max_timeout_seconds: float = MAX_TIMEOUT,
         max_turns_default: int = MAX_TURNS,
+        on_progress: Callable[[], None] | None = None,
     ) -> None:
         self._cli_path = cli_path
         self._max_timeout = max_timeout_seconds
         self._max_turns_default = max_turns_default
+        # External observer (the bridge) calls this on every SDK message
+        # so SessionState.last_event_at advances and the stall detector
+        # has the same per-event cadence signal it gets from cc-cli.
+        self._on_progress = on_progress
         # The current in-flight task, so cancel() can interrupt cleanly.
         self._task: asyncio.Task | None = None
 
@@ -94,6 +99,14 @@ class ClaudeSdkHarness:
                 async with ClaudeSDKClient(options=options) as client:
                     await client.query(req.prompt)
                     async for msg in client.receive_response():
+                        # Refresh the bridge's stall-detector timestamp on
+                        # every SDK message — same cadence guarantee as
+                        # cc-cli's per-stdout-line `on_progress` callback.
+                        if self._on_progress is not None:
+                            try:
+                                self._on_progress()
+                            except Exception:  # noqa: BLE001 — never let a callback bring us down
+                                logger.exception("on_progress callback raised")
                         if isinstance(msg, AssistantMessage):
                             # AssistantMessage.error is a typed Literal — much
                             # cleaner than string-matching stderr.

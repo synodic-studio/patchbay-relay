@@ -11,8 +11,10 @@ Code CLI, Claude Agent SDK, codex/pi, cursor, …) behind one interface.
 | 1a — Protocol + CLI harness | ✅ | `stargate/harness/{base,claude_cli}.py`, 16 tests. Dormant — bridge unchanged. |
 | 2 — SDK harness | ✅ | `stargate/harness/claude_sdk.py`, 24 tests. Dormant. Validated the protocol from a 2nd angle without any changes. |
 | 1b — Rewire bridge (core) | ✅ | `bridge.run_claude` now drives `ClaudeCliHarness` via `_drive_harness_sync`. Popen/drain/parse moved out of the bridge. `proc_setter` callback mirrors the running proc into `SessionState.proc` so `/kill`, the stall detector, and graceful shutdown still work. `on_progress` keeps `state.last_event_at` fresh. 559 tests pass. |
-| 1c — Per-chat selection + activity field | ✅ | `chat_projects.json.harness` field + `STARGATE_DEFAULT_HARNESS` env + `/harness` command. Every `activity.jsonl` entry that touches a turn carries `harness=<effective>` and `harness_requested=<requested>`. cc-sdk is accepted (so the seam is exercised) but the dispatcher still runs cc-cli with a warning until phase 3 lands the SDK harness with proper /kill integration. 573 tests. |
-| 3 — Live soak | future | One topic on `cc-sdk` for as long as it takes to be boring. Compare via `harness=` field on `activity.jsonl`. |
+| 1c — Per-chat selection + activity field | ✅ | `chat_projects.json.harness` field + `STARGATE_DEFAULT_HARNESS` env + `/harness` command. Every `activity.jsonl` entry that touches a turn carries `harness=<effective>` and `harness_requested=<requested>`. 573 tests. |
+| 3a — Backend-agnostic cancel | ✅ | `SessionState.harness` + `worker_loop` fields. `_cancel_session_async` dispatches `proc.kill()` for cc-cli or `run_coroutine_threadsafe(harness.cancel(), worker_loop)` for cc-sdk. `_iter_active_sessions` is the new backend-agnostic snapshot used by /ping, the stall detector, /restart, shutdown. 582 tests. |
+| 3b — cc-sdk dispatch | ✅ | `run_claude` instantiates `ClaudeSdkHarness` when cc-sdk is selected. SDK harness gained `on_progress` so `last_event_at` refreshes per SDK message. /kill, stall detector, shutdown all route cancellation through the unified helper. 583 tests. |
+| 3 — Live soak | next | Pick one topic, `/harness cc-sdk`, watch `activity.jsonl` for behavioural diffs over a few weeks. |
 | 4 — Flip default | future | `STARGATE_DEFAULT_HARNESS=cc-sdk`. Keep `cc-cli` as fallback. |
 | 5 — Other backends | future | codex/pi, cursor — exercises `HarnessCapabilities.supports_resume=False`. |
 
@@ -41,6 +43,34 @@ Code CLI, Claude Agent SDK, codex/pi, cursor, …) behind one interface.
   of the removed `bridge._read_proc_streaming`. The
   `proc.communicate(timeout=...)` mocking pattern still works.
 
+## What 3 added (on top of 1c)
+
+- `_cancel_session_async(state)` — bridge.py helper that hides the
+  cc-cli/cc-sdk split. cc-cli SIGKILLs the proc; cc-sdk schedules
+  `harness.cancel()` on the worker thread's event loop via
+  `asyncio.run_coroutine_threadsafe` and awaits with a 5s timeout.
+- `SessionState.harness` and `SessionState.worker_loop` — populated by
+  `_drive_harness_sync` for the lifetime of a turn, cleared in
+  `finally`. Used by the cancel helper to know what to do.
+- `_iter_active_sessions()` — backend-agnostic replacement for
+  `_iter_active_procs()` at every call site that doesn't actually need
+  a `Popen` handle (stall detector, /restart, shutdown, /ping). The
+  old iterator stays for cc-cli-only paths.
+- `ClaudeSdkHarness` gained an `on_progress: Callable[[], None]`
+  parameter. The harness invokes it on every SDK message so the
+  bridge's `state.last_event_at` advances at the same per-event
+  cadence the cc-cli harness already provides via per-stdout-line
+  refresh. The stall detector doesn't care which harness fed the
+  signal.
+- `run_claude` instantiates `ClaudeSdkHarness` when the resolved
+  harness is `cc-sdk`. `state.proc` stays None for the duration of
+  the turn (the SDK owns its own subprocess); `state.harness` and
+  `state.worker_loop` are the only handles `/kill` needs.
+- Graceful shutdown stays sync. cc-cli sessions get the existing
+  SIGTERM/SIGKILL pump; cc-sdk sessions are logged for the operator
+  and rely on parent-exit cleanup (the SDK's child subprocess
+  inherits SIGHUP / EOF on stdin when we exit and tears itself down).
+
 ## What 1c added (on top of 1b core)
 
 - `STARGATE_DEFAULT_HARNESS` env (defaults to `cc-cli`); validated at
@@ -63,13 +93,21 @@ Code CLI, Claude Agent SDK, codex/pi, cursor, …) behind one interface.
   `harness_requested=<requested>` for behavioural diffing during the
   phase-3 soak.
 
-## What's left for phase 3
+## What's left
 
-Wire `ClaudeSdkHarness` end-to-end as a peer dispatch target — the SDK
-harness manages its own subprocess, so /kill, the stall detector, and
-graceful shutdown need to learn `harness.cancel()` instead of
-`state.proc.kill()`. Then flip one topic to `cc-sdk` via `/harness
-cc-sdk` and watch the activity diff.
+Phases 0 / 1a / 1b / 1c / 2 / 3a / 3b have all landed. The remaining
+work is the live soak (the original "phase 3" goal):
+
+- Pick one or two low-stakes topics. `/harness cc-sdk`. Watch.
+- After a few weeks, compare `harness=cc-cli` vs `harness=cc-sdk`
+  rows in `activity.jsonl` for: turn duration distributions, OOM
+  rate, rate-limit handoffs, empty-success rate, stall kills,
+  surprises.
+- If cc-sdk is boring (no regressions, parity on observed metrics)
+  for the soak window, flip `STARGATE_DEFAULT_HARNESS=cc-sdk`. Keep
+  cc-cli as a per-topic fallback (phase 4 of the table above).
+- Phase 5 (codex / cursor / pi) would re-exercise
+  `HarnessCapabilities.supports_resume=False`. Out of scope for now.
 
 ## Open questions — resolved
 

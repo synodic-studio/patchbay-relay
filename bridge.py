@@ -110,7 +110,8 @@ from stargate.sessions import (  # noqa: E402
 )
 from stargate.harness import (  # noqa: E402
     ClaudeCliHarness,
-    ToolUse,
+    ClaudeSdkHarness,
+    ToolUse,  # noqa: F401 — re-exported for tests
     TurnError,
     TurnFinal,
     TurnRequest,
@@ -512,11 +513,11 @@ def run_claude(
         model = get_chat_model(session_key)
     effort = resolve_effort(session_key)
 
-    # Resolve harness: per-chat override > DEFAULT_HARNESS env. Today
-    # `run_claude` only dispatches to `ClaudeCliHarness`; if the topic
-    # selected `cc-sdk` we honor the *log* of that intent for the live
-    # soak comparison, but fall back to `cc-cli` for actual execution
-    # until phase 3 wires the SDK harness with proper /kill integration.
+    # Resolve harness: per-chat override > DEFAULT_HARNESS env. Both
+    # cc-cli and cc-sdk are dispatched as of phase 3b — selection is
+    # logged on every activity entry under `harness=` and
+    # `harness_requested=` so the live-soak comparison can grep
+    # behavioural diffs.
     harness_name = get_chat_harness(session_key) or DEFAULT_HARNESS
     if harness_name not in VALID_HARNESSES:
         logger.warning(
@@ -527,12 +528,6 @@ def run_claude(
         )
         harness_name = DEFAULT_HARNESS
     effective_harness = harness_name
-    if effective_harness == "cc-sdk":
-        logger.warning(
-            "cc-sdk selected for %s but not yet dispatched; running on cc-cli",
-            session_key,
-        )
-        effective_harness = "cc-cli"
 
     if session_id:
         logger.info("Resuming session %s for %s", session_id[:12], session_key)
@@ -569,15 +564,29 @@ def run_claude(
         if st is not None:
             st.proc = proc
 
-    harness = ClaudeCliHarness(
-        claude_path=CLAUDE_PATH,
-        max_timeout_seconds=MAX_TIMEOUT,
-        on_progress=_on_progress,
-        proc_setter=_proc_setter,
-        max_turns_default=(
-            max_turns_override if max_turns_override is not None else MAX_TURNS
-        ),
-    )
+    if effective_harness == "cc-sdk":
+        # cc-sdk owns its subprocess internally — there's no Popen handle
+        # for the bridge to mirror, so /kill / stall detector / shutdown
+        # route through `harness.cancel()` via _cancel_session_async
+        # instead. `state.proc` stays None for the duration of this turn.
+        harness = ClaudeSdkHarness(
+            cli_path=CLAUDE_PATH,
+            max_timeout_seconds=MAX_TIMEOUT,
+            on_progress=_on_progress,
+            max_turns_default=(
+                max_turns_override if max_turns_override is not None else MAX_TURNS
+            ),
+        )
+    else:
+        harness = ClaudeCliHarness(
+            claude_path=CLAUDE_PATH,
+            max_timeout_seconds=MAX_TIMEOUT,
+            on_progress=_on_progress,
+            proc_setter=_proc_setter,
+            max_turns_default=(
+                max_turns_override if max_turns_override is not None else MAX_TURNS
+            ),
+        )
     req = TurnRequest(
         prompt=message,
         session_key=session_key,
@@ -1709,9 +1718,9 @@ async def cmd_harness(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     DEFAULT_HARNESS fallback). `/harness <name>` sets it for this topic;
     `/harness default` clears the override.
 
-    Today only `cc-cli` is dispatched in `run_claude`; `cc-sdk` can be
-    selected and stored, but `run_claude` falls back to `cc-cli` and
-    logs a warning until phase 3 wires the SDK harness end-to-end.
+    Both cc-cli and cc-sdk are dispatched live (phase 3b). Switch
+    freely; activity.jsonl tags every turn with `harness=<effective>`
+    for the live-soak comparison.
     """
     chat_id = update.effective_chat.id
     thread_id = update.message.message_thread_id
@@ -1733,13 +1742,8 @@ async def cmd_harness(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             )
             return
         set_chat_harness(key, choice)
-        suffix = (
-            ""
-            if choice == "cc-cli"
-            else f" (NOTE: {choice} is not yet dispatched — run_claude falls back to cc-cli until phase 3)"
-        )
         await update.message.reply_text(
-            f"Harness set to {choice}. Takes effect on next message.{suffix}"
+            f"Harness set to {choice}. Takes effect on next message."
         )
         logger.info("Harness set to %s for %s", choice, key)
         return

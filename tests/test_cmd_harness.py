@@ -67,13 +67,12 @@ class TestCmdHarness:
         assert "cc-cli" in sent
 
     @pytest.mark.asyncio
-    async def test_set_cc_sdk_warns_about_phase_3(self):
+    async def test_set_cc_sdk_stores_value(self):
         update, context = _make_update("/harness cc-sdk")
         await bridge.cmd_harness(update, context)
         assert stargate.projects.get_chat_harness(SESSION_KEY) == "cc-sdk"
         sent = update.message.reply_text.call_args[0][0]
         assert "cc-sdk" in sent
-        assert "phase 3" in sent.lower()
 
     @pytest.mark.asyncio
     async def test_default_clears_override(self):
@@ -163,24 +162,56 @@ class TestHarnessActivityField:
         assert invoke["harness_requested"] == bridge.DEFAULT_HARNESS
         assert complete["harness"] == "cc-cli"
 
-    def test_per_chat_cc_sdk_logs_requested_but_runs_cc_cli(
+    def test_per_chat_cc_sdk_dispatches_to_sdk_harness(
         self, _bridge_run_claude_deps
     ):
-        """Phase 1c: cc-sdk is honored in the activity log under
-        harness_requested but the dispatcher still runs cc-cli."""
-        proc = _make_proc(stdout=_valid_json_stdout())
+        """Phase 3b: when the per-chat selection is cc-sdk, run_claude
+        instantiates `ClaudeSdkHarness` (not ClaudeCliHarness) and the
+        activity log records `harness=cc-sdk`."""
+        from stargate.harness import TextDelta, TurnFinal
+
         events = []
 
         def _capture(event, **kwargs):
             events.append({"event": event, **kwargs})
 
+        # Fake harness records that ClaudeSdkHarness was instantiated
+        # and yields a minimal successful stream.
+        instantiated = {"called": False}
+
+        class _FakeSdkHarness:
+            name = "cc-sdk"
+
+            def __init__(self, **kwargs):
+                instantiated["called"] = True
+                instantiated["kwargs"] = kwargs
+
+            async def run_turn(self, req):
+                yield TextDelta(text="hello from sdk", final=True)
+                yield TurnFinal(
+                    session_id="sess-sdk-1",
+                    num_turns=1,
+                    total_cost_usd=0.001,
+                    raw_text="hello from sdk",
+                )
+
+            async def cancel(self) -> None:
+                pass
+
         with (
-            patch("bridge.subprocess.Popen", return_value=proc),
+            patch("bridge.ClaudeSdkHarness", _FakeSdkHarness),
             patch("bridge._log_activity", side_effect=_capture),
             patch("bridge.get_chat_harness", return_value="cc-sdk"),
         ):
-            bridge.run_claude(MESSAGE, SESSION_KEY)
+            result = bridge.run_claude(MESSAGE, SESSION_KEY)
+
+        assert instantiated["called"] is True
+        # on_progress was wired through (so the stall detector keeps working)
+        assert "on_progress" in instantiated["kwargs"]
+        assert result == "hello from sdk"
 
         invoke = next(e for e in events if e["event"] == "claude_invoke")
-        assert invoke["harness"] == "cc-cli"
+        complete = next(e for e in events if e["event"] == "claude_complete")
+        assert invoke["harness"] == "cc-sdk"
         assert invoke["harness_requested"] == "cc-sdk"
+        assert complete["harness"] == "cc-sdk"
