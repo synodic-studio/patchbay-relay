@@ -33,20 +33,20 @@ from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse
 
 import auth
+from stargate.config import _env_int as _stargate_env_int
 
 load_dotenv(Path(__file__).parent / ".env")
 
 logger = logging.getLogger("bridge.auth_server")
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 APPLE_SERVICE_ID = os.environ.get("APPLE_SERVICE_ID", "")
 APPLE_TEAM_ID = os.environ.get("APPLE_TEAM_ID", "")
 APPLE_KEY_ID = os.environ.get("APPLE_KEY_ID", "")
 APPLE_PRIVATE_KEY_PATH = os.environ.get("APPLE_PRIVATE_KEY_PATH", "")
 AUTH_BASE_URL = os.environ.get("AUTH_BASE_URL", "https://auth.kj6.dev")
-AUTH_PORT = int(os.environ.get("AUTH_PORT", "8443"))
+
+AUTH_PORT = _stargate_env_int("AUTH_PORT", "8443", min_value=1)
 APPLE_SUBJECT_ALLOWLIST: set[str] = set()
 _subj_result = subprocess.run(
     ["pass", "show", "apple-subject-allowlist"],
@@ -258,9 +258,7 @@ async def apple_callback(
     """
     if error:
         logger.warning("Apple auth error: %s", error)
-        return HTMLResponse(
-            f"<h1>Authentication failed</h1><p>{error}</p>", status_code=400
-        )
+        return HTMLResponse(f"<h1>Authentication failed</h1><p>{error}</p>", status_code=400)
 
     if not id_token or not state:
         return HTMLResponse(
@@ -290,15 +288,16 @@ async def apple_callback(
     except Exception as e:
         logger.error("Apple token verification failed: %s", e)
         auth.record_failed_attempt(telegram_user_id)
-        return HTMLResponse("<h1>Verification failed</h1><p>Authentication could not be completed. Please try again.</p>", status_code=400)
+        return HTMLResponse(
+            "<h1>Verification failed</h1><p>Authentication could not be completed. Please try again.</p>",
+            status_code=400,
+        )
 
     apple_subject = claims.get("sub", "")
 
     # Reject tokens with missing or empty subject — Apple IDs always have a sub claim
     if not apple_subject:
-        logger.error(
-            "Apple ID token missing 'sub' claim — rejecting (user %d)", telegram_user_id
-        )
+        logger.error("Apple ID token missing 'sub' claim — rejecting (user %d)", telegram_user_id)
         auth.record_failed_attempt(telegram_user_id)
         return HTMLResponse(
             "<h1>Verification failed</h1><p>Invalid identity token.</p>",
@@ -309,9 +308,7 @@ async def apple_callback(
     if APPLE_SUBJECT_ALLOWLIST and apple_subject not in APPLE_SUBJECT_ALLOWLIST:
         logger.warning("Apple subject %s not in allowlist", apple_subject)
         auth.record_failed_attempt(telegram_user_id)
-        auth._log_event(
-            "denied", telegram_user_id, f"apple_sub={apple_subject} not in allowlist"
-        )
+        auth._log_event("denied", telegram_user_id, f"apple_sub={apple_subject} not in allowlist")
         auth._notify(
             "denied",
             telegram_user_id,

@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -16,6 +17,84 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent.parent / ".env")
+
+
+# ---------------------------------------------------------------------------
+# Env-var validation helpers (CTB-apy)
+#
+# Misconfigured .env files used to surface as unhelpful ValueError tracebacks
+# at import time. Now each env read has its own guard that either returns a
+# sane value or exits with a clear human-readable error on stderr — the
+# bridge refuses to start rather than running half-broken.
+# ---------------------------------------------------------------------------
+
+
+def _fatal_config(msg: str) -> None:
+    """Print a clear error to stderr and exit. No self-heal when we can't
+    guess what the user meant."""
+    print(f"ERROR: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+def _env_int(name: str, default: str, min_value: int | None = None) -> int:
+    """Parse an int env var with validation. Fatal if unparseable or below min."""
+    raw = os.environ.get(name, default)
+    try:
+        value = int(raw)
+    except ValueError:
+        _fatal_config(f"{name}={raw!r} is not an integer. Set {name} to a valid integer in .env (default: {default}).")
+    if min_value is not None and value < min_value:
+        _fatal_config(f"{name}={value} is below the minimum ({min_value}). Set a larger value in .env.")
+    return value
+
+
+def _env_existing_path(name: str, default: str, description: str) -> str:
+    """Read an env var holding a directory path and fatal-exit if missing.
+    User-expansion ('~') is applied."""
+    raw = os.environ.get(name, default)
+    expanded = os.path.expanduser(raw)
+    if not os.path.isdir(expanded):
+        _fatal_config(
+            f"{name}={raw!r} — {description} does not exist at {expanded}. "
+            f"Create the directory or point {name} at an existing one."
+        )
+    return expanded
+
+
+def _resolve_claude_binary(configured: str) -> str:
+    """Find the claude CLI. Try the configured path first; if missing, walk
+    a short list of known fallbacks. Fatal-exit if none work — the bridge
+    is useless without a working Claude CLI."""
+    expanded = os.path.expanduser(configured)
+    if os.path.isfile(expanded) and os.access(expanded, os.X_OK):
+        return expanded
+
+    # Self-heal: try the two canonical install locations plus $PATH lookup.
+    fallbacks = [
+        os.path.expanduser("~/.local/bin/claude"),
+        "/opt/homebrew/bin/claude",
+        "/usr/local/bin/claude",
+    ]
+    path_lookup = shutil.which("claude")
+    if path_lookup:
+        fallbacks.append(path_lookup)
+
+    for candidate in fallbacks:
+        if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            if candidate != expanded:
+                logger_bootstrap = logging.getLogger("bridge")
+                logger_bootstrap.warning(
+                    "CLAUDE_PATH=%s not executable; falling back to %s",
+                    configured,
+                    candidate,
+                )
+            return candidate
+
+    _fatal_config(
+        f"claude CLI not found. Tried CLAUDE_PATH={configured!r} and common "
+        f"locations ({', '.join(fallbacks)}). Install Claude Code or set "
+        f"CLAUDE_PATH to the correct binary."
+    )
 
 
 class _SecretStr:
@@ -68,12 +147,11 @@ if not BOT_TOKEN:
     sys.exit(1)
 
 # --- Paths ---
-CLAUDE_PATH = os.environ.get("CLAUDE_PATH", os.path.expanduser("~/.local/bin/claude"))
-WORKING_DIR = os.environ.get("CLAUDE_WORKING_DIR", os.path.expanduser("~/Developer"))
-PA_PLUGIN_DIR = os.environ.get(
-    "PA_PLUGIN_DIR",
-    os.path.expanduser("~/Developer/Fanta"),
-)
+# CLAUDE_PATH self-heals: we try the configured value first, then a short
+# list of canonical install locations, then $PATH. Hard fail if none work.
+CLAUDE_PATH = _resolve_claude_binary(os.environ.get("CLAUDE_PATH", "~/.local/bin/claude"))
+WORKING_DIR = _env_existing_path("CLAUDE_WORKING_DIR", "~/Developer", "Claude working directory")
+PA_PLUGIN_DIR = _env_existing_path("PA_PLUGIN_DIR", "~/Developer/Fanta", "Fanta plugin directory")
 
 BASE_DIR = Path(__file__).parent.parent
 SESSION_DIR = BASE_DIR / "sessions"
@@ -90,17 +168,17 @@ DOC_DIR = Path(tempfile.gettempdir()) / "claude-telegram-docs"
 DOC_DIR.mkdir(exist_ok=True)
 
 # --- Tunables ---
-SESSION_EXPIRY = int(os.environ.get("SESSION_EXPIRY", "259200"))  # 3 days
-MAX_TIMEOUT = int(os.environ.get("MAX_TIMEOUT", "2700"))  # 45 min safety valve
-MAX_TURNS = int(os.environ.get("MAX_TURNS", "500"))
-MAX_WORKERS = int(os.environ.get("MAX_WORKERS", "4"))
+SESSION_EXPIRY = _env_int("SESSION_EXPIRY", "259200", min_value=1)  # 3 days
+MAX_TIMEOUT = _env_int("MAX_TIMEOUT", "2700", min_value=1)  # 45 min safety valve
+MAX_TURNS = _env_int("MAX_TURNS", "500", min_value=1)
+MAX_WORKERS = _env_int("MAX_WORKERS", "4", min_value=1)
 
 # /usage weekly-cap estimate. Anthropic does not publish a weekly token cap
 # for Max plans — the closest public data (Portkey's community-measured
 # numbers) quotes hours/week, not tokens. Defaulting to 3B as a rough
 # Max 20x ballpark; override via env once real data firms up. Displayed
 # with an "(est)" marker in /usage output so it never reads as official.
-USAGE_WEEKLY_TOKEN_CAP = int(os.environ.get("USAGE_WEEKLY_TOKEN_CAP", "3000000000"))
+USAGE_WEEKLY_TOKEN_CAP = _env_int("USAGE_WEEKLY_TOKEN_CAP", "3000000000", min_value=1)
 
 # --- Telegram constants ---
 TELEGRAM_MSG_LIMIT = 4096
@@ -116,7 +194,7 @@ MAX_QUEUED_MESSAGES = 20  # max pending messages per session before dropping
 # TCC/GUI-dialog hangs eventually. Env-overridable.
 STALL_POLL_INTERVAL = 120  # check every 2 minutes
 STALL_CPU_THRESHOLD = 1.0  # %CPU below this = idle
-STALL_TIMEOUT = int(os.environ.get("STALL_TIMEOUT", "2400"))  # 40 min
+STALL_TIMEOUT = _env_int("STALL_TIMEOUT", "2400", min_value=1)  # 40 min
 
 # --- Shutdown ---
 SHUTDOWN_PROCESS_TIMEOUT = 30  # seconds to wait for active processes

@@ -12,6 +12,8 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
+from stargate.config import _env_int
+
 logger = logging.getLogger("bridge.auth")
 
 AUTH_DIR = Path(__file__).parent / "auth"
@@ -24,9 +26,7 @@ AUTH_LOG_FILE = AUTH_DIR / "auth_log.jsonl"
 SESSION_EXPIRY_SECONDS = 30 * 24 * 60 * 60
 
 # Inactivity timeout: auto-expire if no messages for this long (default 7 days)
-INACTIVITY_TIMEOUT = int(
-    os.environ.get("AUTH_INACTIVITY_TIMEOUT", str(7 * 24 * 60 * 60))
-)
+INACTIVITY_TIMEOUT = _env_int("AUTH_INACTIVITY_TIMEOUT", str(7 * 24 * 60 * 60), min_value=1)
 
 # Rate limiting: 3 failures in 5 min → locked out for 15 min
 RATE_LIMIT_MAX_FAILURES = 3
@@ -57,13 +57,9 @@ def _notify(event_type: str, telegram_user_id: int, details: str = "") -> None:
 
             loop = asyncio.get_event_loop()
             if loop.is_running():
-                loop.create_task(
-                    _notify_callback(event_type, telegram_user_id, details)
-                )
+                loop.create_task(_notify_callback(event_type, telegram_user_id, details))
             else:
-                loop.run_until_complete(
-                    _notify_callback(event_type, telegram_user_id, details)
-                )
+                loop.run_until_complete(_notify_callback(event_type, telegram_user_id, details))
         except Exception:
             logger.debug("Failed to send auth notification", exc_info=True)
 
@@ -253,9 +249,7 @@ def record_failed_attempt(telegram_user_id: int) -> bool:
     _failed_attempts[telegram_user_id].append(now)
     locked = len(_failed_attempts[telegram_user_id]) >= RATE_LIMIT_MAX_FAILURES
     if locked:
-        _log_event(
-            "rate_limited", telegram_user_id, f"locked out for {RATE_LIMIT_LOCKOUT}s"
-        )
+        _log_event("rate_limited", telegram_user_id, f"locked out for {RATE_LIMIT_LOCKOUT}s")
         _notify(
             "rate_limited",
             telegram_user_id,
@@ -353,9 +347,7 @@ def setup_totp(telegram_user_id: int) -> tuple[str, str]:
     _save_totp_secrets(secrets)
     _log_event("totp_setup", telegram_user_id)
     _notify("totp_setup", telegram_user_id, "TOTP secret configured")
-    uri = pyotp.totp.TOTP(secret).provisioning_uri(
-        name=str(telegram_user_id), issuer_name="ClaudeBridge"
-    )
+    uri = pyotp.totp.TOTP(secret).provisioning_uri(name=str(telegram_user_id), issuer_name="ClaudeBridge")
     return secret, uri
 
 
