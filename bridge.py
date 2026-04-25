@@ -22,6 +22,7 @@ import signal
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -1040,6 +1041,143 @@ async def replay_pending(bot) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _maybe_handoff_quota(
+    response: str, session_key: str, chat_id: int, thread_id: int | None
+) -> str:
+    """If `response` is a quota-hit sentinel, hand the original message off
+    to Forge and return a user-facing replacement. Otherwise return the
+    response unchanged. Only message-shaped turns invoke this; photo /
+    document handlers don't because their prompts include local file paths
+    a Forge worker can't reach."""
+    if not response.startswith(QUOTA_HIT_PREFIX):
+        return response
+    original_msg = response[len(QUOTA_HIT_PREFIX) :]
+    session_id = get_session_id(session_key)
+    chat_cwd = get_chat_working_dir(session_key)
+    handed_off = _handoff_to_forge(
+        session_key=session_key,
+        message=original_msg,
+        chat_id=chat_id,
+        thread_id=thread_id,
+        session_id=session_id,
+        working_dir=chat_cwd,
+    )
+    if handed_off:
+        return (
+            "Hit a quota/rate limit. Handed this off to Forge — "
+            "it'll pick up where this left off and send the response "
+            "back here when done."
+        )
+    return (
+        "Hit a quota/rate limit. Tried to hand off to Forge but "
+        "failed to write the queue file. Try again later."
+    )
+
+
+async def _process_with_claude_turn(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    session_key: str,
+    chat_id: int,
+    thread_id: int | None,
+    prompt: str,
+    label: str,  # "message" / "photo" / "document" — drives log-event names + UX strings
+    drop_message: str,  # what to show on "queue full"
+    queued_message: str,  # what to show on "queued"
+    model: str | None = None,  # per-message override (only "message" uses this today)
+    quota_handoff: bool = False,  # only "message" uses Forge handoff
+    on_drop: Callable[[], None] | None = None,  # called when queue is full (file cleanup)
+    on_finish: Callable[[], None] | None = None,  # called in finally after processing
+) -> None:
+    """Shared lifecycle for one user→claude turn: claim the lane, run the
+    main invocation, send the reply, drain the queued follow-ups, release.
+
+    The three handlers (handle_message, handle_photo, handle_document) used
+    to inline ~100 lines of this each. Pulling them onto one function means
+    a bug in queueing or drain ordering is one fix instead of three. The
+    per-handler pieces (extracting the prompt, downloading attachments,
+    file cleanup) stay in the handlers; this function takes the resulting
+    `prompt` and runs it.
+    """
+    state = _get_session_state(session_key)
+    status, depth = await _claim_or_queue(state, prompt)
+
+    if status == "full":
+        await update.message.reply_text(drop_message)
+        logger.warning("Queue full for %s, dropping %s", session_key, label)
+        _log_activity(f"{label}_dropped", session_key=session_key, depth=MAX_QUEUED_MESSAGES)
+        if on_drop is not None:
+            on_drop()
+        return
+
+    if status == "queued":
+        await update.message.reply_text(queued_message.format(depth=depth))
+        logger.info("Queued %s for %s (depth: %d)", label, session_key, depth)
+        _log_activity(f"{label}_queued", session_key=session_key, depth=depth)
+        return
+
+    # status == "claimed" — we own this session's processing lane until _drain_next clears it.
+    pending_id = save_pending(chat_id, thread_id, prompt, session_key)
+    stop_typing = asyncio.Event()
+    typing_task = asyncio.create_task(keep_typing(chat_id, thread_id, stop_typing, context.bot))
+
+    try:
+        loop = asyncio.get_running_loop()
+        try:
+            response = await loop.run_in_executor(
+                _executor, lambda: run_claude(prompt, session_key, model=model)
+            )
+        except Exception as e:
+            logger.error("Error running claude for %s %s: %s", label, session_key, e)
+            response = f"Error: {e}"
+
+        if quota_handoff:
+            response = _maybe_handoff_quota(response, session_key, chat_id, thread_id)
+
+        try:
+            await _send_response(context.bot, chat_id, thread_id, response)
+            clear_pending(pending_id)
+        except Exception as e:
+            logger.error("Failed to send %s response for %s: %s", label, session_key, e)
+            await _notify_delivery_failure(context.bot, chat_id, thread_id, session_key)
+
+        # Drain queued messages: each pop from _drain_next either yields a
+        # batch or atomically clears state.processing and ends the loop.
+        while True:
+            batch = await _drain_next(state)
+            if batch is None:
+                break
+            logger.info("Processing %d queued message(s) for %s", len(batch), session_key)
+            combined = (
+                batch[0]
+                if len(batch) == 1
+                else "\n\n---\n\n".join(
+                    f"[Follow-up {i + 1}]\n{msg}" for i, msg in enumerate(batch)
+                )
+            )
+            try:
+                response = await loop.run_in_executor(_executor, run_claude, combined, session_key)
+            except Exception as e:
+                logger.error("Error running claude for queued batch %s: %s", session_key, e)
+                response = f"Error: {e}"
+            try:
+                await _send_response(context.bot, chat_id, thread_id, response)
+            except Exception as e:
+                logger.error("Failed to send queued response for %s: %s", session_key, e)
+                await _notify_delivery_failure(context.bot, chat_id, thread_id, session_key)
+    except Exception:
+        # Defensive: ensure processing flag is cleared on any uncaught
+        # exception escaping the drain loop.
+        await _release_processing(state)
+        raise
+    finally:
+        stop_typing.set()
+        await typing_task
+        if on_finish is not None:
+            on_finish()
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if _shutting_down:
         await update.message.reply_text("Bridge is shutting down. Message not processed — please resend in a moment.")
@@ -1056,99 +1194,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     logger.info("From %d [%s]: %s", user_id, key, text[:80])
     _log_activity("message", user_id=user_id, session_key=key, text_len=len(text))
 
-    # Atomic: claim the processing lane, or enqueue this message.
-    state = _get_session_state(key)
-    status, depth = await _claim_or_queue(state, text)
-    if status == "full":
-        await update.message.reply_text(
-            f"Queue full ({MAX_QUEUED_MESSAGES}) — message dropped. Wait for current response to finish."
-        )
-        logger.warning("Queue full for %s, dropping message", key)
-        _log_activity("message_dropped", session_key=key, depth=MAX_QUEUED_MESSAGES)
-        return
-    if status == "queued":
-        await update.message.reply_text(f"Queued ({depth}) — will send when current response finishes.")
-        logger.info("Queued message for %s (depth: %d)", key, depth)
-        _log_activity("message_queued", session_key=key, depth=depth)
-        return
-
-    # status == "claimed" — we own this session's processing lane until _drain_next clears it.
-    # Check for per-message model prefix (e.g. "!sonnet do something")
     msg_model, clean_text = extract_model_prefix(text)
-    pending_id = save_pending(chat_id, thread_id, clean_text, key)
-
-    stop_typing = asyncio.Event()
-    typing_task = asyncio.create_task(keep_typing(chat_id, thread_id, stop_typing, context.bot))
-
-    try:
-        loop = asyncio.get_running_loop()
-        try:
-            response = await loop.run_in_executor(_executor, lambda: run_claude(clean_text, key, model=msg_model))
-        except Exception as e:
-            logger.error("Error running claude for %s: %s", key, e)
-            response = f"Error: {e}"
-
-        # Quota hit — hand off to Forge instead of sending error to user
-        if response.startswith(QUOTA_HIT_PREFIX):
-            original_msg = response[len(QUOTA_HIT_PREFIX) :]
-            session_id = get_session_id(key)
-            chat_cwd = get_chat_working_dir(key)
-            handed_off = _handoff_to_forge(
-                session_key=key,
-                message=original_msg,
-                chat_id=chat_id,
-                thread_id=thread_id,
-                session_id=session_id,
-                working_dir=chat_cwd,
-            )
-            if handed_off:
-                response = (
-                    "Hit a quota/rate limit. Handed this off to Forge — "
-                    "it'll pick up where this left off and send the response "
-                    "back here when done."
-                )
-            else:
-                response = (
-                    "Hit a quota/rate limit. Tried to hand off to Forge but "
-                    "failed to write the queue file. Try again later."
-                )
-
-        try:
-            await _send_response(context.bot, chat_id, thread_id, response)
-            clear_pending(pending_id)
-        except Exception as e:
-            logger.error("Failed to send response for %s: %s", key, e)
-            await _notify_delivery_failure(context.bot, chat_id, thread_id, key)
-
-        # Drain queued messages: each pop from _drain_next either yields a
-        # batch or atomically clears state.processing and ends the loop.
-        while True:
-            batch = await _drain_next(state)
-            if batch is None:
-                break
-            logger.info("Processing %d queued message(s) for %s", len(batch), key)
-            if len(batch) == 1:
-                combined = batch[0]
-            else:
-                combined = "\n\n---\n\n".join(f"[Follow-up {i + 1}]\n{msg}" for i, msg in enumerate(batch))
-            try:
-                response = await loop.run_in_executor(_executor, run_claude, combined, key)
-            except Exception as e:
-                logger.error("Error running claude for queued batch %s: %s", key, e)
-                response = f"Error: {e}"
-            try:
-                await _send_response(context.bot, chat_id, thread_id, response)
-            except Exception as e:
-                logger.error("Failed to send queued response for %s: %s", key, e)
-                await _notify_delivery_failure(context.bot, chat_id, thread_id, key)
-    except Exception:
-        # Defensive: ensure processing flag is cleared on any uncaught
-        # exception escaping the drain loop.
-        await _release_processing(state)
-        raise
-    finally:
-        stop_typing.set()
-        await typing_task
+    await _process_with_claude_turn(
+        update,
+        context,
+        session_key=key,
+        chat_id=chat_id,
+        thread_id=thread_id,
+        prompt=clean_text,
+        label="message",
+        drop_message=(
+            f"Queue full ({MAX_QUEUED_MESSAGES}) — message dropped. "
+            "Wait for current response to finish."
+        ),
+        queued_message="Queued ({depth}) — will send when current response finishes.",
+        model=msg_model,
+        quota_handoff=True,
+    )
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1172,70 +1234,25 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     prompt = f"{caption}\n\n[An image has been saved to {local_path} — use the Read tool to view it before responding.]"
 
-    # Atomic: claim the processing lane, or enqueue this photo's prompt.
-    state = _get_session_state(key)
-    status, depth = await _claim_or_queue(state, prompt)
-    if status == "full":
-        await update.message.reply_text(
-            f"Queue full ({MAX_QUEUED_MESSAGES}) — photo dropped. Wait for current response to finish."
-        )
-        logger.warning("Queue full for %s, dropping photo", key)
-        _log_activity("photo_dropped", session_key=key, depth=MAX_QUEUED_MESSAGES)
+    def _cleanup() -> None:
         local_path.unlink(missing_ok=True)
-        return
-    if status == "queued":
-        await update.message.reply_text(f"Photo queued ({depth}) — will send when current response finishes.")
-        logger.info("Queued photo for %s (depth: %d)", key, depth)
-        _log_activity("photo_queued", session_key=key, depth=depth)
-        return
 
-    pending_id = save_pending(chat_id, thread_id, prompt, key)
-
-    stop_typing = asyncio.Event()
-    typing_task = asyncio.create_task(keep_typing(chat_id, thread_id, stop_typing, context.bot))
-
-    try:
-        loop = asyncio.get_running_loop()
-        try:
-            response = await loop.run_in_executor(_executor, run_claude, prompt, key)
-        except Exception as e:
-            logger.error("Error running claude for photo %s: %s", key, e)
-            response = f"Error: {e}"
-
-        try:
-            await _send_response(context.bot, chat_id, thread_id, response)
-            clear_pending(pending_id)
-        except Exception as e:
-            logger.error("Failed to send photo response for %s: %s", key, e)
-            await _notify_delivery_failure(context.bot, chat_id, thread_id, key)
-
-        # Drain queued messages (same as handle_message)
-        while True:
-            batch = await _drain_next(state)
-            if batch is None:
-                break
-            logger.info("Processing %d queued message(s) for %s", len(batch), key)
-            if len(batch) == 1:
-                combined = batch[0]
-            else:
-                combined = "\n\n---\n\n".join(f"[Follow-up {i + 1}]\n{msg}" for i, msg in enumerate(batch))
-            try:
-                response = await loop.run_in_executor(_executor, run_claude, combined, key)
-            except Exception as e:
-                logger.error("Error running claude for queued batch %s: %s", key, e)
-                response = f"Error: {e}"
-            try:
-                await _send_response(context.bot, chat_id, thread_id, response)
-            except Exception as e:
-                logger.error("Failed to send queued response for %s: %s", key, e)
-                await _notify_delivery_failure(context.bot, chat_id, thread_id, key)
-    except Exception:
-        await _release_processing(state)
-        raise
-    finally:
-        stop_typing.set()
-        await typing_task
-        local_path.unlink(missing_ok=True)
+    await _process_with_claude_turn(
+        update,
+        context,
+        session_key=key,
+        chat_id=chat_id,
+        thread_id=thread_id,
+        prompt=prompt,
+        label="photo",
+        drop_message=(
+            f"Queue full ({MAX_QUEUED_MESSAGES}) — photo dropped. "
+            "Wait for current response to finish."
+        ),
+        queued_message="Photo queued ({depth}) — will send when current response finishes.",
+        on_drop=_cleanup,
+        on_finish=_cleanup,
+    )
 
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1268,69 +1285,24 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         f"use the Read tool or Bash tool to inspect it as appropriate.]"
     )
 
-    # Atomic: claim the processing lane, or enqueue this document's prompt.
-    state = _get_session_state(key)
-    status, depth = await _claim_or_queue(state, prompt)
-    if status == "full":
-        await update.message.reply_text(
-            f"Queue full ({MAX_QUEUED_MESSAGES}) — file dropped. Wait for current response to finish."
-        )
-        logger.warning("Queue full for %s, dropping document", key)
-        _log_activity("document_dropped", session_key=key, depth=MAX_QUEUED_MESSAGES)
+    def _cleanup() -> None:
         local_path.unlink(missing_ok=True)
-        return
-    if status == "queued":
-        await update.message.reply_text(f"File queued ({depth}) — will process when current response finishes.")
-        logger.info("Queued document for %s (depth: %d)", key, depth)
-        _log_activity("document_queued", session_key=key, depth=depth)
-        return
 
-    pending_id = save_pending(chat_id, thread_id, prompt, key)
-
-    stop_typing = asyncio.Event()
-    typing_task = asyncio.create_task(keep_typing(chat_id, thread_id, stop_typing, context.bot))
-
-    try:
-        loop = asyncio.get_running_loop()
-        try:
-            response = await loop.run_in_executor(_executor, run_claude, prompt, key)
-        except Exception as e:
-            logger.error("Error running claude for document %s: %s", key, e)
-            response = f"Error: {e}"
-
-        try:
-            await _send_response(context.bot, chat_id, thread_id, response)
-            clear_pending(pending_id)
-        except Exception as e:
-            logger.error("Failed to send document response for %s: %s", key, e)
-            await _notify_delivery_failure(context.bot, chat_id, thread_id, key)
-
-        # Drain queued messages
-        while True:
-            batch = await _drain_next(state)
-            if batch is None:
-                break
-            logger.info("Processing %d queued message(s) for %s", len(batch), key)
-            if len(batch) == 1:
-                combined = batch[0]
-            else:
-                combined = "\n\n---\n\n".join(f"[Follow-up {i + 1}]\n{msg}" for i, msg in enumerate(batch))
-            try:
-                response = await loop.run_in_executor(_executor, run_claude, combined, key)
-            except Exception as e:
-                logger.error("Error running claude for queued batch %s: %s", key, e)
-                response = f"Error: {e}"
-            try:
-                await _send_response(context.bot, chat_id, thread_id, response)
-            except Exception as e:
-                logger.error("Failed to send queued response for %s: %s", key, e)
-                await _notify_delivery_failure(context.bot, chat_id, thread_id, key)
-    except Exception:
-        await _release_processing(state)
-        raise
-    finally:
-        stop_typing.set()
-        await typing_task
+    await _process_with_claude_turn(
+        update,
+        context,
+        session_key=key,
+        chat_id=chat_id,
+        thread_id=thread_id,
+        prompt=prompt,
+        label="document",
+        drop_message=(
+            f"Queue full ({MAX_QUEUED_MESSAGES}) — file dropped. "
+            "Wait for current response to finish."
+        ),
+        queued_message="File queued ({depth}) — will process when current response finishes.",
+        on_drop=_cleanup,
+    )
 
 
 # ---------------------------------------------------------------------------
