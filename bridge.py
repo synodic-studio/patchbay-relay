@@ -577,6 +577,17 @@ def run_claude(
                 max_turns_override if max_turns_override is not None else MAX_TURNS
             ),
         )
+    elif effective_harness == "pi":
+        # Pi (badlogicgames/pi) — multi-model coding agent. Uses its own
+        # session storage (~/.pi/agent/sessions). Subprocess like cc-cli
+        # so proc_setter mirrors into state.proc for /kill / stall.
+        from stargate.harness import PiHarness
+
+        harness = PiHarness(
+            max_timeout_seconds=MAX_TIMEOUT,
+            on_progress=_on_progress,
+            proc_setter=_proc_setter,
+        )
     else:
         harness = ClaudeCliHarness(
             claude_path=CLAUDE_PATH,

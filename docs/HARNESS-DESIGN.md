@@ -17,7 +17,7 @@ Code CLI, Claude Agent SDK, codex/pi, cursor, …) behind one interface.
 | 3c — Soak tooling | ✅ | `scripts/harness_soak.py` + `/soak [since] [session]` Telegram command. Buckets `activity.jsonl` rows by `harness=` field, reports turn counts, outcome rates, p50/p95 duration, OOM/quota/stall counts. 18 tests. |
 | 3 — Live soak | running | cc-sdk active in synodic-kit topic; `/soak` for live readout. |
 | 4 — Flip default | future | `STARGATE_DEFAULT_HARNESS=cc-sdk`. Keep `cc-cli` as fallback. |
-| 5a — Pi harness | next | `badlogicgames/pi` — multi-model coding agent, default deepseek via openrouter. |
+| 5a — Pi harness | ✅ | `stargate/harness/pi.py` — wraps `pi -p --mode json`. Resume via `--session <id>`, multi-model via `--model PROVIDER/ID`, classified errors from `stopReason==error`. 29 tests + smoke-tested end-to-end with deepseek (cost, session resume, BANANA recall). |
 | 5b — Aider harness | next | Python coding CLI, model-agnostic. |
 | 5c — OpenCode harness | next | sst/opencode, TUI-first coding agent with CLI mode. |
 | 5z — codex/cursor/gemini | future | Lower priority. |

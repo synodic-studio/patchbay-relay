@@ -21,10 +21,12 @@ from .base import (
 )
 from .claude_cli import ClaudeCliHarness
 from .claude_sdk import ClaudeSdkHarness
+from .pi import PiHarness
 
 __all__ = [
     "ClaudeCliHarness",
     "ClaudeSdkHarness",
+    "PiHarness",
     "Harness",
     "HarnessCapabilities",
     "TextDelta",

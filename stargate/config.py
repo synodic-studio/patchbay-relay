@@ -174,11 +174,11 @@ MAX_TURNS = _env_int("MAX_TURNS", "500", min_value=1)
 MAX_WORKERS = _env_int("MAX_WORKERS", "4", min_value=1)
 
 # --- Harness ---
-# Pluggable agent backend. Today only "cc-cli" is wired into run_claude.
-# "cc-sdk" is reserved for the Claude Agent SDK harness landing in phase 3.
-# Per-chat override lives in chat_projects.json under the "harness" key;
-# this value is the fallback when a topic has no override.
-VALID_HARNESSES = ("cc-cli", "cc-sdk")
+# Pluggable agent backend. cc-cli wraps `claude -p`, cc-sdk uses the Claude
+# Agent SDK, pi wraps badlogicgames/pi (multi-model). Per-chat override lives
+# in chat_projects.json under the "harness" key; this value is the fallback
+# when a topic has no override.
+VALID_HARNESSES = ("cc-cli", "cc-sdk", "pi")
 DEFAULT_HARNESS = os.environ.get("STARGATE_DEFAULT_HARNESS", "cc-cli")
 if DEFAULT_HARNESS not in VALID_HARNESSES:
     raise SystemExit(
