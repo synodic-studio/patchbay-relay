@@ -184,6 +184,55 @@ def _iter_active_procs() -> list[tuple[str, subprocess.Popen]]:
     return [(k, s.proc) for k, s in _sessions.items() if s.proc is not None]
 
 
+async def _claim_or_queue(state: SessionState, text: str) -> tuple[str, int | None]:
+    """Atomically claim the processing lane or enqueue the message.
+
+    Returns one of:
+      ("claimed", None) — caller now owns processing for this session.
+      ("queued", depth) — caller's message has been queued at the given depth.
+      ("full",   None) — queue is full; caller should drop the message.
+
+    Holding state.lock around the check+claim+enqueue closes the debounce
+    race documented in STARGATE-IMPROVEMENT-PLAN §1c (CTB-ucw).
+    """
+    async with state.lock:
+        if not state.processing:
+            state.processing = True
+            state.started_at = time.time()
+            return ("claimed", None)
+        if len(state.queue) >= MAX_QUEUED_MESSAGES:
+            return ("full", None)
+        state.queue.append(text)
+        return ("queued", len(state.queue))
+
+
+async def _drain_next(state: SessionState) -> list[str] | None:
+    """Pop the next batch of queued messages, or release processing.
+
+    Returns the batch if there are queued messages. Otherwise atomically
+    clears the processing flag (and started_at) under the lock and returns
+    None — that's the only safe place to release ownership, since a
+    concurrent _claim_or_queue would otherwise see processing=True, queue
+    a message, then watch it get orphaned when we cleared the flag.
+    """
+    async with state.lock:
+        if not state.queue:
+            state.processing = False
+            state.started_at = None
+            return None
+        batch = state.queue
+        state.queue = []
+        return batch
+
+
+async def _release_processing(state: SessionState) -> None:
+    """Force-clear the processing flag. Used as defensive cleanup on an
+    exception path — _drain_next normally handles the happy path."""
+    async with state.lock:
+        state.processing = False
+        state.started_at = None
+
+
 # Track remote-control process (only one at a time, keyed by session key)
 _remote_proc: subprocess.Popen | None = None
 _remote_proc_key: str | None = None
@@ -670,28 +719,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     logger.info("From %d [%s]: %s", user_id, key, text[:80])
     _log_activity("message", user_id=user_id, session_key=key, text_len=len(text))
 
-    # Debounce: if Claude is already processing for this session, queue the message
-    if _get_session_state(key).processing:
-        queue = _get_session_state(key).queue
-        if len(queue) >= MAX_QUEUED_MESSAGES:
-            await update.message.reply_text(
-                f"Queue full ({MAX_QUEUED_MESSAGES}) — message dropped. Wait for current response to finish."
-            )
-            logger.warning("Queue full for %s, dropping message", key)
-            _log_activity("message_dropped", session_key=key, depth=len(queue))
-            return
-        queue.append(text)
-        depth = len(queue)
+    # Atomic: claim the processing lane, or enqueue this message.
+    state = _get_session_state(key)
+    status, depth = await _claim_or_queue(state, text)
+    if status == "full":
+        await update.message.reply_text(
+            f"Queue full ({MAX_QUEUED_MESSAGES}) — message dropped. Wait for current response to finish."
+        )
+        logger.warning("Queue full for %s, dropping message", key)
+        _log_activity("message_dropped", session_key=key, depth=MAX_QUEUED_MESSAGES)
+        return
+    if status == "queued":
         await update.message.reply_text(f"Queued ({depth}) — will send when current response finishes.")
         logger.info("Queued message for %s (depth: %d)", key, depth)
         _log_activity("message_queued", session_key=key, depth=depth)
         return
 
+    # status == "claimed" — we own this session's processing lane until _drain_next clears it.
     # Check for per-message model prefix (e.g. "!sonnet do something")
     msg_model, clean_text = extract_model_prefix(text)
-
-    _get_session_state(key).processing = True
-    _get_session_state(key).started_at = time.time()
     pending_id = save_pending(chat_id, thread_id, clean_text, key)
 
     stop_typing = asyncio.Event()
@@ -737,10 +783,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             logger.error("Failed to send response for %s: %s", key, e)
             await _notify_delivery_failure(context.bot, chat_id, thread_id, key)
 
-        # Drain queued messages: batch all into a single Claude invocation
-        while _sessions.get(key) and _sessions[key].queue:
-            batch = _sessions[key].queue
-            _sessions[key].queue = []
+        # Drain queued messages: each pop from _drain_next either yields a
+        # batch or atomically clears state.processing and ends the loop.
+        while True:
+            batch = await _drain_next(state)
+            if batch is None:
+                break
             logger.info("Processing %d queued message(s) for %s", len(batch), key)
             if len(batch) == 1:
                 combined = batch[0]
@@ -756,11 +804,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             except Exception as e:
                 logger.error("Failed to send queued response for %s: %s", key, e)
                 await _notify_delivery_failure(context.bot, chat_id, thread_id, key)
+    except Exception:
+        # Defensive: ensure processing flag is cleared on any uncaught
+        # exception escaping the drain loop.
+        await _release_processing(state)
+        raise
     finally:
         stop_typing.set()
         await typing_task
-        _sessions[key].processing = False  # type: ignore[union-attr]
-        _sessions[key].started_at = None  # type: ignore[union-attr]
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -784,26 +835,23 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     prompt = f"{caption}\n\n[An image has been saved to {local_path} — use the Read tool to view it before responding.]"
 
-    # Debounce: if Claude is already processing for this session, queue the photo prompt
-    if _get_session_state(key).processing:
-        queue = _get_session_state(key).queue
-        if len(queue) >= MAX_QUEUED_MESSAGES:
-            await update.message.reply_text(
-                f"Queue full ({MAX_QUEUED_MESSAGES}) — photo dropped. Wait for current response to finish."
-            )
-            logger.warning("Queue full for %s, dropping photo", key)
-            _log_activity("photo_dropped", session_key=key, depth=len(queue))
-            local_path.unlink(missing_ok=True)
-            return
-        queue.append(prompt)
-        depth = len(queue)
+    # Atomic: claim the processing lane, or enqueue this photo's prompt.
+    state = _get_session_state(key)
+    status, depth = await _claim_or_queue(state, prompt)
+    if status == "full":
+        await update.message.reply_text(
+            f"Queue full ({MAX_QUEUED_MESSAGES}) — photo dropped. Wait for current response to finish."
+        )
+        logger.warning("Queue full for %s, dropping photo", key)
+        _log_activity("photo_dropped", session_key=key, depth=MAX_QUEUED_MESSAGES)
+        local_path.unlink(missing_ok=True)
+        return
+    if status == "queued":
         await update.message.reply_text(f"Photo queued ({depth}) — will send when current response finishes.")
         logger.info("Queued photo for %s (depth: %d)", key, depth)
         _log_activity("photo_queued", session_key=key, depth=depth)
         return
 
-    _get_session_state(key).processing = True
-    _get_session_state(key).started_at = time.time()
     pending_id = save_pending(chat_id, thread_id, prompt, key)
 
     stop_typing = asyncio.Event()
@@ -825,9 +873,10 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             await _notify_delivery_failure(context.bot, chat_id, thread_id, key)
 
         # Drain queued messages (same as handle_message)
-        while _sessions.get(key) and _sessions[key].queue:
-            batch = _sessions[key].queue
-            _sessions[key].queue = []
+        while True:
+            batch = await _drain_next(state)
+            if batch is None:
+                break
             logger.info("Processing %d queued message(s) for %s", len(batch), key)
             if len(batch) == 1:
                 combined = batch[0]
@@ -843,11 +892,12 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             except Exception as e:
                 logger.error("Failed to send queued response for %s: %s", key, e)
                 await _notify_delivery_failure(context.bot, chat_id, thread_id, key)
+    except Exception:
+        await _release_processing(state)
+        raise
     finally:
         stop_typing.set()
         await typing_task
-        _sessions[key].processing = False  # type: ignore[union-attr]
-        _sessions[key].started_at = None  # type: ignore[union-attr]
         local_path.unlink(missing_ok=True)
 
 
@@ -881,26 +931,23 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         f"use the Read tool or Bash tool to inspect it as appropriate.]"
     )
 
-    # Debounce: if Claude is already processing for this session, queue the prompt
-    if _get_session_state(key).processing:
-        queue = _get_session_state(key).queue
-        if len(queue) >= MAX_QUEUED_MESSAGES:
-            await update.message.reply_text(
-                f"Queue full ({MAX_QUEUED_MESSAGES}) — file dropped. Wait for current response to finish."
-            )
-            logger.warning("Queue full for %s, dropping document", key)
-            _log_activity("document_dropped", session_key=key, depth=len(queue))
-            local_path.unlink(missing_ok=True)
-            return
-        queue.append(prompt)
-        depth = len(queue)
+    # Atomic: claim the processing lane, or enqueue this document's prompt.
+    state = _get_session_state(key)
+    status, depth = await _claim_or_queue(state, prompt)
+    if status == "full":
+        await update.message.reply_text(
+            f"Queue full ({MAX_QUEUED_MESSAGES}) — file dropped. Wait for current response to finish."
+        )
+        logger.warning("Queue full for %s, dropping document", key)
+        _log_activity("document_dropped", session_key=key, depth=MAX_QUEUED_MESSAGES)
+        local_path.unlink(missing_ok=True)
+        return
+    if status == "queued":
         await update.message.reply_text(f"File queued ({depth}) — will process when current response finishes.")
         logger.info("Queued document for %s (depth: %d)", key, depth)
         _log_activity("document_queued", session_key=key, depth=depth)
         return
 
-    _get_session_state(key).processing = True
-    _get_session_state(key).started_at = time.time()
     pending_id = save_pending(chat_id, thread_id, prompt, key)
 
     stop_typing = asyncio.Event()
@@ -922,9 +969,10 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await _notify_delivery_failure(context.bot, chat_id, thread_id, key)
 
         # Drain queued messages
-        while _sessions.get(key) and _sessions[key].queue:
-            batch = _sessions[key].queue
-            _sessions[key].queue = []
+        while True:
+            batch = await _drain_next(state)
+            if batch is None:
+                break
             logger.info("Processing %d queued message(s) for %s", len(batch), key)
             if len(batch) == 1:
                 combined = batch[0]
@@ -940,11 +988,12 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             except Exception as e:
                 logger.error("Failed to send queued response for %s: %s", key, e)
                 await _notify_delivery_failure(context.bot, chat_id, thread_id, key)
+    except Exception:
+        await _release_processing(state)
+        raise
     finally:
         stop_typing.set()
         await typing_task
-        _sessions[key].processing = False  # type: ignore[union-attr]
-        _sessions[key].started_at = None  # type: ignore[union-attr]
 
 
 # ---------------------------------------------------------------------------
@@ -1470,7 +1519,7 @@ async def cmd_ping(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     now = time.time()
     lines = ["pong — active sessions:"]
     for key in sorted(k for k, s in _sessions.items() if s.processing):
-        started = (_sessions[key].started_at if key in _sessions else None)
+        started = _sessions[key].started_at if key in _sessions else None
         if started:
             elapsed = int(now - started)
             mins, secs = divmod(elapsed, 60)
