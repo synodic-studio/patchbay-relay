@@ -189,7 +189,6 @@ _remote_proc: subprocess.Popen | None = None
 _remote_proc_key: str | None = None
 
 # Message debounce: batch messages that arrive while Claude is processing
-_processing_sessions: set[str] = set()
 
 
 # Flag to block new messages during graceful shutdown
@@ -672,7 +671,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     _log_activity("message", user_id=user_id, session_key=key, text_len=len(text))
 
     # Debounce: if Claude is already processing for this session, queue the message
-    if key in _processing_sessions:
+    if _get_session_state(key).processing:
         queue = _get_session_state(key).queue
         if len(queue) >= MAX_QUEUED_MESSAGES:
             await update.message.reply_text(
@@ -691,7 +690,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # Check for per-message model prefix (e.g. "!sonnet do something")
     msg_model, clean_text = extract_model_prefix(text)
 
-    _processing_sessions.add(key)
+    _get_session_state(key).processing = True
     _get_session_state(key).started_at = time.time()
     pending_id = save_pending(chat_id, thread_id, clean_text, key)
 
@@ -760,7 +759,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     finally:
         stop_typing.set()
         await typing_task
-        _processing_sessions.discard(key)
+        _sessions[key].processing = False  # type: ignore[union-attr]
         _sessions[key].started_at = None  # type: ignore[union-attr]
 
 
@@ -786,7 +785,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     prompt = f"{caption}\n\n[An image has been saved to {local_path} — use the Read tool to view it before responding.]"
 
     # Debounce: if Claude is already processing for this session, queue the photo prompt
-    if key in _processing_sessions:
+    if _get_session_state(key).processing:
         queue = _get_session_state(key).queue
         if len(queue) >= MAX_QUEUED_MESSAGES:
             await update.message.reply_text(
@@ -803,7 +802,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         _log_activity("photo_queued", session_key=key, depth=depth)
         return
 
-    _processing_sessions.add(key)
+    _get_session_state(key).processing = True
     _get_session_state(key).started_at = time.time()
     pending_id = save_pending(chat_id, thread_id, prompt, key)
 
@@ -847,7 +846,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     finally:
         stop_typing.set()
         await typing_task
-        _processing_sessions.discard(key)
+        _sessions[key].processing = False  # type: ignore[union-attr]
         _sessions[key].started_at = None  # type: ignore[union-attr]
         local_path.unlink(missing_ok=True)
 
@@ -883,7 +882,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     )
 
     # Debounce: if Claude is already processing for this session, queue the prompt
-    if key in _processing_sessions:
+    if _get_session_state(key).processing:
         queue = _get_session_state(key).queue
         if len(queue) >= MAX_QUEUED_MESSAGES:
             await update.message.reply_text(
@@ -900,7 +899,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         _log_activity("document_queued", session_key=key, depth=depth)
         return
 
-    _processing_sessions.add(key)
+    _get_session_state(key).processing = True
     _get_session_state(key).started_at = time.time()
     pending_id = save_pending(chat_id, thread_id, prompt, key)
 
@@ -944,7 +943,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     finally:
         stop_typing.set()
         await typing_task
-        _processing_sessions.discard(key)
+        _sessions[key].processing = False  # type: ignore[union-attr]
         _sessions[key].started_at = None  # type: ignore[union-attr]
 
 
@@ -1465,12 +1464,12 @@ async def cmd_usage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_ping(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not _processing_sessions:
+    if not any(s.processing for s in _sessions.values()):
         await update.message.reply_text("pong — no active sessions")
         return
     now = time.time()
     lines = ["pong — active sessions:"]
-    for key in sorted(_processing_sessions):
+    for key in sorted(k for k, s in _sessions.items() if s.processing):
         started = (_sessions[key].started_at if key in _sessions else None)
         if started:
             elapsed = int(now - started)

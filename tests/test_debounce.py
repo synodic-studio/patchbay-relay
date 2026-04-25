@@ -19,10 +19,8 @@ import bridge
 @pytest.fixture(autouse=True)
 def _clean_bridge_state():
     """Reset bridge module-level debounce state between tests."""
-    bridge._processing_sessions.clear()
     bridge._sessions.clear()
     yield
-    bridge._processing_sessions.clear()
     bridge._sessions.clear()
 
 
@@ -50,7 +48,7 @@ def _make_context():
 async def test_message_queued_when_session_processing():
     """A message arriving while session is processing should be queued."""
     key = bridge._session_key(1, None)
-    bridge._processing_sessions.add(key)
+    bridge._get_session_state(key).processing = True
 
     update = _make_update(text="follow-up")
     ctx = _make_context()
@@ -68,7 +66,7 @@ async def test_message_queued_when_session_processing():
 async def test_multiple_messages_queue_incrementally():
     """Multiple follow-ups should queue with increasing depth."""
     key = bridge._session_key(1, None)
-    bridge._processing_sessions.add(key)
+    bridge._get_session_state(key).processing = True
 
     ctx = _make_context()
 
@@ -84,7 +82,7 @@ async def test_multiple_messages_queue_incrementally():
 async def test_queued_reply_shows_depth():
     """Each queued reply should show the correct queue depth."""
     key = bridge._session_key(1, None)
-    bridge._processing_sessions.add(key)
+    bridge._get_session_state(key).processing = True
 
     ctx = _make_context()
     updates = []
@@ -235,7 +233,7 @@ async def test_session_cleared_after_processing_completes():
         update = _make_update(text="test")
         await bridge.handle_message(update, ctx)
 
-    assert key not in bridge._processing_sessions
+    assert (key not in bridge._sessions or not bridge._sessions[key].processing)
     assert bridge._sessions.get(key) is None or bridge._sessions[key].started_at is None
 
 
@@ -255,7 +253,7 @@ async def test_session_cleared_even_on_error():
         update = _make_update(text="test")
         await bridge.handle_message(update, ctx)
 
-    assert key not in bridge._processing_sessions
+    assert (key not in bridge._sessions or not bridge._sessions[key].processing)
 
 
 # ── Non-queued path ───────────────────────────────────────────────
@@ -287,7 +285,7 @@ async def test_forum_topic_sessions_queue_independently():
     key_a = bridge._session_key(1, 100)
     key_b = bridge._session_key(1, 200)
 
-    bridge._processing_sessions.add(key_a)
+    bridge._get_session_state(key_a).processing = True
 
     ctx = _make_context()
 

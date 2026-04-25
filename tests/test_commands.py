@@ -272,10 +272,8 @@ class TestCmdKill:
 class TestCmdPing:
     @pytest.fixture(autouse=True)
     def _isolate(self):
-        bridge._processing_sessions.clear()
         bridge._sessions.clear()
         yield
-        bridge._processing_sessions.clear()
         bridge._sessions.clear()
 
     @pytest.mark.asyncio
@@ -289,7 +287,7 @@ class TestCmdPing:
 
     @pytest.mark.asyncio
     async def test_with_active_sessions(self):
-        bridge._processing_sessions.add("1_2")
+        bridge._get_session_state("1_2").processing = True
         bridge._get_session_state("1_2").started_at = time.time() - 65
         update = _make_update()
         ctx = _make_context()

@@ -191,15 +191,13 @@ class TestStallDetectorNotify:
 class TestCmdPingUnknownStart:
     @pytest.fixture(autouse=True)
     def _isolate(self):
-        bridge._processing_sessions.clear()
         bridge._sessions.clear()
         yield
-        bridge._processing_sessions.clear()
         bridge._sessions.clear()
 
     @pytest.mark.asyncio
     async def test_unknown_start_time(self):
-        bridge._processing_sessions.add("999_1")
+        bridge._get_session_state("999_1").processing = True
         # No entry in _session_start_times
         update = MagicMock()
         update.message = MagicMock()
