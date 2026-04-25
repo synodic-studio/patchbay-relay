@@ -70,7 +70,7 @@ what's landed and what's still open. Full audit detail follows unchanged.
 | §12 | `max_turns=500` runaway risk | Decision 2026-04-24: don't lower until we have data. Add `turns_used` / `elapsed_ms` to `activity.jsonl` first; revisit once real distribution is known. |
 | §13 | `_to_markdownv2` partial-render leaks | Open. |
 | §14 | Three handler duplication | Open. The CTB-ucw helpers (`_claim_or_queue`, `_drain_next`, `_release_processing`) are a partial down-payment but the wider `_process_with_claude` extraction is still ahead. |
-| §15 | auth_server reflected XSS via raw `error` | Open. Add `html.escape` on the error string. |
+| §15 | auth_server reflected XSS via raw `error` | **Moot 2026-04-24** — auth_server.py and the entire auth layer deleted from the repo. See `docs/apple-auth-implementation.md`. |
 | §16 | IPv6 prefix rotation locking mobile sessions | Open. |
 | §17 | `cmd_remote_control` stdout-only deadlock | Open. |
 | §18 | pytest-asyncio mode + drain test flake | Drain test no longer fails on develop, but the underlying flake potential (no declared mode) remains. |

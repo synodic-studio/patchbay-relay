@@ -14,7 +14,7 @@ Specifically:
 - **Fragility.** The auth guards, rate limiting, IP pinning, and session management added failure modes to a system that already had enough. A bug in auth could lock the operator out of their own bridge.
 - **Single-user context.** For a single-operator system, Telegram's own bot-token isolation (only people who know the bot token can find it) provides a reasonable baseline. The auth layer was defense-in-depth for a threat model that didn't justify the maintenance burden.
 
-The auth module files (`auth.py`, `auth_server.py`, `setup_totp.py`) were intentionally left in the repo. Only the integration points in `bridge.py` and `stargate/config.py` were removed.
+The auth module files (`auth.py`, `auth_server.py`, `setup_totp.py`, `run_auth.sh`, `run_apple_auth.sh`, `dev.kj6.auth-bridge.plist`, `auth/` data dir, and the corresponding tests) were also removed on 2026-04-24. To revive auth, recover them from the git history at commit `7acc661` or earlier — this document describes the design they implemented.
 
 ## Architecture Overview
 

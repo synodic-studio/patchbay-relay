@@ -39,9 +39,7 @@ class TestSendRetry:
         import bridge
 
         bot = MagicMock()
-        bot.send_message = AsyncMock(
-            side_effect=[Exception("network error"), None]
-        )
+        bot.send_message = AsyncMock(side_effect=[Exception("network error"), None])
         await bridge._send_response(bot, 123, None, "hello")
         assert bot.send_message.call_count == 2
 
@@ -50,9 +48,7 @@ class TestSendRetry:
         import bridge
 
         bot = MagicMock()
-        bot.send_message = AsyncMock(
-            side_effect=Exception("persistent failure")
-        )
+        bot.send_message = AsyncMock(side_effect=Exception("persistent failure"))
         with pytest.raises(Exception, match="persistent failure"):
             await bridge._send_response(bot, 123, None, "hello")
         assert bot.send_message.call_count == bridge.SEND_RETRY_ATTEMPTS
@@ -62,9 +58,7 @@ class TestSendRetry:
         import bridge
 
         bot = MagicMock()
-        bot.send_message = AsyncMock(
-            side_effect=[Exception("timeout"), None]
-        )
+        bot.send_message = AsyncMock(side_effect=[Exception("timeout"), None])
         await bridge._send_response(bot, 123, 456, "hello")
         # Verify thread_id was passed in both attempts
         for call in bot.send_message.call_args_list:
@@ -75,73 +69,9 @@ class TestSendRetry:
         import bridge
 
         bot = MagicMock()
-        bot.send_message = AsyncMock(
-            side_effect=[Exception("err1"), Exception("err2"), None]
-        )
+        bot.send_message = AsyncMock(side_effect=[Exception("err1"), Exception("err2"), None])
         await bridge._send_response(bot, 123, None, "hello")
         assert bot.send_message.call_count == 3
-
-
-# ---------------------------------------------------------------------------
-# Fix 2: File locking on auth state (CTB-1p0)
-# ---------------------------------------------------------------------------
-
-
-class TestAuthFileLocking:
-    """Auth state operations use file locking to prevent races."""
-
-    def test_create_session_uses_lock(self, tmp_auth_state):
-        import auth
-
-        # Verify the lock file mechanism works by creating a session
-        auth.create_session(12345, "apple-sub-123", "1.2.3.4")
-        state = auth._load_state()
-        assert "12345" in state
-        assert state["12345"]["apple_subject"] == "apple-sub-123"
-
-    def test_concurrent_touch_session_no_corruption(self, tmp_auth_state):
-        """Two rapid touch_session calls should not corrupt state."""
-        import auth
-
-        auth.create_session(111, "sub-111", "1.1.1.1")
-        auth.touch_session(111)
-        auth.touch_session(111)
-        state = auth._load_state()
-        assert "111" in state
-        assert state["111"]["last_seen"] > 0
-
-    def test_lock_session_with_lock(self, tmp_auth_state):
-        import auth
-
-        auth.create_session(222, "sub-222", "2.2.2.2")
-        result = auth.lock_session(222)
-        assert result is True
-        state = auth._load_state()
-        assert state["222"]["locked"] is True
-
-    def test_lock_all_sessions_with_lock(self, tmp_auth_state):
-        import auth
-
-        auth.create_session(333, "sub-333", "3.3.3.3")
-        auth.create_session(444, "sub-444", "4.4.4.4")
-        count = auth.lock_all_sessions()
-        assert count == 2
-
-    def test_generate_and_consume_token_with_lock(self, tmp_auth_state):
-        import auth
-
-        token = auth.generate_auth_token(555)
-        uid = auth.consume_auth_token(token)
-        assert uid == 555
-        # Token should be consumed — second call returns None
-        assert auth.consume_auth_token(token) is None
-
-    def test_lock_file_created(self, tmp_auth_state):
-        """After any locked operation, the lock file should exist."""
-        import auth
-
-        auth.create_session(666, "sub-666", "6.6.6.6")
-        assert tmp_auth_state["lock_file"].exists()
 
 
 # ---------------------------------------------------------------------------

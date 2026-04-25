@@ -4,16 +4,10 @@ version = "0.2.0"
 description = "Claude Code Telegram Bridge — relay Telegram messages to Claude Code sessions"
 requires-python = ">=3.13"
 dependencies = [
-    "fastapi>=0.129.2",
     "httpx>=0.28.1",
-    "pyjwt[crypto]>=2.11.0",
-    "pyotp>=2.9.0",
     "python-dotenv>=1.2.1",
-    "python-multipart>=0.0.22",
     "python-telegram-bot>=22.6",
-    "qrcode[terminal]>=8.2",
     "telegramify-markdown>=0.5.4",
-    "uvicorn>=0.41.0",
 ]
 
 [dependency-groups]
@@ -31,8 +25,8 @@ pythonpath = ["."]
 asyncio_mode = "auto"
 
 [tool.coverage.run]
-source = ["bridge", "auth", "auth_server", "stargate"]
-omit = ["tests/*", "setup_totp.py", "tcc-approve.py", "validate.py"]
+source = ["bridge", "stargate"]
+omit = ["tests/*", "tcc-approve.py", "validate.py"]
 
 [tool.coverage.report]
 show_missing = true
