@@ -319,12 +319,22 @@ class TestKeepTyping:
             assert call.kwargs["action"] == "typing"
 
     @pytest.mark.asyncio
-    async def test_handles_send_chat_action_exception(self):
-        """Exceptions from send_chat_action are swallowed; loop continues."""
+    async def test_handles_transient_send_chat_action_exception(self, caplog):
+        """A transient exception is logged at WARNING but the loop continues."""
+        import logging
+
         import bridge
 
         bot = MagicMock()
-        bot.send_chat_action = AsyncMock(side_effect=Exception("network blip"))
+        call_count = {"n": 0}
+
+        async def flaky_send(**kwargs):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                raise Exception("network blip")
+            # subsequent calls succeed
+
+        bot.send_chat_action = AsyncMock(side_effect=flaky_send)
         stop = asyncio.Event()
 
         async def _set_after_brief():
@@ -332,8 +342,60 @@ class TestKeepTyping:
             stop.set()
 
         asyncio.create_task(_set_after_brief())
-        await bridge.keep_typing(333, None, stop, bot)
-        assert bot.send_chat_action.call_count >= 1
+        with caplog.at_level(logging.WARNING, logger="bridge"):
+            await bridge.keep_typing(333, None, stop, bot)
+
+        assert bot.send_chat_action.call_count >= 2  # loop continued past the failure
+        assert any("keep_typing failed" in r.message for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_gives_up_after_max_consecutive_failures(self, monkeypatch, caplog):
+        """After TYPING_MAX_FAILURES consecutive errors, keep_typing returns
+        rather than spamming forever — the typing indicator should not look
+        alive when the Telegram API is persistently failing."""
+        import logging
+
+        import bridge
+
+        monkeypatch.setattr(bridge, "TYPING_MAX_FAILURES", 3)
+        bot = MagicMock()
+        bot.send_chat_action = AsyncMock(side_effect=Exception("auth failed"))
+        stop = asyncio.Event()  # never set: only the give-up path can end the loop
+
+        with caplog.at_level(logging.ERROR, logger="bridge"):
+            await bridge.keep_typing(444, None, stop, bot)
+
+        assert bot.send_chat_action.call_count == 3
+        assert any("giving up" in r.message for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_success_resets_failure_counter(self, monkeypatch):
+        """A successful send resets the consecutive-failure count, so one
+        transient blip every few iterations never trips the give-up cap."""
+        import bridge
+
+        monkeypatch.setattr(bridge, "TYPING_MAX_FAILURES", 3)
+        bot = MagicMock()
+        call_log = []
+
+        async def alternating(**kwargs):
+            call_log.append(True)
+            # Fail on every second call; never consecutive enough to trip 3.
+            if len(call_log) % 2 == 0:
+                raise Exception("blip")
+
+        bot.send_chat_action = AsyncMock(side_effect=alternating)
+        stop = asyncio.Event()
+
+        async def _set_after_brief():
+            await asyncio.sleep(0.08)
+            stop.set()
+
+        asyncio.create_task(_set_after_brief())
+        await bridge.keep_typing(555, None, stop, bot)
+
+        # Must have made more calls than TYPING_MAX_FAILURES without giving up.
+        assert len(call_log) > 3
 
 
 # ---------------------------------------------------------------------------

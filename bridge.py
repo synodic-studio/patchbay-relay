@@ -492,21 +492,55 @@ def run_claude(message: str, session_key: str, _retry: bool = False, model: str 
 # ---------------------------------------------------------------------------
 
 
+TYPING_MAX_FAILURES = 5
+
+
 async def keep_typing(
     chat_id: int,
     thread_id: int | None,
     stop_event: asyncio.Event,
     bot,
 ) -> None:
-    """Send typing indicator every few seconds until stop_event is set."""
+    """Send typing indicator every few seconds until stop_event is set.
+
+    Telegram API errors were previously swallowed silently, which made the
+    typing indicator look alive after auth/network/thread-id problems had
+    broken it. Now each failure is logged and we give up after
+    TYPING_MAX_FAILURES consecutive failures rather than spamming forever.
+    A successful send resets the failure counter.
+    """
     kwargs = {"chat_id": chat_id, "action": "typing"}
     if thread_id is not None:
         kwargs["message_thread_id"] = thread_id
+
+    failures = 0
     while not stop_event.is_set():
         try:
             await bot.send_chat_action(**kwargs)
-        except Exception:
-            pass
+            failures = 0
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            failures += 1
+            log_fn = logger.error if failures >= TYPING_MAX_FAILURES else logger.warning
+            log_fn(
+                "keep_typing failed for chat=%s thread=%s (%d/%d): %s: %s",
+                chat_id,
+                thread_id,
+                failures,
+                TYPING_MAX_FAILURES,
+                type(exc).__name__,
+                exc,
+            )
+            if failures >= TYPING_MAX_FAILURES:
+                logger.error(
+                    "keep_typing giving up for chat=%s thread=%s after %d consecutive failures",
+                    chat_id,
+                    thread_id,
+                    failures,
+                )
+                return
+
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=TYPING_INTERVAL)
             return
