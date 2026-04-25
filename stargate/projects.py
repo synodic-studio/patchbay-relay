@@ -75,6 +75,44 @@ def get_chat_agent(session_key: str) -> str | None:
     return agent
 
 
+def get_chat_harness(session_key: str) -> str | None:
+    """Return the per-chat harness name (e.g. "cc-cli"), or None if unset.
+
+    Stored on dict-form `chat_projects.json` entries under the optional
+    "harness" key. String-form entries (legacy) carry no harness override
+    and resolve to None — callers fall back to `config.DEFAULT_HARNESS`.
+    """
+    projects = _load_chat_projects()
+    entry = projects.get(session_key)
+    if isinstance(entry, dict):
+        return entry.get("harness")
+    return None
+
+
+def set_chat_harness(session_key: str, harness: str | None) -> None:
+    """Set or clear the per-chat harness override. Uses file locking.
+
+    Promotes a string-form entry to dict-form when needed so the new key
+    can land alongside `path` and `agent` without dropping them.
+    """
+    with _projects_lock():
+        projects = _load_chat_projects()
+        entry = projects.get(session_key)
+        if isinstance(entry, str):
+            entry = {"path": entry}
+        elif not isinstance(entry, dict):
+            entry = {}
+        if harness is None:
+            entry.pop("harness", None)
+        else:
+            entry["harness"] = harness
+        if entry:
+            projects[session_key] = entry
+        else:
+            projects.pop(session_key, None)
+        _save_chat_projects(projects)
+
+
 def set_chat_project(session_key: str, rel_path: str | None) -> None:
     """Set or clear the project directory for a chat. Uses file locking."""
     with _projects_lock():

@@ -11,7 +11,7 @@ Code CLI, Claude Agent SDK, codex/pi, cursor, …) behind one interface.
 | 1a — Protocol + CLI harness | ✅ | `stargate/harness/{base,claude_cli}.py`, 16 tests. Dormant — bridge unchanged. |
 | 2 — SDK harness | ✅ | `stargate/harness/claude_sdk.py`, 24 tests. Dormant. Validated the protocol from a 2nd angle without any changes. |
 | 1b — Rewire bridge (core) | ✅ | `bridge.run_claude` now drives `ClaudeCliHarness` via `_drive_harness_sync`. Popen/drain/parse moved out of the bridge. `proc_setter` callback mirrors the running proc into `SessionState.proc` so `/kill`, the stall detector, and graceful shutdown still work. `on_progress` keeps `state.last_event_at` fresh. 559 tests pass. |
-| 1c — Per-chat selection + activity field | next | `chat_projects.json.harness` field + `STARGATE_DEFAULT_HARNESS` env + `/harness` command. Add `harness=` to every `activity.jsonl` entry that touches a turn. |
+| 1c — Per-chat selection + activity field | ✅ | `chat_projects.json.harness` field + `STARGATE_DEFAULT_HARNESS` env + `/harness` command. Every `activity.jsonl` entry that touches a turn carries `harness=<effective>` and `harness_requested=<requested>`. cc-sdk is accepted (so the seam is exercised) but the dispatcher still runs cc-cli with a warning until phase 3 lands the SDK harness with proper /kill integration. 573 tests. |
 | 3 — Live soak | future | One topic on `cc-sdk` for as long as it takes to be boring. Compare via `harness=` field on `activity.jsonl`. |
 | 4 — Flip default | future | `STARGATE_DEFAULT_HARNESS=cc-sdk`. Keep `cc-cli` as fallback. |
 | 5 — Other backends | future | codex/pi, cursor — exercises `HarnessCapabilities.supports_resume=False`. |
@@ -41,17 +41,35 @@ Code CLI, Claude Agent SDK, codex/pi, cursor, …) behind one interface.
   of the removed `bridge._read_proc_streaming`. The
   `proc.communicate(timeout=...)` mocking pattern still works.
 
-## What's left for 1c
+## What 1c added (on top of 1b core)
 
-1. `chat_projects.json` gains an optional `"harness": "cc-cli" | "cc-sdk"`
-   field; default from env `STARGATE_DEFAULT_HARNESS=cc-cli`. New
-   `/harness <name>` command surfaces and toggles the per-topic value.
-2. Add `harness=` to every `activity.jsonl` entry that touches a turn so
-   live-soak comparisons (phase 3) can grep `harness=cc-sdk` vs
-   `harness=cc-cli` for behavioural diffs.
+- `STARGATE_DEFAULT_HARNESS` env (defaults to `cc-cli`); validated at
+  startup against `VALID_HARNESSES = ("cc-cli", "cc-sdk")`.
+- `stargate.projects.get_chat_harness` / `set_chat_harness` —
+  per-chat override stored as the optional `"harness"` key on the
+  dict-form `chat_projects.json` entry. Setter promotes legacy string
+  entries to dict-form so `path` and `agent` siblings survive.
+- `/harness [name]` Telegram command — display + set + clear, with
+  validation against `VALID_HARNESSES`. Selecting `cc-sdk` warns the
+  user that the dispatcher still runs cc-cli until phase 3.
+- `bridge.run_claude` consults the per-chat selection (or
+  `DEFAULT_HARNESS`). cc-sdk is logged under
+  `harness_requested=cc-sdk` but executed under `harness=cc-cli`. This
+  is intentional — phase 3 needs proper /kill integration before
+  cc-sdk is safe to dispatch.
+- Every activity entry that touches a turn (`claude_invoke`,
+  `claude_complete`, `claude_error`, `claude_timeout`, `quota_hit`)
+  carries `harness=<effective>`. `claude_invoke` additionally carries
+  `harness_requested=<requested>` for behavioural diffing during the
+  phase-3 soak.
 
-After 1c ships, phase 3 is just flipping one topic to `cc-sdk` and
-watching.
+## What's left for phase 3
+
+Wire `ClaudeSdkHarness` end-to-end as a peer dispatch target — the SDK
+harness manages its own subprocess, so /kill, the stall detector, and
+graceful shutdown need to learn `harness.cancel()` instead of
+`state.proc.kill()`. Then flip one topic to `cc-sdk` via `/harness
+cc-sdk` and watch the activity diff.
 
 ## Open questions — resolved
 

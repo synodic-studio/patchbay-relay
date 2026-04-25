@@ -184,3 +184,53 @@ class TestGetAllProjects:
         # Developer dir exists but is empty (created by autouse fixture)
         result = stargate.projects.get_all_projects()
         assert result == []
+
+
+# ---------------------------------------------------------------------------
+# get_chat_harness / set_chat_harness (CTB-cyz phase 1c)
+# ---------------------------------------------------------------------------
+
+
+class TestChatHarness:
+    def test_get_returns_none_when_unset(self):
+        assert stargate.projects.get_chat_harness("chat_1") is None
+
+    def test_get_returns_none_for_legacy_string_entry(self):
+        stargate.projects._save_chat_projects({"chat_1": "Fanta"})
+        assert stargate.projects.get_chat_harness("chat_1") is None
+
+    def test_set_then_get_roundtrip(self):
+        stargate.projects.set_chat_harness("chat_1", "cc-sdk")
+        assert stargate.projects.get_chat_harness("chat_1") == "cc-sdk"
+
+    def test_set_promotes_string_entry_to_dict_preserving_path(self):
+        stargate.projects._save_chat_projects({"chat_1": "Fanta"})
+        stargate.projects.set_chat_harness("chat_1", "cc-sdk")
+        loaded = stargate.projects._load_chat_projects()
+        assert loaded["chat_1"] == {"path": "Fanta", "harness": "cc-sdk"}
+
+    def test_set_lands_alongside_path_and_agent(self):
+        stargate.projects._save_chat_projects(
+            {"chat_1": {"path": "Fanta", "agent": "iron-temple"}}
+        )
+        stargate.projects.set_chat_harness("chat_1", "cc-cli")
+        loaded = stargate.projects._load_chat_projects()
+        assert loaded["chat_1"] == {
+            "path": "Fanta",
+            "agent": "iron-temple",
+            "harness": "cc-cli",
+        }
+
+    def test_set_none_clears_only_harness_key(self):
+        stargate.projects._save_chat_projects(
+            {"chat_1": {"path": "Fanta", "harness": "cc-sdk"}}
+        )
+        stargate.projects.set_chat_harness("chat_1", None)
+        loaded = stargate.projects._load_chat_projects()
+        assert loaded["chat_1"] == {"path": "Fanta"}
+
+    def test_clearing_harness_on_harness_only_entry_drops_entry(self):
+        stargate.projects._save_chat_projects({"chat_1": {"harness": "cc-sdk"}})
+        stargate.projects.set_chat_harness("chat_1", None)
+        loaded = stargate.projects._load_chat_projects()
+        assert "chat_1" not in loaded

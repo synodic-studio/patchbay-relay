@@ -137,12 +137,15 @@ what's landed and what's still open. Full audit detail follows unchanged.
    `run_claude`, corrupt-session routed through dispatch in
    `sessions.py`. Stale-poller handler is registered but not yet wired
    into a runtime detector — that's the next extension point.
-6. **Pluggable backends per-topic** (CTB-cyz). Phase 1b core landed
-   2026-04-25 — `bridge.run_claude` now drives `ClaudeCliHarness`; the
-   duplicated Popen/drain/parse logic is gone. **Next: phase 1c** —
-   per-chat `/harness` command, `chat_projects.json.harness` field,
-   `STARGATE_DEFAULT_HARNESS` env, `harness=` field on every
-   `activity.jsonl` entry. Then phase 3 (live soak on `cc-sdk`).
+6. **Pluggable backends per-topic** (CTB-cyz). Phase 1b core +
+   phase 1c landed 2026-04-25 — `bridge.run_claude` drives
+   `ClaudeCliHarness`; per-chat `/harness` command writes through to
+   `chat_projects.json.harness`; `STARGATE_DEFAULT_HARNESS` env
+   honored; `activity.jsonl` carries `harness=` + `harness_requested=`
+   on every turn. **Next: phase 3** — wire `ClaudeSdkHarness` as a
+   real dispatch target (needs `harness.cancel()` plumbing for /kill,
+   stall detector, graceful shutdown), then flip one topic to
+   `cc-sdk` and watch.
 7. ~~**Event-cadence stall detector**~~ Resolved 2026-04-25 (now wired
    through the harness's `on_progress` callback).
 8. **Agent SDK migration** (audit §4a). Unblocks Channels MCP. Phase 1b

@@ -173,6 +173,18 @@ MAX_TIMEOUT = _env_int("MAX_TIMEOUT", "2700", min_value=1)  # 45 min safety valv
 MAX_TURNS = _env_int("MAX_TURNS", "500", min_value=1)
 MAX_WORKERS = _env_int("MAX_WORKERS", "4", min_value=1)
 
+# --- Harness ---
+# Pluggable agent backend. Today only "cc-cli" is wired into run_claude.
+# "cc-sdk" is reserved for the Claude Agent SDK harness landing in phase 3.
+# Per-chat override lives in chat_projects.json under the "harness" key;
+# this value is the fallback when a topic has no override.
+VALID_HARNESSES = ("cc-cli", "cc-sdk")
+DEFAULT_HARNESS = os.environ.get("STARGATE_DEFAULT_HARNESS", "cc-cli")
+if DEFAULT_HARNESS not in VALID_HARNESSES:
+    raise SystemExit(
+        f"STARGATE_DEFAULT_HARNESS={DEFAULT_HARNESS!r} is not one of {VALID_HARNESSES}"
+    )
+
 # /usage weekly-cap estimate. Anthropic does not publish a weekly token cap
 # for Max plans — the closest public data (Portkey's community-measured
 # numbers) quotes hours/week, not tokens. Defaulting to 3B as a rough

@@ -67,6 +67,7 @@ from stargate.config import (  # noqa: E402
     BOT_TOKEN,
     CHAT_PROJECTS_FILE,
     CLAUDE_PATH,
+    DEFAULT_HARNESS,
     FORGE_QUEUE_DIR,  # noqa: F401 — used by tests via bridge.FORGE_QUEUE_DIR
     MAX_QUEUED_MESSAGES,
     MAX_TIMEOUT,
@@ -89,6 +90,7 @@ from stargate.config import (  # noqa: E402
     TELEGRAM_MSG_LIMIT,
     TYPING_INTERVAL,
     USAGE_WEEKLY_TOKEN_CAP,
+    VALID_HARNESSES,
     WORKING_DIR,
     logger,
 )
@@ -142,7 +144,9 @@ from stargate.projects import (  # noqa: E402
     _parse_project_entry,
     get_all_projects as _get_all_projects,
     get_chat_agent,
+    get_chat_harness,
     get_chat_working_dir,
+    set_chat_harness,
     set_chat_project,
 )
 
@@ -431,14 +435,37 @@ def run_claude(
         model = get_chat_model(session_key)
     effort = resolve_effort(session_key)
 
+    # Resolve harness: per-chat override > DEFAULT_HARNESS env. Today
+    # `run_claude` only dispatches to `ClaudeCliHarness`; if the topic
+    # selected `cc-sdk` we honor the *log* of that intent for the live
+    # soak comparison, but fall back to `cc-cli` for actual execution
+    # until phase 3 wires the SDK harness with proper /kill integration.
+    harness_name = get_chat_harness(session_key) or DEFAULT_HARNESS
+    if harness_name not in VALID_HARNESSES:
+        logger.warning(
+            "Unknown harness %r for %s; falling back to %s",
+            harness_name,
+            session_key,
+            DEFAULT_HARNESS,
+        )
+        harness_name = DEFAULT_HARNESS
+    effective_harness = harness_name
+    if effective_harness == "cc-sdk":
+        logger.warning(
+            "cc-sdk selected for %s but not yet dispatched; running on cc-cli",
+            session_key,
+        )
+        effective_harness = "cc-cli"
+
     if session_id:
         logger.info("Resuming session %s for %s", session_id[:12], session_key)
     logger.info(
-        "Launching claude in %s for %s (model=%s, effort=%s)",
+        "Launching claude in %s for %s (model=%s, effort=%s, harness=%s)",
         chat_cwd,
         session_key,
         model or "default",
         effort,
+        effective_harness,
     )
     invoke_start = time.time()
     _log_activity(
@@ -448,6 +475,8 @@ def run_claude(
         model=model or "default",
         effort=effort,
         resume=bool(session_id),
+        harness=effective_harness,
+        harness_requested=harness_name,
     )
 
     state = _get_session_state(session_key)
@@ -506,6 +535,7 @@ def run_claude(
                 session_key=session_key,
                 duration=duration,
                 elapsed_ms=int(duration * 1000),
+                harness=effective_harness,
             )
             return (
                 f"[Timed out after {MAX_TIMEOUT // 60} min] "
@@ -565,6 +595,7 @@ def run_claude(
                 session_key=session_key,
                 duration=duration,
                 source=source,
+                harness=effective_harness,
             )
             return QUOTA_HIT_PREFIX + message
 
@@ -581,6 +612,7 @@ def run_claude(
                 turns_used=num_turns,
                 exit_code=0,
                 response_len=len(final.message),
+                harness=effective_harness,
             )
             return final.message
 
@@ -600,6 +632,7 @@ def run_claude(
             duration=duration,
             elapsed_ms=int(duration * 1000),
             error=(stderr[:200] if stderr else final.message[:200]) or "no output",
+            harness=effective_harness,
         )
         return final.message or "(no output)"
 
@@ -616,6 +649,7 @@ def run_claude(
             turns_used=final.num_turns,
             exit_code=0,
             response_len=len(final.raw_text),
+            harness=effective_harness,
         )
         response = final.raw_text or "(no parseable response)"
 
@@ -646,6 +680,7 @@ def run_claude(
         duration=duration,
         elapsed_ms=int(duration * 1000),
         error="harness returned no terminator",
+        harness=effective_harness,
     )
     return "(no output)"
 
@@ -1347,6 +1382,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/project - Show current project dir\n"
         "/model - Set model (opus/sonnet/haiku) or prefix with !s !o !h\n"
         "/effort - Set effort level (low/medium/high/xhigh/max)\n"
+        "/harness - Show or set the agent backend (cc-cli/cc-sdk)\n"
         "/remote-control - Start claude remote-control in this topic's project dir\n"
         "/remote-control stop - Stop remote-control\n"
         "/kill - Kill active Claude process\n"
@@ -1582,6 +1618,56 @@ async def callback_effort(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     set_chat_effort(key, choice)
     await query.edit_message_text(f"Effort set to {choice}. Takes effect on next message.")
     logger.info("Effort set to %s for %s", choice, key)
+
+
+async def cmd_harness(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Set or show the agent backend harness for this chat/topic.
+
+    `/harness` shows the current selection (per-chat override or the
+    DEFAULT_HARNESS fallback). `/harness <name>` sets it for this topic;
+    `/harness default` clears the override.
+
+    Today only `cc-cli` is dispatched in `run_claude`; `cc-sdk` can be
+    selected and stored, but `run_claude` falls back to `cc-cli` and
+    logs a warning until phase 3 wires the SDK harness end-to-end.
+    """
+    chat_id = update.effective_chat.id
+    thread_id = update.message.message_thread_id
+    key = _session_key(chat_id, thread_id)
+
+    args = context.args
+    if args:
+        choice = args[0].lower()
+        if choice == "default":
+            set_chat_harness(key, None)
+            await update.message.reply_text(
+                f"Harness reset to default ({DEFAULT_HARNESS})."
+            )
+            logger.info("Harness cleared for %s", key)
+            return
+        if choice not in VALID_HARNESSES:
+            await update.message.reply_text(
+                f"Invalid harness. Choose: {', '.join(VALID_HARNESSES)}, default"
+            )
+            return
+        set_chat_harness(key, choice)
+        suffix = (
+            ""
+            if choice == "cc-cli"
+            else f" (NOTE: {choice} is not yet dispatched — run_claude falls back to cc-cli until phase 3)"
+        )
+        await update.message.reply_text(
+            f"Harness set to {choice}. Takes effect on next message.{suffix}"
+        )
+        logger.info("Harness set to %s for %s", choice, key)
+        return
+
+    current = get_chat_harness(key) or f"default ({DEFAULT_HARNESS})"
+    await update.message.reply_text(
+        f"Current harness: {current}\n"
+        f"Valid choices: {', '.join(VALID_HARNESSES)}, default\n"
+        f"Use /harness <name> to switch."
+    )
 
 
 async def cmd_kill(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2302,6 +2388,7 @@ def main() -> None:
     app.add_handler(CommandHandler("model", cmd_model))
     app.add_handler(CallbackQueryHandler(callback_model, pattern=r"^model:"))
     app.add_handler(CommandHandler("effort", cmd_effort))
+    app.add_handler(CommandHandler("harness", cmd_harness))
     app.add_handler(CallbackQueryHandler(callback_effort, pattern=r"^effort:"))
     app.add_handler(CommandHandler("remote_control", cmd_remote_control))
     app.add_handler(CommandHandler("restart", cmd_restart))
