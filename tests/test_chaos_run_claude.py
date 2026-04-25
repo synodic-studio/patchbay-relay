@@ -11,6 +11,7 @@ See `docs/STARGATE-IMPROVEMENT-PLAN.md` §3e (CTB-dnc).
 
 from __future__ import annotations
 
+import json
 import stat
 import subprocess
 import sys
@@ -198,6 +199,48 @@ class TestChaosRunClaude:
         result = bridge.run_claude(MESSAGE, SESSION_KEY)
         assert isinstance(result, str)
         assert result
+        assert _no_orphan_procs(fake)
+
+    def test_oom_retries_with_reduced_budget(self, monkeypatch, tmp_path):
+        """Fake exits 137 on first call, 0 with valid JSON on second.
+        Asserts: claude was invoked twice; the second invocation used
+        --max-turns 50 (the OOM-retry budget); the user gets the second
+        run's response, not silence."""
+        from stargate.self_heal import OOM_RETRY_MAX_TURNS
+
+        invocations_dir = tmp_path / "invocations"
+        invocations_dir.mkdir()
+
+        # Fake records its argv to a unique JSON file per invocation, then
+        # either OOMs (first call) or returns valid JSON (second call).
+        fake = _write_fake(
+            tmp_path,
+            f"inv_dir = {str(invocations_dir)!r}\n"
+            "import json as _j, os as _o, glob as _g\n"
+            "n = len(_g.glob(_o.path.join(inv_dir, '*.json')))\n"
+            "with open(_o.path.join(inv_dir, f'argv_{n}.json'), 'w') as f:\n"
+            "    _j.dump(sys.argv[1:], f)\n"
+            "if n == 0:\n"
+            "    sys.stderr.write('killed\\n')\n"
+            "    sys.exit(137)\n"
+            "payload = _j.dumps([{'type':'result','session_id':'s-recovered','result':'recovered'}])\n"
+            "sys.stdout.write(payload)\n"
+            "sys.exit(0)\n",
+        )
+        monkeypatch.setattr(bridge, "CLAUDE_PATH", str(fake))
+
+        result = bridge.run_claude("hello world", SESSION_KEY)
+
+        # Second invocation succeeded; user got the recovered result.
+        assert "recovered" in result
+        # Two invocation files written
+        invocations = sorted(invocations_dir.glob("argv_*.json"))
+        assert len(invocations) == 2
+        # Second invocation used the OOM retry budget
+        retry_args = json.loads(invocations[1].read_text())
+        assert "--max-turns" in retry_args
+        idx = retry_args.index("--max-turns")
+        assert retry_args[idx + 1] == str(OOM_RETRY_MAX_TURNS)
         assert _no_orphan_procs(fake)
 
     def test_no_active_proc_left_after_chaos_run(self, monkeypatch, tmp_path):

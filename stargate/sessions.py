@@ -11,8 +11,8 @@ from .config import (
     SESSION_KEY_RE,
     atomic_write_text,
     logger,
-    quarantine_file,
 )
+from .self_heal import dispatch_repair
 
 
 def _sanitize_session_key(key: str) -> str:
@@ -53,7 +53,10 @@ def get_session_id(session_key: str) -> str | None:
         last_active = data["last_active"]
         session_id = data["session_id"]
     except (json.JSONDecodeError, KeyError, TypeError, OSError) as e:
-        quarantine_file(session_file, f"corrupt session for {session_key}: {e}")
+        dispatch_repair(
+            "corrupt_session_json",
+            {"path": session_file, "reason": f"corrupt session for {session_key}: {e}"},
+        )
         return None
     if time.time() - last_active > SESSION_EXPIRY:
         try:

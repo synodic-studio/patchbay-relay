@@ -17,6 +17,7 @@ The bridge is modularized into a `stargate/` package with focused modules. `brid
 | `stargate/quota.py` | Quota/rate-limit detection and Forge handoff |
 | `stargate/activity.py` | Structured JSON-lines activity logging |
 | `stargate/projects.py` | Chat-to-project directory mapping |
+| `stargate/self_heal.py` | Repair-agent dispatcher — corrupt-session quarantine, stale-poller signal, claude OOM retry. See CTB-die. |
 | `validate.py` | Pre-flight validation (syntax, imports, smoke tests for all modules) |
 
 ### Supporting files
@@ -27,7 +28,7 @@ The bridge is modularized into a `stargate/` package with focused modules. `brid
 
 ### Testing
 
-329 tests across 16 test files. Run with `uv run pytest tests/`. Coverage: 83% overall, 100% on all `stargate/` modules.
+422 tests across the `tests/` dir. Run with `uv run pytest tests/`. The suite includes property tests (`hypothesis`), a `claude` chaos test that materializes a fake binary across 7 failure modes, real drain/debounce integration tests synchronized via `threading.Event`, and self-heal dispatcher tests.
 
 When patching in tests, use the actual module path (e.g., `stargate.sessions.SESSION_DIR`, not `bridge.SESSION_DIR`) since functions in `stargate/` reference their own module's imports.
 

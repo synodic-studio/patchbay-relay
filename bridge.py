@@ -261,8 +261,19 @@ _BRIDGE_STARTED_AT = time.time()
 # ---------------------------------------------------------------------------
 
 
-def run_claude(message: str, session_key: str, _retry: bool = False, model: str | None = None) -> str:
-    """Invoke claude CLI via Popen. Does not kill on timeout."""
+def run_claude(
+    message: str,
+    session_key: str,
+    _retry: bool = False,
+    model: str | None = None,
+    max_turns_override: int | None = None,
+) -> str:
+    """Invoke claude CLI via Popen. Does not kill on timeout.
+
+    max_turns_override: when set, replaces MAX_TURNS for this invocation
+    only. Used by the OOM self-heal path (see stargate/self_heal.py) to
+    retry with a tighter turn budget after a kill.
+    """
     session_id = get_session_id(session_key)
     chat_cwd = get_chat_working_dir(session_key)
 
@@ -371,7 +382,7 @@ def run_claude(message: str, session_key: str, _retry: bool = False, model: str 
         "--disallowed-tools",
         "AskUserQuestion,EnterPlanMode,ExitPlanMode",
         "--max-turns",
-        str(MAX_TURNS),
+        str(max_turns_override if max_turns_override is not None else MAX_TURNS),
         "--plugin-dir",
         PA_PLUGIN_DIR,
         "--append-system-prompt",
@@ -449,6 +460,32 @@ def run_claude(message: str, session_key: str, _retry: bool = False, model: str 
             logger.warning("Stale session %s for %s, retrying fresh", session_id[:12], session_key)
             clear_session(session_key)
             return run_claude(message, session_key, _retry=True)
+        # OOM-shaped exit: dispatch self-heal, retry once with reduced budget.
+        if proc.returncode in (137, -9) and not _retry:
+            from stargate.self_heal import (
+                OOM_RETRY_MAX_TURNS,
+                OOM_RETRY_PROMPT_TRIM,
+                dispatch_repair,
+            )
+            result = dispatch_repair(
+                "claude_oom_137",
+                {"session_key": session_key, "returncode": proc.returncode},
+            )
+            if result.fixed:
+                logger.warning(
+                    "OOM kill (rc=%d) for %s, retrying with max_turns=%d trimmed_prompt=%dch",
+                    proc.returncode,
+                    session_key,
+                    OOM_RETRY_MAX_TURNS,
+                    OOM_RETRY_PROMPT_TRIM,
+                )
+                return run_claude(
+                    message[:OOM_RETRY_PROMPT_TRIM],
+                    session_key,
+                    _retry=True,
+                    model=model,
+                    max_turns_override=OOM_RETRY_MAX_TURNS,
+                )
         # Check for quota error in stderr even when stdout is empty
         if _is_quota_error([], stderr):
             logger.warning(

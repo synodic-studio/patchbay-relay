@@ -69,6 +69,16 @@ what's landed and what's still open. Full audit detail follows unchanged.
   second handler via threading.Event barriers (`aa247e7`). The two
   legacy `asyncio.sleep(0)` flakes from audit §18 are retrofitted to
   the same barrier pattern. 21 new tests, 403 total.
+- **Self-heal dispatcher** (CTB-die, audit §1.5): new
+  `stargate/self_heal.py` with a `dispatch_repair(kind, context)` API
+  and three built-in handlers — `corrupt_session_json` (quarantines the
+  bad file), `stale_telegram_poller` (signals a stale bridge PID via
+  the singleton lockfile), and `claude_oom_137` (validates the OOM
+  diagnosis and recommends retry parameters). Wired into two production
+  paths today: `bridge.run_claude` retries OOM-killed runs once with
+  `--max-turns 50` and a trimmed prompt; `sessions.get_session_id`
+  routes corrupt JSON through dispatch so the outcome lands in
+  `activity.jsonl` as a `self_heal` event. 19 new tests, 422 total.
 
 ### Still open (audit items not yet addressed)
 
@@ -97,10 +107,13 @@ what's landed and what's still open. Full audit detail follows unchanged.
 3. ~~**Phase 3 chaos test + property tests** (CTB-dnc).~~ Landed 2026-04-24
    (`81cbd84` / `79e4623` / `aa247e7`).
 4. ~~**certifi bump** (CTB-psz).~~ Landed 2026-04-24 (`8d6cee4`).
-5. **Repair-agent dispatch pattern** (CTB-die). Self-healing infrastructure.
-   The `self_heal.py` module — start with three failure classes and grow.
+5. ~~**Repair-agent dispatch pattern** (CTB-die).~~ Landed 2026-04-25 —
+   `stargate/self_heal.py` with three handlers, OOM retry wired into
+   `run_claude`, corrupt-session routed through dispatch in
+   `sessions.py`. Stale-poller handler is registered but not yet wired
+   into a runtime detector — that's the next extension point.
 6. **Pluggable backends per-topic** (CTB-cyz). New territory; depends on
-   the claude-pi-shim spike succeeding end-to-end first.
+   the pi-shim spike succeeding end-to-end first.
 7. **Event-cadence stall detector** (audit §1a full). Bigger; needs design.
 8. **Agent SDK migration** (audit §4a). Unblocks Channels MCP.
 
