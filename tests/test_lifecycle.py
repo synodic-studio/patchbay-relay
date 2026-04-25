@@ -123,7 +123,6 @@ class TestStallDetector:
     @pytest.fixture(autouse=True)
     def _isolate(self, monkeypatch):
         monkeypatch.setattr(bridge, "_sessions", {})
-        monkeypatch.setattr(bridge, "_proc_last_active", {})
         monkeypatch.setattr(bridge, "_bot_instance", None)
         monkeypatch.setattr(bridge, "STALL_POLL_INTERVAL", 0.01)
         monkeypatch.setattr(bridge, "STALL_TIMEOUT", 0.01)
@@ -134,7 +133,7 @@ class TestStallDetector:
         proc = MagicMock()
         proc.poll.return_value = 0  # already finished
         bridge._get_session_state("done_key").proc = proc
-        bridge._proc_last_active["done_key"] = 1000.0
+        bridge._get_session_state("done_key").last_event_at = 1000.0
 
         import asyncio
 
@@ -145,7 +144,7 @@ class TestStallDetector:
             await task
         except asyncio.CancelledError:
             pass
-        assert "done_key" not in bridge._proc_last_active
+        assert (bridge._sessions.get("done_key") is None or bridge._sessions["done_key"].last_event_at is None)
 
     @pytest.mark.asyncio
     async def test_kills_stalled_process(self):
@@ -156,7 +155,7 @@ class TestStallDetector:
         proc.poll.return_value = None
         proc.pid = 999
         bridge._get_session_state("stalled").proc = proc
-        bridge._proc_last_active["stalled"] = time.time() - 1000  # way past timeout
+        bridge._get_session_state("stalled").last_event_at = time.time() - 1000  # way past timeout
 
         with patch.object(bridge, "_get_proc_cpu", return_value=0.0):
             import asyncio
@@ -180,7 +179,7 @@ class TestStallDetector:
         proc.poll.return_value = None
         proc.pid = 888
         bridge._get_session_state("active").proc = proc
-        bridge._proc_last_active["active"] = time.time() - 1000
+        bridge._get_session_state("active").last_event_at = time.time() - 1000
 
         with patch.object(bridge, "_get_proc_cpu", return_value=50.0):
             import asyncio

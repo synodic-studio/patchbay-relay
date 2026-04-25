@@ -32,7 +32,6 @@ def _valid_stdout(text="OK"):
 @pytest.fixture(autouse=True)
 def _isolate(monkeypatch):
     monkeypatch.setattr(bridge, "_sessions", {})
-    monkeypatch.setattr(bridge, "_proc_last_active", {})
 
 
 @pytest.fixture(autouse=True)

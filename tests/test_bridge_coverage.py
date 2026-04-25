@@ -52,7 +52,6 @@ class TestStallDetectorNotify:
     @pytest.fixture(autouse=True)
     def _isolate(self, monkeypatch):
         monkeypatch.setattr(bridge, "_sessions", {})
-        monkeypatch.setattr(bridge, "_proc_last_active", {})
         monkeypatch.setattr(bridge, "STALL_POLL_INTERVAL", 0.01)
         monkeypatch.setattr(bridge, "STALL_TIMEOUT", 0.01)
 
@@ -68,7 +67,7 @@ class TestStallDetectorNotify:
         proc.poll.return_value = None
         proc.pid = 777
         bridge._get_session_state("100_200").proc = proc
-        bridge._proc_last_active["100_200"] = time.time() - 10000
+        bridge._get_session_state("100_200").last_event_at = time.time() - 10000
 
         with patch.object(bridge, "_get_proc_cpu", return_value=0.0):
             task = asyncio.create_task(bridge._stall_detector())
@@ -96,7 +95,7 @@ class TestStallDetectorNotify:
         proc.poll.return_value = None
         proc.pid = 888
         bridge._get_session_state("100_200").proc = proc
-        bridge._proc_last_active["100_200"] = time.time() - 10000
+        bridge._get_session_state("100_200").last_event_at = time.time() - 10000
 
         with patch.object(bridge, "_get_proc_cpu", return_value=0.0):
             task = asyncio.create_task(bridge._stall_detector())
@@ -121,7 +120,7 @@ class TestStallDetectorNotify:
         proc.poll.return_value = None
         proc.pid = 999
         bridge._get_session_state("100").proc = proc
-        bridge._proc_last_active["100"] = time.time() - 10000
+        bridge._get_session_state("100").last_event_at = time.time() - 10000
 
         with patch.object(bridge, "_get_proc_cpu", return_value=0.0):
             task = asyncio.create_task(bridge._stall_detector())
@@ -145,7 +144,7 @@ class TestStallDetectorNotify:
         proc.poll.return_value = None
         proc.pid = 555
         bridge._get_session_state("100").proc = proc
-        bridge._proc_last_active["100"] = time.time() - 10000
+        bridge._get_session_state("100").last_event_at = time.time() - 10000
 
         with patch.object(bridge, "_get_proc_cpu", return_value=None):
             task = asyncio.create_task(bridge._stall_detector())
@@ -181,7 +180,7 @@ class TestStallDetectorNotify:
                 pass
 
         proc.kill.assert_not_called()
-        assert "100" in bridge._proc_last_active
+        assert (bridge._sessions.get("100") is not None and bridge._sessions["100"].last_event_at is not None)
 
 
 # ---------------------------------------------------------------------------

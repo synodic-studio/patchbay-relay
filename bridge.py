@@ -193,8 +193,6 @@ _processing_sessions: set[str] = set()
 _session_start_times: dict[str, float] = {}  # session_key -> time.time() when processing began
 _queued_messages: dict[str, list[str]] = {}
 
-# Stalled process detector
-_proc_last_active: dict[str, float] = {}  # session_key -> last time CPU was above threshold
 
 # Flag to block new messages during graceful shutdown
 _shutting_down = False
@@ -358,8 +356,9 @@ def run_claude(message: str, session_key: str, _retry: bool = False, model: str 
         text=True,
         cwd=chat_cwd,
     )
-    _get_session_state(session_key).proc = proc
-    _proc_last_active[session_key] = time.time()
+    state = _get_session_state(session_key)
+    state.proc = proc
+    state.last_event_at = time.time()
 
     try:
         stdout, stderr = proc.communicate(timeout=MAX_TIMEOUT)
@@ -373,7 +372,7 @@ def run_claude(message: str, session_key: str, _retry: bool = False, model: str 
         state = _sessions.get(session_key)
         if state is not None:
             state.proc = None
-        _proc_last_active.pop(session_key, None)
+            state.last_event_at = None
 
     duration = time.time() - invoke_start
     stderr = stderr or ""
@@ -1508,19 +1507,20 @@ async def _stall_detector() -> None:
         await asyncio.sleep(STALL_POLL_INTERVAL)
         now = time.time()
         for key, proc in _iter_active_procs():
+            state = _sessions[key]
             if proc.poll() is not None:
-                _proc_last_active.pop(key, None)
+                state.last_event_at = None
                 continue
             cpu = _get_proc_cpu(proc.pid)
             if cpu is None:
                 continue
             if cpu >= STALL_CPU_THRESHOLD:
-                _proc_last_active[key] = now
+                state.last_event_at = now
                 continue
-            last_active = _proc_last_active.get(key, now)
-            if key not in _proc_last_active:
-                _proc_last_active[key] = now
+            if state.last_event_at is None:
+                state.last_event_at = now
                 continue
+            last_active = state.last_event_at
             stall_duration = now - last_active
             if stall_duration >= STALL_TIMEOUT:
                 logger.warning(
@@ -1530,7 +1530,7 @@ async def _stall_detector() -> None:
                     stall_duration,
                 )
                 proc.kill()
-                _proc_last_active.pop(key, None)
+                state.last_event_at = None
                 try:
                     mark_stall_kill(key, stall_duration / 60)
                 except ValueError:

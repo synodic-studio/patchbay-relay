@@ -58,7 +58,6 @@ def _valid_json_stdout(text="Hi there", session_id="sess-abc-123"):
 def _isolate_bridge_state(monkeypatch):
     """Reset mutable module-level dicts so tests don't leak into each other."""
     monkeypatch.setattr(bridge, "_sessions", {})
-    monkeypatch.setattr(bridge, "_proc_last_active", {})
 
 
 @pytest.fixture(autouse=True)
@@ -444,7 +443,7 @@ class TestProcessTracking:
         def spy_communicate(**kwargs):
             # Snapshot the state while "inside" communicate
             recorded_state["active"] = {k: s.proc for k, s in bridge._sessions.items() if s.proc is not None}
-            recorded_state["last_active"] = dict(bridge._proc_last_active)
+            recorded_state["last_active"] = {k: s.last_event_at for k, s in bridge._sessions.items() if s.last_event_at is not None}
             return original_communicate(**kwargs)
 
         proc.communicate = spy_communicate
@@ -467,7 +466,7 @@ class TestProcessTracking:
             bridge.run_claude(MESSAGE, SESSION_KEY)
 
         assert self._proc_cleared(SESSION_KEY)
-        assert SESSION_KEY not in bridge._proc_last_active
+        assert (bridge._sessions.get(SESSION_KEY) is None or bridge._sessions[SESSION_KEY].last_event_at is None)
 
     def test_proc_cleared_after_timeout(self):
         proc = _make_proc()
@@ -480,7 +479,7 @@ class TestProcessTracking:
             bridge.run_claude(MESSAGE, SESSION_KEY)
 
         assert self._proc_cleared(SESSION_KEY)
-        assert SESSION_KEY not in bridge._proc_last_active
+        assert (bridge._sessions.get(SESSION_KEY) is None or bridge._sessions[SESSION_KEY].last_event_at is None)
 
     def test_proc_cleared_after_empty_output(self):
         proc = _make_proc(stdout="", stderr="")
@@ -489,7 +488,7 @@ class TestProcessTracking:
             bridge.run_claude(MESSAGE, SESSION_KEY)
 
         assert self._proc_cleared(SESSION_KEY)
-        assert SESSION_KEY not in bridge._proc_last_active
+        assert (bridge._sessions.get(SESSION_KEY) is None or bridge._sessions[SESSION_KEY].last_event_at is None)
 
 
 # ---------------------------------------------------------------------------
