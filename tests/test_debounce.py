@@ -150,13 +150,20 @@ async def test_queued_messages_drained_after_processing():
 @pytest.mark.asyncio
 async def test_multiple_queued_messages_combined_with_separator():
     """Multiple queued messages should be combined with follow-up format."""
+    import threading
+
     key = bridge._session_key(1, None)
     ctx = _make_context()
 
     run_claude_calls = []
+    first_entered = threading.Event()
+    release_first = threading.Event()
 
     def fake_run_claude(message, session_key, model=None):
         run_claude_calls.append(message)
+        if len(run_claude_calls) == 1:
+            first_entered.set()
+            release_first.wait(timeout=5)
         return "ok"
 
     with (
@@ -168,9 +175,11 @@ async def test_multiple_queued_messages_combined_with_separator():
     ):
         first_update = _make_update(text="initial")
         task = asyncio.create_task(bridge.handle_message(first_update, ctx))
-        await asyncio.sleep(0)
+        while not first_entered.is_set():
+            await asyncio.sleep(0.01)
 
         bridge._get_session_state(key).queue.extend(["second msg", "third msg"])
+        release_first.set()
 
         await task
 
@@ -186,13 +195,20 @@ async def test_multiple_queued_messages_combined_with_separator():
 @pytest.mark.asyncio
 async def test_single_queued_message_sent_without_follow_up_format():
     """A single queued message should be sent as-is, not wrapped in follow-up format."""
+    import threading
+
     key = bridge._session_key(1, None)
     ctx = _make_context()
 
     run_claude_calls = []
+    first_entered = threading.Event()
+    release_first = threading.Event()
 
     def fake_run_claude(message, session_key, model=None):
         run_claude_calls.append(message)
+        if len(run_claude_calls) == 1:
+            first_entered.set()
+            release_first.wait(timeout=5)
         return "ok"
 
     with (
@@ -204,9 +220,11 @@ async def test_single_queued_message_sent_without_follow_up_format():
     ):
         first_update = _make_update(text="initial")
         task = asyncio.create_task(bridge.handle_message(first_update, ctx))
-        await asyncio.sleep(0)
+        while not first_entered.is_set():
+            await asyncio.sleep(0.01)
 
         bridge._get_session_state(key).queue.append("just one follow-up")
+        release_first.set()
 
         await task
 
