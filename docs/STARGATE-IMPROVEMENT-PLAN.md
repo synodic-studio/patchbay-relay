@@ -115,13 +115,13 @@ what's landed and what's still open. Full audit detail follows unchanged.
 | §13 | `_to_markdownv2` partial-render leaks | **Resolved 2026-04-25** — markdown vs plain decided once per response; mid-response downgrade propagates to remaining chunks. |
 | §14 | Three handler duplication | **Resolved 2026-04-25** — `_process_with_claude_turn` is the shared lifecycle; the three handlers are thin adapters that build a prompt + label and delegate. Net −28 lines, single source of truth. |
 | §15 | auth_server reflected XSS via raw `error` | **Moot 2026-04-24** — auth_server.py and the entire auth layer deleted from the repo. See `docs/apple-auth-implementation.md`. |
-| §16 | IPv6 prefix rotation locking mobile sessions | Open. |
-| §17 | `cmd_remote_control` stdout-only deadlock | Open. |
+| §16 | IPv6 prefix rotation locking mobile sessions | **Moot 2026-04-25** — entirely a property of the deleted `auth.py:169-186` IP-binding logic. No IPv6 / CGNAT handling remains anywhere in the codebase; confirmed via grep across stargate/, bridge.py, tests/. |
+| §17 | `cmd_remote_control` stdout-only deadlock | **Resolved 2026-04-25** — `_start_remote_drain` spawns a daemon thread that drains stdout for the rest of the proc's life after the initial 10s capture window, so a chatty `claude remote-control` can't deadlock on a full pipe. |
 | §18 | pytest-asyncio mode + drain test flake | **Resolved 2026-04-24** — the two `asyncio.sleep(0)` sites in `test_debounce.py` now synchronize via `threading.Event` barriers (CTB-dnc, `aa247e7`). Declaring an explicit pytest-asyncio mode is still hygiene but no longer urgent. |
 | §19–21 | run.sh rollback freshness, py-version matrix, coverage claim | Hygiene. |
 | §4a | Agent SDK migration | Bryan: "interested later." Channels MCP unblocks once this is done. |
 | §4b | Thin `bridge.py` | Open — `bridge.py` is still the orchestrator. |
-| §4d (rest) | `activity.jsonl` viewer / `/metrics` | `/health` is shipped; viewer + metrics still open. |
+| §4d (rest) | `activity.jsonl` viewer / `/metrics` | **Viewer resolved 2026-04-25** — `/activity` Telegram command surfaces last N entries with optional event filter (e.g. `/activity self_heal`, `/activity markdown_send_failed 15`). `/metrics` HTTP endpoint still open. |
 
 ### Recommended next (ranked)
 

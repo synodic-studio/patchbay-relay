@@ -70,6 +70,7 @@ All commands are registered in `bridge.py` via `CommandHandler`. Commands silent
 | `/remote_control stop` | Stop the running remote-control process. |
 | `/ping` | Check liveness. Reports "pong" plus a list of any sessions currently running Claude, with elapsed time. |
 | `/health` | Observability snapshot: bridge uptime, active session count, session files on disk, pending messages, failed-pending (archived) count, free disk on the data dir. |
+| `/activity [event] [count]` | Show recent `activity.jsonl` entries from the user's phone. Optional substring filter (e.g. `/activity self_heal`, `/activity markdown_send_failed 15`). Default 8 entries, max 25. |
 | `/usage` | Show Claude Code quota via `ccusage` as two periods (active 5h block, current Mon→Mon week). Each period shows a token bar (used / cap) and a time bar (period elapsed). The 5h block cap comes from `ccusage --token-limit max`; the weekly cap is an estimate (env var `USAGE_WEEKLY_TOKEN_CAP`, default 3B, marked `(est)` in output) because Anthropic does not publish a weekly token cap for Max plans. |
 
 ### Session model

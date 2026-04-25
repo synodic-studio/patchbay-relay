@@ -242,6 +242,36 @@ async def _release_processing(state: SessionState) -> None:
 # Track remote-control process (only one at a time, keyed by session key)
 _remote_proc: subprocess.Popen | None = None
 _remote_proc_key: str | None = None
+_remote_drain_thread: object | None = None  # threading.Thread when active
+
+
+def _start_remote_drain(proc: subprocess.Popen) -> None:
+    """Drain proc.stdout in a daemon thread for the rest of its life.
+
+    Without this, `claude remote-control` can deadlock on a full stdout
+    pipe (~64KB on macOS) once the initial-output capture window closes
+    and nobody is reading anymore. The drain just discards lines —
+    everything the user needs (connection info, etc.) was already
+    captured during the initial 10s window. Audit §17.
+    """
+    import threading
+
+    def _drain() -> None:
+        try:
+            for _ in iter(proc.stdout.readline, ""):
+                pass
+        except (OSError, ValueError):
+            pass
+        finally:
+            try:
+                proc.stdout.close()
+            except OSError:
+                pass
+
+    global _remote_drain_thread
+    t = threading.Thread(target=_drain, name="remote-control-drain", daemon=True)
+    t.start()
+    _remote_drain_thread = t
 
 # Message debounce: batch messages that arrive while Claude is processing
 
@@ -1327,6 +1357,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/restart - Restart the bridge\n"
         "/ping - Check if bridge is alive\n"
         "/health - Disk, queues, uptime, counts\n"
+        "/activity [event] [count] - Recent activity.jsonl entries (e.g. /activity self_heal)\n"
         "/usage - Show Claude Code quota (tokens + block time remaining)\n\n"
         "Each forum topic runs as an independent Claude session."
     )
@@ -1690,6 +1721,9 @@ async def cmd_remote_control(update: Update, context: ContextTypes.DEFAULT_TYPE)
         _remote_proc = None
         _remote_proc_key = None
     else:
+        # Spawn the background drainer now: nobody is reading stdout from
+        # here on, and remote-control would deadlock on a full pipe (§17).
+        _start_remote_drain(proc)
         output = "\n".join(lines) if lines else "(waiting for connection info...)"
         await update.message.reply_text(
             f"Remote control running (pid {proc.pid}):\n{output}\n\nUse /remote stop to shut it down."
@@ -1887,6 +1921,79 @@ async def cmd_health(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await update.message.reply_text("\n".join(lines))
 
 
+async def cmd_activity(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show the most recent activity.jsonl entries, optionally filtered by event.
+
+    Usage:
+      /activity                  - last 8 entries, any event
+      /activity <event>          - last 8 entries matching <event> (substring)
+      /activity <event> <count>  - last <count> matching entries (cap 25)
+
+    Useful events to grep for:
+      self_heal, claude_timeout, claude_error, markdown_send_failed,
+      markdown_conversion_failed, message_dropped, process_kill, quota_hit
+    """
+
+    parts = (update.message.text or "").split(maxsplit=2)
+    event_filter = parts[1] if len(parts) > 1 else None
+    try:
+        max_count = max(1, min(25, int(parts[2]))) if len(parts) > 2 else 8
+    except ValueError:
+        max_count = 8
+
+    if not Path(ACTIVITY_LOG).exists():
+        await update.message.reply_text("activity.jsonl does not exist yet.")
+        return
+
+    # Read tail of file (~last 200 lines is plenty even for max_count=25)
+    try:
+        with open(ACTIVITY_LOG) as f:
+            lines = f.readlines()[-200:]
+    except OSError as exc:
+        await update.message.reply_text(f"Failed to read activity.jsonl: {exc}")
+        return
+
+    matches: list[dict] = []
+    for raw in reversed(lines):
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            entry = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if event_filter and event_filter not in entry.get("event", ""):
+            continue
+        matches.append(entry)
+        if len(matches) >= max_count:
+            break
+
+    if not matches:
+        suffix = f" matching {event_filter!r}" if event_filter else ""
+        await update.message.reply_text(f"No activity entries{suffix} in the last 200 lines.")
+        return
+
+    out_lines = [
+        f"activity (last {len(matches)}{', ' + event_filter if event_filter else ''}):",
+    ]
+    for entry in matches:
+        ts = datetime.fromtimestamp(entry.get("ts", 0)).strftime("%m-%d %H:%M:%S")
+        evt = entry.get("event", "?")
+        # Compact one-line per entry; include up to ~3 informative fields.
+        extras = []
+        for k in ("session_key", "kind", "fixed", "error", "duration", "elapsed_ms",
+                  "turns_used", "exit_code", "depth", "error_type", "actions"):
+            if k in entry and entry[k] not in (None, "", []):
+                v = entry[k]
+                if isinstance(v, str) and len(v) > 80:
+                    v = v[:77] + "…"
+                extras.append(f"{k}={v}")
+            if len(extras) >= 4:
+                break
+        out_lines.append(f"[{ts}] {evt}  {'  '.join(extras)}")
+    await update.message.reply_text("\n".join(out_lines))
+
+
 async def cmd_ping(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not any(s.processing for s in _sessions.values()):
         await update.message.reply_text("pong — no active sessions")
@@ -2058,6 +2165,7 @@ async def post_init(app: Application) -> None:
         BotCommand("restart", "Restart the bridge"),
         BotCommand("ping", "Check if bridge is alive"),
         BotCommand("usage", "Show Claude Code quota (tokens + block time)"),
+        BotCommand("activity", "Recent activity.jsonl entries (optional event filter)"),
     ]
     await app.bot.set_my_commands(commands)
     logger.info("Bot commands registered with Telegram")
@@ -2202,6 +2310,7 @@ def main() -> None:
     app.add_handler(CommandHandler("restart", cmd_restart))
     app.add_handler(CommandHandler("ping", cmd_ping))
     app.add_handler(CommandHandler("health", cmd_health))
+    app.add_handler(CommandHandler("activity", cmd_activity))
     app.add_handler(CommandHandler("usage", cmd_usage))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
