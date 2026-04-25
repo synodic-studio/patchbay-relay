@@ -1926,11 +1926,18 @@ def _graceful_shutdown(signum: int, frame) -> None:
 def main() -> None:
     # Single-instance guard FIRST — before any Telegram polling starts.
     # Prevents two bridges racing on getUpdates (409 storm, CTB-72m).
+    from stargate.config import BASE_DIR
     from stargate.log_filters import install_filters
+    from stargate.logrotate import rotate_startup_logs
     from stargate.singleton import acquire_singleton
 
     acquire_singleton()
     install_filters()
+
+    # Rotate oversize bridge.err / bridge.log and re-point sys.stdout/stderr
+    # at fresh files. Launchd's stderr redirect happens at exec time, so the
+    # only moment we can reclaim a fresh fd is here, at Python startup.
+    rotate_startup_logs(BASE_DIR / "logs")
 
     signal.signal(signal.SIGTERM, _graceful_shutdown)
     signal.signal(signal.SIGINT, _graceful_shutdown)
