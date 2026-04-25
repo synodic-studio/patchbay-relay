@@ -176,7 +176,9 @@ _executor = ThreadPoolExecutor(max_workers=MAX_WORKERS)
 class SessionState:
     """All per-session runtime state, keyed by session_key in `_sessions`."""
 
-    proc: subprocess.Popen | None = None
+    proc: subprocess.Popen | None = None  # cc-cli only; mirrored by harness's proc_setter
+    harness: object | None = None  # whichever harness instance is driving the active turn
+    worker_loop: asyncio.AbstractEventLoop | None = None  # loop owned by _drive_harness_sync; needed for cross-loop cancel of cc-sdk
     started_at: float | None = None  # time.time() when processing began
     last_event_at: float | None = None  # last time stall-detector saw activity
     queue: list[str] = field(default_factory=list)  # debounced messages awaiting processing
@@ -197,8 +199,67 @@ def _get_session_state(key: str) -> SessionState:
 
 
 def _iter_active_procs() -> list[tuple[str, subprocess.Popen]]:
-    """Snapshot of (session_key, proc) for every session with a live subprocess."""
+    """Snapshot of (session_key, proc) for every session with a live subprocess.
+
+    cc-cli only — sessions where the harness owns its own subprocess
+    (cc-sdk) won't appear here. Use `_iter_active_sessions` for the
+    backend-agnostic view (e.g. /ping, stall detector).
+    """
     return [(k, s.proc) for k, s in _sessions.items() if s.proc is not None]
+
+
+def _iter_active_sessions() -> list[tuple[str, "SessionState"]]:
+    """Snapshot of (session_key, state) for every session running a turn,
+    regardless of harness. Used by /ping, the stall detector, /restart,
+    and graceful shutdown so cc-sdk turns are visible too.
+
+    A session counts as active when either `state.proc` is set (cc-cli)
+    or `state.harness` is set (cc-sdk, or cc-cli before the proc is
+    spawned and after it is reaped). Either signal alone is sufficient.
+    """
+    return [
+        (k, s)
+        for k, s in _sessions.items()
+        if s.proc is not None or s.harness is not None
+    ]
+
+
+async def _cancel_session_async(state: "SessionState") -> None:
+    """Best-effort cancel of the in-flight turn for a session.
+
+    Backend-agnostic dispatch:
+      * cc-cli — `state.proc` is set; SIGKILL via `proc.kill()`. Sync,
+        immediate; the harness's drain returns and `_drive_harness_sync`
+        exits naturally.
+      * cc-sdk — no subprocess handle the bridge can reach (the SDK
+        owns it). Schedule `harness.cancel()` on the worker-thread loop
+        captured in `state.worker_loop` via `run_coroutine_threadsafe`,
+        await with a short timeout so a wedged loop can't hang us.
+
+    Idempotent and silent on error — callers (cmd_kill, stall detector,
+    shutdown) treat this as a fire-and-forget request.
+    """
+    proc = state.proc
+    if proc is not None:
+        try:
+            proc.kill()
+        except OSError:
+            pass
+        return
+
+    harness = state.harness
+    loop = state.worker_loop
+    if harness is None or loop is None:
+        return
+    try:
+        future = asyncio.run_coroutine_threadsafe(harness.cancel(), loop)
+    except RuntimeError:
+        # Worker loop closed between our read and the schedule — nothing to do.
+        return
+    try:
+        await asyncio.wait_for(asyncio.wrap_future(future), timeout=5.0)
+    except (asyncio.TimeoutError, Exception):  # noqa: BLE001 — silence everything during cancel
+        pass
 
 
 async def _claim_or_queue(state: SessionState, text: str) -> tuple[str, int | None]:
@@ -303,8 +364,9 @@ _BRIDGE_STARTED_AT = time.time()
 
 
 def _drive_harness_sync(
-    harness: ClaudeCliHarness,
+    harness,
     req: TurnRequest,
+    state: "SessionState | None" = None,
 ) -> list:
     """Drive the harness async iterator from a sync context, return all events.
 
@@ -313,12 +375,27 @@ def _drive_harness_sync(
     we run a fresh event loop on the worker thread, drain the iterator, and
     hand back the collected `TurnEvent` list. One loop per call is fine —
     harness work is dominated by the subprocess wait, not loop overhead.
+
+    When `state` is given, we mirror the harness instance and the
+    worker-thread's event loop into it for the duration of the turn.
+    `_cancel_session_async` reads those fields to dispatch a cancel:
+    cc-cli is killed via `state.proc.kill()` (same as before), cc-sdk
+    is cancelled via `run_coroutine_threadsafe(harness.cancel(),
+    state.worker_loop)`. The fields are cleared in `finally`.
     """
     events: list = []
 
     async def _drive() -> None:
-        async for event in harness.run_turn(req):
-            events.append(event)
+        if state is not None:
+            state.worker_loop = asyncio.get_running_loop()
+            state.harness = harness
+        try:
+            async for event in harness.run_turn(req):
+                events.append(event)
+        finally:
+            if state is not None:
+                state.harness = None
+                state.worker_loop = None
 
     asyncio.run(_drive())
     return events
@@ -517,12 +594,17 @@ def run_claude(
     )
 
     try:
-        events = _drive_harness_sync(harness, req)
+        events = _drive_harness_sync(harness, req, state)
     finally:
         st = _sessions.get(session_key)
         if st is not None:
             st.proc = None
             st.last_event_at = None
+            # Belt-and-suspenders: _drive_harness_sync clears these in its
+            # own finally too, but a hard exception out of asyncio.run could
+            # in principle leave them stale.
+            st.harness = None
+            st.worker_loop = None
 
     duration = time.time() - invoke_start
     final = events[-1] if events else None
@@ -1671,27 +1753,45 @@ async def cmd_harness(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 async def cmd_kill(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Kill the active Claude process for this chat/topic."""
+    """Kill the active Claude process / cancel the active turn for this chat/topic.
+
+    Backend-agnostic via `_cancel_session_async`: cc-cli SIGKILLs the
+    subprocess, cc-sdk task-cancels the harness across the worker loop.
+    """
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
     thread_id = update.message.message_thread_id
     key = _session_key(chat_id, thread_id)
 
     state = _sessions.get(key)
-    proc = state.proc if state else None
-    if proc and proc.poll() is None:
-        proc.kill()
-        await update.message.reply_text("Killed active Claude process. Session preserved — next message resumes.")
-        logger.info("User %d killed Claude process for %s (pid %d)", user_id, key, proc.pid)
-        _log_activity(
-            "process_kill",
-            session_key=key,
-            pid=proc.pid,
-            user_id=user_id,
-            reason="manual",
-        )
-    else:
+    if state is None or (state.proc is None and state.harness is None):
         await update.message.reply_text("No active Claude process in this chat.")
+        return
+
+    # Capture pid before cancel for logging — cc-sdk has no proc, log -1.
+    proc = state.proc
+    pid = proc.pid if proc is not None else -1
+    harness_name = getattr(state.harness, "name", "cc-cli")
+
+    await _cancel_session_async(state)
+    await update.message.reply_text(
+        "Killed active Claude process. Session preserved — next message resumes."
+    )
+    logger.info(
+        "User %d killed Claude turn for %s (harness=%s, pid=%d)",
+        user_id,
+        key,
+        harness_name,
+        pid,
+    )
+    _log_activity(
+        "process_kill",
+        session_key=key,
+        pid=pid,
+        user_id=user_id,
+        reason="manual",
+        harness=harness_name,
+    )
 
 
 async def cmd_restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1700,10 +1800,22 @@ async def cmd_restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await update.message.reply_text("Restarting bridge...")
     logger.info("User %d triggered bridge restart", user_id)
 
+    # cc-cli paths: SIGTERM the proc (graceful, lets it write final stderr).
     for key, proc in _iter_active_procs():
         if proc.poll() is None:
             proc.terminate()
             logger.info("Terminated Claude process for %s (pid %d)", key, proc.pid)
+
+    # cc-sdk paths: schedule a task cancel on the worker loop. Best-effort
+    # — we're about to os._exit anyway, so any subprocess the SDK owns
+    # dies as our child when we exit.
+    for key, state in _iter_active_sessions():
+        if state.proc is not None:
+            continue  # already terminated above
+        try:
+            await _cancel_session_async(state)
+        except Exception:  # noqa: BLE001
+            logger.exception("Cancel for cc-sdk session %s during restart raised", key)
 
     if _remote_proc and _remote_proc.poll() is None:
         _remote_proc.terminate()
@@ -2159,9 +2271,12 @@ async def _stall_detector() -> None:
     while True:
         await asyncio.sleep(STALL_POLL_INTERVAL)
         now = time.time()
-        for key, proc in _iter_active_procs():
-            state = _sessions[key]
-            if proc.poll() is not None:
+        # Iterate by harness presence so cc-sdk turns are watched too.
+        for key, state in _iter_active_sessions():
+            proc = state.proc
+            # cc-cli optimization: if the proc already exited, the harness
+            # is in its wrap-up phase — clear the timer and move on.
+            if proc is not None and proc.poll() is not None:
                 state.last_event_at = None
                 continue
             if state.last_event_at is None:
@@ -2169,13 +2284,16 @@ async def _stall_detector() -> None:
                 continue
             stall_duration = now - state.last_event_at
             if stall_duration >= STALL_TIMEOUT:
+                pid = proc.pid if proc is not None else -1
+                harness_name = getattr(state.harness, "name", "unknown")
                 logger.warning(
-                    "Killing stalled Claude process for %s (pid %d, idle %.0fs)",
+                    "Killing stalled Claude turn for %s (harness=%s, pid=%d, idle %.0fs)",
                     key,
-                    proc.pid,
+                    harness_name,
+                    pid,
                     stall_duration,
                 )
-                proc.kill()
+                await _cancel_session_async(state)
                 state.last_event_at = None
                 try:
                     mark_stall_kill(key, stall_duration / 60)
@@ -2184,9 +2302,10 @@ async def _stall_detector() -> None:
                 _log_activity(
                     "process_kill",
                     session_key=key,
-                    pid=proc.pid,
+                    pid=pid,
                     reason="stalled",
                     idle_seconds=stall_duration,
+                    harness=harness_name,
                 )
                 if _bot_instance:
                     try:
@@ -2338,6 +2457,20 @@ def _graceful_shutdown(signum: int, frame) -> None:
             logger.warning("Force-killing Claude process for %s (pid %d)", key, proc.pid)
             proc.kill()
             proc.wait()
+
+    # cc-sdk sessions own their subprocess via the SDK; we can't reach
+    # them from a sync signal handler. Log them so the operator knows
+    # what's outstanding; the SDK's child process will receive SIGHUP /
+    # see EOF on stdin once we exit and tear itself down.
+    for key, state in _iter_active_sessions():
+        if state.proc is not None:
+            continue
+        harness_name = getattr(state.harness, "name", "unknown")
+        logger.info(
+            "Active %s turn for %s during shutdown — relying on parent-exit cleanup",
+            harness_name,
+            key,
+        )
 
     if _remote_proc and _remote_proc.poll() is None:
         logger.info("Terminating remote-control process (pid %d)", _remote_proc.pid)
