@@ -369,6 +369,71 @@ class TestKeepTyping:
         assert any("giving up" in r.message for r in caplog.records)
 
     @pytest.mark.asyncio
+    async def test_gives_up_immediately_on_forbidden(self, caplog):
+        """Forbidden (bot blocked / kicked) is persistent — no point retrying."""
+        import logging
+
+        from telegram.error import Forbidden
+
+        import bridge
+
+        bot = MagicMock()
+        bot.send_chat_action = AsyncMock(side_effect=Forbidden("blocked by user"))
+        stop = asyncio.Event()
+
+        with caplog.at_level(logging.WARNING, logger="bridge"):
+            await bridge.keep_typing(666, None, stop, bot)
+
+        assert bot.send_chat_action.call_count == 1  # one try, then gone
+        assert any("persistent" in r.message for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_gives_up_immediately_on_chat_migrated(self):
+        """ChatMigrated means the chat_id has changed; no point retrying here."""
+        from telegram.error import ChatMigrated
+
+        import bridge
+
+        bot = MagicMock()
+        bot.send_chat_action = AsyncMock(side_effect=ChatMigrated(new_chat_id=-1000))
+        stop = asyncio.Event()
+        await bridge.keep_typing(777, None, stop, bot)
+        assert bot.send_chat_action.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_retry_after_does_not_count_toward_cap(self, monkeypatch):
+        """RetryAfter is a server-requested backoff, not a failure. The
+        give-up counter should NOT advance, and the requested retry_after
+        should replace the default interval."""
+        from telegram.error import RetryAfter
+
+        import bridge
+
+        monkeypatch.setattr(bridge, "TYPING_MAX_FAILURES", 2)
+        monkeypatch.setattr(bridge, "TYPING_INTERVAL", 10.0)  # default would be long
+        bot = MagicMock()
+        call_log = []
+
+        async def retry_then_ok(**kwargs):
+            call_log.append(True)
+            if len(call_log) <= 3:
+                raise RetryAfter(retry_after=0.01)  # very short so test is fast
+
+        bot.send_chat_action = AsyncMock(side_effect=retry_then_ok)
+        stop = asyncio.Event()
+
+        async def _set_after_brief():
+            await asyncio.sleep(0.15)
+            stop.set()
+
+        asyncio.create_task(_set_after_brief())
+        await bridge.keep_typing(888, None, stop, bot)
+
+        # Would have given up after 2 failures if RetryAfter counted;
+        # instead we made more calls and eventually succeeded.
+        assert len(call_log) > 2
+
+    @pytest.mark.asyncio
     async def test_success_resets_failure_counter(self, monkeypatch):
         """A successful send resets the consecutive-failure count, so one
         transient blip every few iterations never trips the give-up cap."""

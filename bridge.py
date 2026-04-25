@@ -34,6 +34,7 @@ import telegramify_markdown  # noqa: E402
 from telegramify_markdown.customize import get_runtime_config  # noqa: E402
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update  # noqa: E402
 from telegram.constants import ParseMode  # noqa: E402
+from telegram.error import ChatMigrated, Forbidden, RetryAfter  # noqa: E402
 from telegram.ext import (  # noqa: E402
     Application,
     CallbackQueryHandler,
@@ -503,23 +504,48 @@ async def keep_typing(
 ) -> None:
     """Send typing indicator every few seconds until stop_event is set.
 
-    Telegram API errors were previously swallowed silently, which made the
-    typing indicator look alive after auth/network/thread-id problems had
-    broken it. Now each failure is logged and we give up after
-    TYPING_MAX_FAILURES consecutive failures rather than spamming forever.
-    A successful send resets the failure counter.
+    Error policy (nothing is silently swallowed):
+
+      * ``Forbidden`` / ``ChatMigrated`` — persistent; log once and give up
+        immediately. The bot has been blocked, kicked, or the chat moved.
+      * ``RetryAfter`` — honor the server-requested backoff instead of the
+        default interval.
+      * Other exceptions — log at warning, keep trying; give up after
+        ``TYPING_MAX_FAILURES`` consecutive failures. Success resets the
+        counter so a periodic transient blip never trips the cap.
+      * ``CancelledError`` — propagate so awaiters see the cancellation.
     """
     kwargs = {"chat_id": chat_id, "action": "typing"}
     if thread_id is not None:
         kwargs["message_thread_id"] = thread_id
 
     failures = 0
+    wait_seconds: float = TYPING_INTERVAL
     while not stop_event.is_set():
         try:
             await bot.send_chat_action(**kwargs)
             failures = 0
+            wait_seconds = TYPING_INTERVAL
         except asyncio.CancelledError:
             raise
+        except (Forbidden, ChatMigrated) as exc:
+            logger.warning(
+                "keep_typing giving up for chat=%s thread=%s: %s (persistent)",
+                chat_id,
+                thread_id,
+                type(exc).__name__,
+            )
+            return
+        except RetryAfter as exc:
+            wait_seconds = float(getattr(exc, "retry_after", TYPING_INTERVAL))
+            logger.warning(
+                "keep_typing rate-limited for chat=%s thread=%s; backing off %.1fs",
+                chat_id,
+                thread_id,
+                wait_seconds,
+            )
+            # do not count RetryAfter toward the give-up cap — Telegram told
+            # us to wait, not that we've failed.
         except Exception as exc:
             failures += 1
             log_fn = logger.error if failures >= TYPING_MAX_FAILURES else logger.warning
@@ -542,7 +568,7 @@ async def keep_typing(
                 return
 
         try:
-            await asyncio.wait_for(stop_event.wait(), timeout=TYPING_INTERVAL)
+            await asyncio.wait_for(stop_event.wait(), timeout=wait_seconds)
             return
         except asyncio.TimeoutError:
             continue
@@ -1711,8 +1737,8 @@ async def post_init(app: Application) -> None:
     for chat_id in known_chat_ids:
         try:
             await app.bot.delete_my_commands(scope=BotCommandScopeChat(chat_id=chat_id))
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("delete_my_commands skipped for chat %d: %s", chat_id, exc)
 
     commands = [
         BotCommand("clearnew", "Start a fresh conversation"),
@@ -1779,8 +1805,8 @@ async def post_init(app: Application) -> None:
             if data.get("thread_id"):
                 send_kwargs["message_thread_id"] = data["thread_id"]
             await app.bot.send_message(**send_kwargs)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Could not send restart confirmation: %s: %s", type(exc).__name__, exc)
         restart_notify.unlink(missing_ok=True)
 
 
@@ -1820,8 +1846,8 @@ def _graceful_shutdown(signum: int, frame) -> None:
         for f in PHOTO_DIR.glob("*.jpg"):
             f.unlink(missing_ok=True)
         logger.info("Cleaned up temp photo directory")
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Photo dir cleanup failed during shutdown: %s: %s", type(exc).__name__, exc)
 
     logger.info("Graceful shutdown complete — exiting")
     sys.exit(0)
