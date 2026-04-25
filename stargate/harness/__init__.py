@@ -22,12 +22,14 @@ from .base import (
 from .aider import AiderHarness
 from .claude_cli import ClaudeCliHarness
 from .claude_sdk import ClaudeSdkHarness
+from .opencode import OpenCodeHarness
 from .pi import PiHarness
 
 __all__ = [
     "AiderHarness",
     "ClaudeCliHarness",
     "ClaudeSdkHarness",
+    "OpenCodeHarness",
     "PiHarness",
     "Harness",
     "HarnessCapabilities",

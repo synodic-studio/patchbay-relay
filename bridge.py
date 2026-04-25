@@ -600,6 +600,17 @@ def run_claude(
             on_progress=_on_progress,
             proc_setter=_proc_setter,
         )
+    elif effective_harness == "opencode":
+        # sst/opencode — JSON event protocol via `opencode run --format json`.
+        # Default model `openrouter/deepseek/deepseek-chat-v3.1` (override via
+        # STARGATE_OPENCODE_MODEL env or per-chat /model).
+        from stargate.harness import OpenCodeHarness
+
+        harness = OpenCodeHarness(
+            max_timeout_seconds=MAX_TIMEOUT,
+            on_progress=_on_progress,
+            proc_setter=_proc_setter,
+        )
     else:
         harness = ClaudeCliHarness(
             claude_path=CLAUDE_PATH,

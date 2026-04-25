@@ -19,7 +19,7 @@ Code CLI, Claude Agent SDK, codex/pi, cursor, …) behind one interface.
 | 4 — Flip default | future | `STARGATE_DEFAULT_HARNESS=cc-sdk`. Keep `cc-cli` as fallback. |
 | 5a — Pi harness | ✅ | `stargate/harness/pi.py` — wraps `pi -p --mode json`. Resume via `--session <id>`, multi-model via `--model PROVIDER/ID`, classified errors from `stopReason==error`. 29 tests + smoke-tested end-to-end with deepseek (cost, session resume, BANANA recall). |
 | 5b — Aider harness | ✅ | `stargate/harness/aider.py` — wraps `aider --message` with banner stripping. session_id is the chat-history file path under `aider-history/`. Default model `openrouter/deepseek/deepseek-chat`, override via `STARGATE_AIDER_MODEL` env or per-chat `/model`. 24 tests + smoke-tested with deepseek (banner strip + cost parse). |
-| 5c — OpenCode harness | next | sst/opencode, TUI-first coding agent with CLI mode. |
+| 5c — OpenCode harness | ✅ | `stargate/harness/opencode.py` — wraps `opencode run --format json --pure --dangerously-skip-permissions`. Sessions are first-class `ses_*` UUIDs, resumed via `--session`. Effort maps to `--variant`. 21 tests + smoke-tested with deepseek (resume across two turns). |
 | 5z — codex/cursor/gemini | future | Lower priority. |
 
 ## What 1b core delivered
