@@ -22,6 +22,7 @@ import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -142,6 +143,41 @@ _ANSI_RE = ANSI_RE
 _SESSION_KEY_RE = SESSION_KEY_RE
 
 _executor = ThreadPoolExecutor(max_workers=MAX_WORKERS)
+
+# ---------------------------------------------------------------------------
+# Per-session state (CTB-ucw)
+#
+# Consolidates what used to be six parallel dicts keyed by session_key into a
+# single SessionState object. The legacy module-level dicts below remain as
+# the live data store during the migration; each subsequent commit will move
+# one field from the legacy dicts onto SessionState until they can all be
+# deleted. New code should read/write through `_get_session_state(key)`.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class SessionState:
+    """All per-session runtime state, keyed by session_key in `_sessions`."""
+
+    proc: subprocess.Popen | None = None
+    started_at: float | None = None  # time.time() when processing began
+    last_event_at: float | None = None  # last time stall-detector saw activity
+    queue: list[str] = field(default_factory=list)  # debounced messages awaiting processing
+    processing: bool = False  # True while a claude run is in flight for this key
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+
+_sessions: dict[str, SessionState] = {}
+
+
+def _get_session_state(key: str) -> SessionState:
+    """Return the SessionState for `key`, creating an empty one if needed."""
+    state = _sessions.get(key)
+    if state is None:
+        state = SessionState()
+        _sessions[key] = state
+    return state
+
 
 # Track active Claude subprocesses per session key so /kill can terminate them
 _active_procs: dict[str, subprocess.Popen] = {}
