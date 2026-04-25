@@ -1,7 +1,97 @@
 # Stargate Improvement Plan
 
 *Author: Claude Opus 4.7 · Review date: 2026-04-21*
+*Status update: 2026-04-24 — see "Where We Are Now" below for what's landed.*
 *Previous work: Claude Sonnet 4.6. Branch: `develop`, 18 uncommitted files.*
+
+---
+
+## Where We Are Now (2026-04-24)
+
+This audit was written before a heavy push of fixes. As of develop @ 6f44154
+the file is **455 tests passing, ruff clean, validate clean**. Below is
+what's landed and what's still open. Full audit detail follows unchanged.
+
+### Landed since audit
+
+- **Stall detector slack** (Blocker §1, audit §1a interim): `STALL_TIMEOUT`
+  raised to 2400s (40 min). Real event-cadence detector is still future
+  work. (commit `e6e79a6`)
+- **Single-instance guard** (Blocker §2, CTB-72m): PID lockfile blocks two
+  bridges from racing on `getUpdates`. (`5e8b2b6`, `e6e79a6`)
+- **Atomic writes everywhere** (Critical §4): `atomic_write_text` used by
+  sessions, projects, efforts, outbound. (`e6e79a6`)
+- **Debounce race closed** (Critical §5, CTB-ucw): per-session `asyncio.Lock`
+  via the new `SessionState` dataclass. Concurrent claims serialize.
+  Regression test gathers 10 simultaneous claims and asserts exactly one
+  wins. (CTB-ucw branch, fully merged)
+- **SessionState consolidation** (Architecture §4c, CTB-ucw): six parallel
+  dicts collapsed onto one dataclass keyed by `session_key`.
+- **outbound.py file-locked** (Critical §6): `fcntl` advisory lock on
+  read-modify-write prune. (`e6e79a6`)
+- **Pending retry counter + give-up archive** (High §9, CTB-ucw): pending
+  files persist with `attempts` count, archive to `pending/failed/` after
+  3 retries with a "giving up" Telegram message.
+- **`get_session_id` malformed-JSON tolerance** (High §10): catches
+  `KeyError`/`TypeError`/`OSError` and quarantines instead of poisoning
+  the chat. Already in current code.
+- **`keep_typing` per-error handling** (High §8): `Forbidden` /
+  `ChatMigrated` give up immediately, `RetryAfter` honors backoff,
+  generic errors capped at 5 consecutive failures. Three previously
+  silent `except Exception: pass` sites in startup/shutdown now log.
+  (`5da234c`)
+- **`/health` command** (Architecture §4d, CTB-3ck): uptime, active
+  sessions, session/pending file counts, failed-pending archive count,
+  free disk. (`d20d95d`)
+- **Env-var validation at startup** (CTB-apy): every int-from-env reads
+  through `_env_int` with min-value checks; missing `WORKING_DIR` /
+  `PA_PLUGIN_DIR` is a fatal-with-clear-message; `CLAUDE_PATH` self-heals
+  through known fallbacks. Nothing is swallowed. (`7f73ab2`)
+- **Log rotation** (CTB-r7z): `bridge.err` and `bridge.log` rotate at
+  startup if over 10 MiB; older archives gzip; oldest dropped past keep=5;
+  `sys.stderr` and `sys.stdout` re-pointed via `dup2` so launchd's
+  exec-time redirect doesn't keep us writing into the renamed inode.
+  (`208a9b2`)
+- **Empty-success summary retry** (new pathology, no audit §): when
+  `claude -p` exits cleanly with no final assistant text the bridge
+  re-invokes once with `--resume <id> --max-turns 5` and a "summarize what
+  you just did" prompt, returning the summary instead of the
+  `(Completed N turns…)` placeholder. (`6f44154`)
+- **System-prompt tightening** for "always close with text". (`e3d1976`)
+- **Outbound audit log** (CTB-80f): every Claude→Telegram chunk recorded
+  with parse mode and status. (`bbbb5d3`)
+
+### Still open (audit items not yet addressed)
+
+| Audit ref | Item | Notes |
+|---|---|---|
+| §1a (full) | Event-cadence stall detector | Replace CPU polling with stdout-event cadence. The 40-min slack is interim. |
+| §11 / §5 | Channels MCP plan can't run on `claude -p` | Blocked on Agent SDK migration (§4a). |
+| §12 | `max_turns=500` runaway risk | Decision 2026-04-24: don't lower until we have data. Add `turns_used` / `elapsed_ms` to `activity.jsonl` first; revisit once real distribution is known. |
+| §13 | `_to_markdownv2` partial-render leaks | Open. |
+| §14 | Three handler duplication | Open. The CTB-ucw helpers (`_claim_or_queue`, `_drain_next`, `_release_processing`) are a partial down-payment but the wider `_process_with_claude` extraction is still ahead. |
+| §15 | auth_server reflected XSS via raw `error` | Open. Add `html.escape` on the error string. |
+| §16 | IPv6 prefix rotation locking mobile sessions | Open. |
+| §17 | `cmd_remote_control` stdout-only deadlock | Open. |
+| §18 | pytest-asyncio mode + drain test flake | Drain test no longer fails on develop, but the underlying flake potential (no declared mode) remains. |
+| §19–21 | run.sh rollback freshness, py-version matrix, coverage claim | Hygiene. |
+| §4a | Agent SDK migration | Bryan: "interested later." Channels MCP unblocks once this is done. |
+| §4b | Thin `bridge.py` | Open — `bridge.py` is still the orchestrator. |
+| §4d (rest) | `activity.jsonl` viewer / `/metrics` | `/health` is shipped; viewer + metrics still open. |
+
+### Recommended next (ranked)
+
+1. **Emit `turns_used` and `elapsed_ms` to `activity.jsonl` per `claude_invoke`.**
+   One-line addition; gives us data before we touch `max_turns`.
+2. **Sanitize `auth_server` error HTML** (audit §15 / §1g). One-line fix,
+   small XSS-shaped risk.
+3. **Phase 3 chaos test + property tests** (CTB-dnc). Hardens the work
+   we just did before adding more.
+4. **certifi bump** (CTB-psz). Routine security hygiene.
+5. **Pluggable backends per-topic** (CTB-cyz). New territory; not urgent.
+6. **Repair-agent dispatch pattern** (CTB-die). Self-healing infrastructure.
+7. **Event-cadence stall detector** (audit §1a full). Bigger; needs design.
+8. **Agent SDK migration** (audit §4a). Unblocks Channels MCP.
 
 ---
 
