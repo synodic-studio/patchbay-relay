@@ -190,7 +190,6 @@ _remote_proc_key: str | None = None
 
 # Message debounce: batch messages that arrive while Claude is processing
 _processing_sessions: set[str] = set()
-_queued_messages: dict[str, list[str]] = {}
 
 
 # Flag to block new messages during graceful shutdown
@@ -674,7 +673,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     # Debounce: if Claude is already processing for this session, queue the message
     if key in _processing_sessions:
-        queue = _queued_messages.setdefault(key, [])
+        queue = _get_session_state(key).queue
         if len(queue) >= MAX_QUEUED_MESSAGES:
             await update.message.reply_text(
                 f"Queue full ({MAX_QUEUED_MESSAGES}) — message dropped. Wait for current response to finish."
@@ -740,8 +739,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await _notify_delivery_failure(context.bot, chat_id, thread_id, key)
 
         # Drain queued messages: batch all into a single Claude invocation
-        while _queued_messages.get(key):
-            batch = _queued_messages.pop(key)
+        while _sessions.get(key) and _sessions[key].queue:
+            batch = _sessions[key].queue
+            _sessions[key].queue = []
             logger.info("Processing %d queued message(s) for %s", len(batch), key)
             if len(batch) == 1:
                 combined = batch[0]
@@ -787,7 +787,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     # Debounce: if Claude is already processing for this session, queue the photo prompt
     if key in _processing_sessions:
-        queue = _queued_messages.setdefault(key, [])
+        queue = _get_session_state(key).queue
         if len(queue) >= MAX_QUEUED_MESSAGES:
             await update.message.reply_text(
                 f"Queue full ({MAX_QUEUED_MESSAGES}) — photo dropped. Wait for current response to finish."
@@ -826,8 +826,9 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             await _notify_delivery_failure(context.bot, chat_id, thread_id, key)
 
         # Drain queued messages (same as handle_message)
-        while _queued_messages.get(key):
-            batch = _queued_messages.pop(key)
+        while _sessions.get(key) and _sessions[key].queue:
+            batch = _sessions[key].queue
+            _sessions[key].queue = []
             logger.info("Processing %d queued message(s) for %s", len(batch), key)
             if len(batch) == 1:
                 combined = batch[0]
@@ -883,7 +884,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     # Debounce: if Claude is already processing for this session, queue the prompt
     if key in _processing_sessions:
-        queue = _queued_messages.setdefault(key, [])
+        queue = _get_session_state(key).queue
         if len(queue) >= MAX_QUEUED_MESSAGES:
             await update.message.reply_text(
                 f"Queue full ({MAX_QUEUED_MESSAGES}) — file dropped. Wait for current response to finish."
@@ -922,8 +923,9 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await _notify_delivery_failure(context.bot, chat_id, thread_id, key)
 
         # Drain queued messages
-        while _queued_messages.get(key):
-            batch = _queued_messages.pop(key)
+        while _sessions.get(key) and _sessions[key].queue:
+            batch = _sessions[key].queue
+            _sessions[key].queue = []
             logger.info("Processing %d queued message(s) for %s", len(batch), key)
             if len(batch) == 1:
                 combined = batch[0]

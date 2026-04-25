@@ -20,10 +20,10 @@ import bridge
 def _clean_bridge_state():
     """Reset bridge module-level debounce state between tests."""
     bridge._processing_sessions.clear()
-    bridge._queued_messages.clear()
+    bridge._sessions.clear()
     yield
     bridge._processing_sessions.clear()
-    bridge._queued_messages.clear()
+    bridge._sessions.clear()
 
 
 def _make_update(chat_id=1, thread_id=None, text="hello", user_id=42):
@@ -57,8 +57,8 @@ async def test_message_queued_when_session_processing():
 
     await bridge.handle_message(update, ctx)
 
-    assert key in bridge._queued_messages
-    assert bridge._queued_messages[key] == ["follow-up"]
+    assert key in bridge._sessions and bool(bridge._sessions[key].queue)
+    assert bridge._sessions[key].queue == ["follow-up"]
     update.message.reply_text.assert_called_once()
     reply_text = update.message.reply_text.call_args[0][0]
     assert "Queued (1)" in reply_text
@@ -76,8 +76,8 @@ async def test_multiple_messages_queue_incrementally():
         update = _make_update(text=f"msg-{i}")
         await bridge.handle_message(update, ctx)
 
-    assert len(bridge._queued_messages[key]) == 3
-    assert bridge._queued_messages[key] == ["msg-0", "msg-1", "msg-2"]
+    assert len(bridge._sessions[key].queue) == 3
+    assert bridge._sessions[key].queue == ["msg-0", "msg-1", "msg-2"]
 
 
 @pytest.mark.asyncio
@@ -137,7 +137,7 @@ async def test_queued_messages_drained_after_processing():
             await asyncio.sleep(0.01)
 
         # Queue a follow-up while the first is blocked in the executor.
-        bridge._queued_messages.setdefault(key, []).append("follow-up 1")
+        bridge._get_session_state(key).queue.append("follow-up 1")
 
         # Release the first invocation; drain loop should now pick up the queued message.
         release_first.set()
@@ -172,7 +172,7 @@ async def test_multiple_queued_messages_combined_with_separator():
         task = asyncio.create_task(bridge.handle_message(first_update, ctx))
         await asyncio.sleep(0)
 
-        bridge._queued_messages.setdefault(key, []).extend(["second msg", "third msg"])
+        bridge._get_session_state(key).queue.extend(["second msg", "third msg"])
 
         await task
 
@@ -208,7 +208,7 @@ async def test_single_queued_message_sent_without_follow_up_format():
         task = asyncio.create_task(bridge.handle_message(first_update, ctx))
         await asyncio.sleep(0)
 
-        bridge._queued_messages.setdefault(key, []).append("just one follow-up")
+        bridge._get_session_state(key).queue.append("just one follow-up")
 
         await task
 
@@ -236,7 +236,7 @@ async def test_session_cleared_after_processing_completes():
         await bridge.handle_message(update, ctx)
 
     assert key not in bridge._processing_sessions
-    assert (bridge._sessions.get(key) is None or bridge._sessions[key].started_at is None)
+    assert bridge._sessions.get(key) is None or bridge._sessions[key].started_at is None
 
 
 @pytest.mark.asyncio
@@ -277,7 +277,7 @@ async def test_message_not_queued_when_session_idle():
         update = _make_update(text="normal message")
         await bridge.handle_message(update, ctx)
 
-    assert key not in bridge._queued_messages
+    assert key not in bridge._sessions or not bridge._sessions[key].queue
     ctx.bot.send_message.assert_called()
 
 
@@ -304,5 +304,5 @@ async def test_forum_topic_sessions_queue_independently():
         update_b = _make_update(chat_id=1, thread_id=200, text="to B")
         await bridge.handle_message(update_b, ctx)
 
-    assert key_a in bridge._queued_messages
-    assert key_b not in bridge._queued_messages
+    assert key_a in bridge._sessions and bool(bridge._sessions[key_a].queue)
+    assert key_b not in bridge._sessions or not bridge._sessions[key_b].queue

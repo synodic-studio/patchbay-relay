@@ -13,9 +13,7 @@ import stargate.sessions
 # ── Shared helpers ─────────────────────────────────────────────────────────
 
 
-def _make_update(
-    chat_id=1, thread_id=None, user_id=42, text="", title="TestChat"
-):
+def _make_update(chat_id=1, thread_id=None, user_id=42, text="", title="TestChat"):
     """Build a minimal mock Update for command handlers."""
     update = MagicMock()
     update.effective_user.id = user_id
@@ -116,9 +114,7 @@ class TestCmdProject:
     async def test_project_with_agent(self):
         import stargate.projects
 
-        stargate.projects._save_chat_projects(
-            {"999_1": {"path": "Fanta", "agent": "plotter"}}
-        )
+        stargate.projects._save_chat_projects({"999_1": {"path": "Fanta", "agent": "plotter"}})
         update = _make_update(chat_id=999, thread_id=1)
         ctx = _make_context()
         await bridge.cmd_project(update, ctx)
@@ -277,8 +273,10 @@ class TestCmdPing:
     @pytest.fixture(autouse=True)
     def _isolate(self):
         bridge._processing_sessions.clear()
+        bridge._sessions.clear()
         yield
         bridge._processing_sessions.clear()
+        bridge._sessions.clear()
 
     @pytest.mark.asyncio
     async def test_no_active_sessions(self):

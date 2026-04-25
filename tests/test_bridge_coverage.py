@@ -180,7 +180,7 @@ class TestStallDetectorNotify:
                 pass
 
         proc.kill.assert_not_called()
-        assert (bridge._sessions.get("100") is not None and bridge._sessions["100"].last_event_at is not None)
+        assert bridge._sessions.get("100") is not None and bridge._sessions["100"].last_event_at is not None
 
 
 # ---------------------------------------------------------------------------
@@ -192,8 +192,10 @@ class TestCmdPingUnknownStart:
     @pytest.fixture(autouse=True)
     def _isolate(self):
         bridge._processing_sessions.clear()
+        bridge._sessions.clear()
         yield
         bridge._processing_sessions.clear()
+        bridge._sessions.clear()
 
     @pytest.mark.asyncio
     async def test_unknown_start_time(self):
