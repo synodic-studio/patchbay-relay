@@ -203,6 +203,89 @@ class TestMarkdownV2:
             assert "parse_mode" not in call.kwargs
 
     @pytest.mark.asyncio
+    async def test_conversion_failure_logged_to_activity_with_raw_text(
+        self, monkeypatch
+    ):
+        """When telegramify_markdown raises, the raw text and exception are
+        captured to activity.jsonl so we can reproduce converter regressions."""
+        import bridge
+
+        events: list[dict] = []
+        monkeypatch.setattr(bridge, "_log_activity", lambda evt, **kw: events.append({"event": evt, **kw}))
+
+        def _explode(_text):
+            raise ValueError("malformed markdown")
+
+        monkeypatch.setattr(bridge, "telegramify_markdown", type("M", (), {"markdownify": staticmethod(_explode)}))
+
+        bot = MagicMock()
+        bot.send_message = AsyncMock()
+        await bridge._send_response(bot, 111, None, "boom **inside**")
+
+        # Sent as plain
+        assert "parse_mode" not in bot.send_message.call_args.kwargs
+        # Activity log has the failure recorded
+        failures = [e for e in events if e["event"] == "markdown_conversion_failed"]
+        assert failures, "expected a markdown_conversion_failed event"
+        f = failures[0]
+        assert f["error_type"] == "ValueError"
+        assert "malformed markdown" in f["error"]
+        assert f["raw_text"] == "boom **inside**"
+        assert f["raw_text_len"] == len("boom **inside**")
+
+    @pytest.mark.asyncio
+    async def test_send_failure_logs_raw_and_md_to_activity(self, monkeypatch):
+        """When a MarkdownV2 send is rejected by Telegram, the raw text and
+        the converted MD payload are both captured so we can diagnose."""
+        import bridge
+
+        events: list[dict] = []
+        monkeypatch.setattr(bridge, "_log_activity", lambda evt, **kw: events.append({"event": evt, **kw}))
+        monkeypatch.setattr(bridge, "_to_markdownv2", lambda t: f"MD::{t}")
+
+        bot = MagicMock()
+        # MarkdownV2 send fails on first attempt, plain succeeds on retry.
+        bot.send_message = AsyncMock(side_effect=[Exception("Bad entity"), None])
+
+        await bridge._send_response(bot, 111, None, "raw payload")
+
+        failures = [e for e in events if e["event"] == "markdown_send_failed"]
+        assert failures, "expected a markdown_send_failed event"
+        f = failures[0]
+        assert f["error_type"] == "Exception"
+        assert "Bad entity" in f["error"]
+        assert f["raw_text"] == "raw payload"
+        assert f["md_text"] == "MD::raw payload"
+
+    @pytest.mark.asyncio
+    async def test_failure_log_truncates_huge_text(self, monkeypatch):
+        """Activity log should not blow up on multi-megabyte responses;
+        raw text is capped to a reasonable preview length."""
+        import bridge
+
+        events: list[dict] = []
+        monkeypatch.setattr(bridge, "_log_activity", lambda evt, **kw: events.append({"event": evt, **kw}))
+
+        def _explode(_text):
+            raise ValueError("nope")
+
+        monkeypatch.setattr(bridge, "telegramify_markdown", type("M", (), {"markdownify": staticmethod(_explode)}))
+
+        bot = MagicMock()
+        bot.send_message = AsyncMock()
+        # Use a single chunk that's larger than the failure-log preview cap
+        # but still under TELEGRAM_MSG_LIMIT so the per-chunk len matches.
+        huge_chunk = "x" * (bridge._MARKDOWN_FAILURE_TEXT_LIMIT + 200)
+        await bridge._send_response(bot, 111, None, huge_chunk)
+
+        failures = [e for e in events if e["event"] == "markdown_conversion_failed"]
+        assert failures
+        f = failures[0]
+        assert f["truncated"] is True
+        assert len(f["raw_text"]) <= bridge._MARKDOWN_FAILURE_TEXT_LIMIT
+        assert f["raw_text_len"] == bridge._MARKDOWN_FAILURE_TEXT_LIMIT + 200
+
+    @pytest.mark.asyncio
     async def test_midresponse_md_send_failure_downgrades_remaining_chunks(
         self, monkeypatch
     ):

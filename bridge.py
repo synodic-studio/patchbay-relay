@@ -749,11 +749,33 @@ async def keep_typing(
             continue
 
 
+_MARKDOWN_FAILURE_TEXT_LIMIT = 800
+
+
 def _to_markdownv2(text: str) -> str | None:
-    """Convert markdown to Telegram MarkdownV2. Returns None on failure."""
+    """Convert markdown to Telegram MarkdownV2. Returns None on failure.
+
+    On conversion failure, log the raw text (truncated) and the exception
+    to activity.jsonl as event=markdown_conversion_failed so we can come
+    back later and reproduce the bug in the converter. Without this, a
+    quiet plain-text fallback hides converter regressions.
+    """
     try:
         return telegramify_markdown.markdownify(text)
-    except Exception:
+    except Exception as exc:
+        _log_activity(
+            "markdown_conversion_failed",
+            error_type=type(exc).__name__,
+            error=str(exc)[:300],
+            raw_text=text[:_MARKDOWN_FAILURE_TEXT_LIMIT],
+            raw_text_len=len(text),
+            truncated=len(text) > _MARKDOWN_FAILURE_TEXT_LIMIT,
+        )
+        logger.warning(
+            "MarkdownV2 conversion failed (%s): %s — see activity.jsonl for raw text",
+            type(exc).__name__,
+            str(exc)[:120],
+        )
         return None
 
 
@@ -827,12 +849,26 @@ async def _send_response(bot, chat_id: int, thread_id: int | None, response: str
                 # propagate the downgrade to all remaining chunks of this
                 # response so we don't ship a half-formatted message.
                 if md_chunk is not None:
-                    logger.debug(
-                        "MarkdownV2 send failed mid-response (chunk %d/%d), "
-                        "switching this and all remaining chunks to plain: %s",
+                    # Log raw + md so we can reproduce the converter bug or
+                    # the Telegram-rejected payload later.
+                    _log_activity(
+                        "markdown_send_failed",
+                        error_type=type(e).__name__,
+                        error=str(e)[:300],
+                        chunk_index=chunk_index,
+                        chunk_total=chunk_total,
+                        raw_text=chunk[:_MARKDOWN_FAILURE_TEXT_LIMIT],
+                        md_text=md_chunk[:_MARKDOWN_FAILURE_TEXT_LIMIT],
+                        raw_text_len=len(chunk),
+                        md_text_len=len(md_chunk),
+                    )
+                    logger.warning(
+                        "MarkdownV2 send rejected (%s) chunk %d/%d, "
+                        "switching this and all remaining chunks to plain — "
+                        "see activity.jsonl markdown_send_failed for raw+md",
+                        type(e).__name__,
                         chunk_index + 1,
                         chunk_total,
-                        e,
                     )
                     md_chunk = None
                     use_markdown = False
