@@ -188,14 +188,52 @@ class TestParseEventsEdgeCases:
 class TestExtractTextFromEventsEdgeCases:
     """Edge cases for _extract_text_from_events."""
 
-    def test_multiple_assistant_events_uses_last(self):
-        """When multiple assistant events have text, the last one wins."""
+    def test_multiple_assistant_events_concatenates_in_order(self):
+        """Multiple assistant turns are joined chronologically with blank lines."""
         events = [
-            {"type": "assistant", "message": {"content": [{"type": "text", "text": "first"}]}},
-            {"type": "assistant", "message": {"content": [{"type": "text", "text": "second"}]}},
+            {
+                "type": "assistant",
+                "message": {"content": [{"type": "text", "text": "first turn long enough"}]},
+            },
+            {
+                "type": "assistant",
+                "message": {"content": [{"type": "text", "text": "second turn long enough"}]},
+            },
             {"type": "result", "result": "fallback", "session_id": "s1"},
         ]
-        assert _extract_text_from_events(events) == "second"
+        assert _extract_text_from_events(events) == "first turn long enough\n\nsecond turn long enough"
+
+    def test_multi_turn_caps_at_three_turns(self):
+        """Only the last 3 substantive assistant turns are kept."""
+        events = [
+            {
+                "type": "assistant",
+                "message": {"content": [{"type": "text", "text": f"turn {i} with enough characters to count"}]},
+            }
+            for i in range(5)
+        ]
+        result = _extract_text_from_events(events)
+        # Should contain the last 3 (turns 2, 3, 4) and exclude 0, 1
+        assert "turn 0" not in result
+        assert "turn 1" not in result
+        assert "turn 2" in result
+        assert "turn 3" in result
+        assert "turn 4" in result
+
+    def test_multi_turn_skips_short_earlier_turns(self):
+        """Short non-final turns are skipped; final turn is always kept even if short."""
+        events = [
+            {
+                "type": "assistant",
+                "message": {"content": [{"type": "text", "text": "first turn substantive content"}]},
+            },
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "ok"}]}},  # short
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "done."}]}},  # final
+        ]
+        result = _extract_text_from_events(events)
+        assert "first turn substantive content" in result
+        assert "ok" not in result  # short non-final turn dropped
+        assert "done." in result  # final turn kept even though short
 
     def test_assistant_with_empty_content_array(self):
         """Assistant event with content: [] has no text — falls through."""

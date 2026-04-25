@@ -56,20 +56,38 @@ def _parse_events(stdout: str) -> list[dict]:
     return events
 
 
+_MAX_ASSISTANT_TURNS = 3
+_MIN_TURN_CHARS = 20
+
+
 def _extract_text_from_events(events: list[dict]) -> str | None:
     """Extract text from Claude output events.
 
-    Walks backwards through events to find the last assistant message
-    with text content. Falls back to the result event's inline text.
+    Collects the last few assistant turns' text content (up to
+    `_MAX_ASSISTANT_TURNS`, skipping turns shorter than `_MIN_TURN_CHARS`)
+    and joins them in chronological order. This catches multi-turn runs
+    where the final turn is a brief sign-off but real work text lives in
+    earlier turns. Falls back to the result event's inline text.
     """
+    turns: list[str] = []
     for e in reversed(events):
         if e.get("type") != "assistant":
             continue
         msg = e.get("message", {})
         content = msg.get("content", []) if isinstance(msg, dict) else []
         texts = [c["text"] for c in content if isinstance(c, dict) and c.get("type") == "text"]
-        if texts:
-            return "\n".join(texts)
+        if not texts:
+            continue
+        joined = "\n".join(texts).strip()
+        # Always include the most recent turn, even if short — it's likely
+        # the actual sign-off/answer. For earlier turns, skip very short ones.
+        if not turns or len(joined) >= _MIN_TURN_CHARS:
+            turns.append(joined)
+        if len(turns) >= _MAX_ASSISTANT_TURNS:
+            break
+
+    if turns:
+        return "\n\n".join(reversed(turns))
 
     result_event = next((e for e in reversed(events) if e.get("type") == "result"), None)
     if result_event:
