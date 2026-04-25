@@ -19,11 +19,13 @@ from .base import (
     TurnFinal,
     TurnRequest,
 )
+from .aider import AiderHarness
 from .claude_cli import ClaudeCliHarness
 from .claude_sdk import ClaudeSdkHarness
 from .pi import PiHarness
 
 __all__ = [
+    "AiderHarness",
     "ClaudeCliHarness",
     "ClaudeSdkHarness",
     "PiHarness",

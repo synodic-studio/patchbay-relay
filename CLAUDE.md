@@ -18,7 +18,7 @@ The bridge is modularized into a `stargate/` package with focused modules. `brid
 | `stargate/activity.py` | Structured JSON-lines activity logging |
 | `stargate/projects.py` | Chat-to-project directory mapping |
 | `stargate/self_heal.py` | Repair-agent dispatcher — corrupt-session quarantine, stale-poller signal, claude OOM retry. See CTB-die. |
-| `stargate/harness/` | Pluggable agent backends — `base.py` = protocol + TurnEvent types, `claude_cli.py` = CLI subprocess backend, `claude_sdk.py` = Claude Agent SDK backend, `pi.py` = badlogicgames/pi multi-model coding agent. See `docs/HARNESS-DESIGN.md`. CTB-cyz. |
+| `stargate/harness/` | Pluggable agent backends — `base.py` = protocol + TurnEvent types, `claude_cli.py` = CLI subprocess backend, `claude_sdk.py` = Claude Agent SDK backend, `pi.py` = badlogicgames/pi multi-model coding agent, `aider.py` = aider-chat with chat-history-file resume (default `openrouter/deepseek/deepseek-chat`, override via `STARGATE_AIDER_MODEL`). See `docs/HARNESS-DESIGN.md`. CTB-cyz. |
 | `validate.py` | Pre-flight validation (syntax, imports, smoke tests for all modules) |
 
 ### Supporting files
@@ -73,7 +73,7 @@ All commands are registered in `bridge.py` via `CommandHandler`. Commands silent
 | `/health` | Observability snapshot: bridge uptime, active session count, session files on disk, pending messages, failed-pending (archived) count, free disk on the data dir. |
 | `/activity [event] [count]` | Show recent `activity.jsonl` entries from the user's phone. Optional substring filter (e.g. `/activity self_heal`, `/activity markdown_send_failed 15`). Default 8 entries, max 25. |
 | `/usage` | Show Claude Code quota via `ccusage` as two periods (active 5h block, current Mon→Mon week). Each period shows a token bar (used / cap) and a time bar (period elapsed). The 5h block cap comes from `ccusage --token-limit max`; the weekly cap is an estimate (env var `USAGE_WEEKLY_TOKEN_CAP`, default 3B, marked `(est)` in output) because Anthropic does not publish a weekly token cap for Max plans. |
-| `/harness [name]` | Show or set the agent backend harness for this topic. Valid: `cc-cli` (today's default — wraps `claude -p` subprocess), `cc-sdk` (Claude Agent SDK), `pi` (badlogicgames/pi multi-model coding agent), `default` (clear override and use `STARGATE_DEFAULT_HARNESS` env). Per-chat override stored in `chat_projects.json` under the `harness` key. Every `activity.jsonl` entry that touches a turn carries `harness=<effective>` and `harness_requested=<requested>` for live-soak comparison. |
+| `/harness [name]` | Show or set the agent backend harness for this topic. Valid: `cc-cli` (today's default — wraps `claude -p` subprocess), `cc-sdk` (Claude Agent SDK), `pi` (badlogicgames/pi multi-model coding agent), `aider` (aider-chat, default model `openrouter/deepseek/deepseek-chat`), `default` (clear override and use `STARGATE_DEFAULT_HARNESS` env). Per-chat override stored in `chat_projects.json` under the `harness` key. Every `activity.jsonl` entry that touches a turn carries `harness=<effective>` and `harness_requested=<requested>` for live-soak comparison. |
 | `/soak [since] [session]` | Compare harness backends from `activity.jsonl`. Buckets per-turn events by `harness=` and prints invokes / outcomes / p50/p95 duration / OOM / quota / stall counts side-by-side. `since` accepts `30m`, `24h`, `7d`. `session` filters to one `session_key`. Wraps `scripts/harness_soak.py` which is also runnable standalone (`uv run scripts/harness_soak.py --since 7d --json`). |
 
 ### Session model

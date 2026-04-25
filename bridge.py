@@ -588,6 +588,18 @@ def run_claude(
             on_progress=_on_progress,
             proc_setter=_proc_setter,
         )
+    elif effective_harness == "aider":
+        # Aider — model-agnostic coding CLI. session_id is a chat-history
+        # file path (we own ./aider-history/<session-key>.md). Default
+        # model openrouter/deepseek/deepseek-chat (override via
+        # STARGATE_AIDER_MODEL env or per-chat /model).
+        from stargate.harness import AiderHarness
+
+        harness = AiderHarness(
+            max_timeout_seconds=MAX_TIMEOUT,
+            on_progress=_on_progress,
+            proc_setter=_proc_setter,
+        )
     else:
         harness = ClaudeCliHarness(
             claude_path=CLAUDE_PATH,

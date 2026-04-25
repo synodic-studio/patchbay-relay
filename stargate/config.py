@@ -158,6 +158,8 @@ SESSION_DIR = BASE_DIR / "sessions"
 SESSION_DIR.mkdir(exist_ok=True)
 PENDING_DIR = BASE_DIR / "pending"
 PENDING_DIR.mkdir(exist_ok=True)
+AIDER_HISTORY_DIR = BASE_DIR / "aider-history"
+AIDER_HISTORY_DIR.mkdir(exist_ok=True)
 RESTART_NOTIFY_FILE = BASE_DIR / "restart_notify.json"
 CHAT_PROJECTS_FILE = BASE_DIR / "chat_projects.json"
 FORGE_QUEUE_DIR = Path(PA_PLUGIN_DIR) / "agents" / "dev" / "forge" / "queue"
@@ -178,7 +180,7 @@ MAX_WORKERS = _env_int("MAX_WORKERS", "4", min_value=1)
 # Agent SDK, pi wraps badlogicgames/pi (multi-model). Per-chat override lives
 # in chat_projects.json under the "harness" key; this value is the fallback
 # when a topic has no override.
-VALID_HARNESSES = ("cc-cli", "cc-sdk", "pi")
+VALID_HARNESSES = ("cc-cli", "cc-sdk", "pi", "aider")
 DEFAULT_HARNESS = os.environ.get("STARGATE_DEFAULT_HARNESS", "cc-cli")
 if DEFAULT_HARNESS not in VALID_HARNESSES:
     raise SystemExit(
