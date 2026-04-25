@@ -20,9 +20,11 @@ from .base import (
     TurnRequest,
 )
 from .claude_cli import ClaudeCliHarness
+from .claude_sdk import ClaudeSdkHarness
 
 __all__ = [
     "ClaudeCliHarness",
+    "ClaudeSdkHarness",
     "Harness",
     "HarnessCapabilities",
     "TextDelta",

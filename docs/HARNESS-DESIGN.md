@@ -1,10 +1,18 @@
 # Harness Design — Stargate Phase 0
 
-Status: **draft for review**. No code changes yet. This doc defines the seam
-that lets stargate run multiple coding-agent backends (Claude Code CLI,
-Claude Agent SDK, codex/pi, cursor, …) behind a single interface.
+Status: **phases 0 / 1a / 2 landed**. Phase 1b (rewire bridge.run_claude
+through the harness) and phase 3 (live soak) are next. This doc defines
+the seam that lets stargate run multiple coding-agent backends (Claude
+Code CLI, Claude Agent SDK, codex/pi, cursor, …) behind a single
+interface.
 
-The migration plan that motivates this doc is summarized at the bottom.
+Phase 2 finding: the `Harness` protocol held without changes when the SDK
+backend was implemented as a peer to the CLI backend. The `TurnEvent`
+union covered every SDK message shape (AssistantMessage, UserMessage,
+ResultMessage, SystemMessage). The SDK's typed `AssistantMessage.error`
+literal made rate-limit detection cleaner than the CLI path's string
+matching. `--plugin-dir` rides through `ClaudeAgentOptions.extra_args`
+as expected. The migration plan below stands.
 
 ---
 
@@ -263,14 +271,15 @@ Today's `dispatch_repair` keys map cleanly onto `TurnError.kind`:
 
 ## Migration phases
 
-| Phase | Output | Reversible? |
-|---|---|---|
-| 0 (this doc) | Design + answers, no code | n/a |
-| 1 | Refactor: extract `Harness`, wrap CLI in `ClaudeCliHarness`. Same behavior, all 422 tests pass. | Yes — revert one PR |
-| 2 | Add `ClaudeSdkHarness`, opt-in via `/harness cc-sdk` per topic | Yes — leave default on cc-cli |
-| 3 | Soak SDK harness in one test topic. Compare behavior. | Yes — `/harness cc-cli` to revert that topic |
-| 4 | Flip default to `cc-sdk`. Keep `cc-cli` as fallback. | Hard — but cc-cli still in tree |
-| 5 | Add codex/pi, cursor, … as additional harnesses | Per-harness |
+| Phase | Status | Output | Reversible? |
+|---|---|---|---|
+| 0 | ✅ landed | Design doc + answers, no code | n/a |
+| 1a | ✅ landed | `Harness` protocol + `ClaudeCliHarness` (dormant; bridge unchanged) | Yes — revert one commit |
+| 1b | next | Rewire `bridge.run_claude` to consume the harness stream; remove duplicate logic | Yes — revert one commit |
+| 2 | ✅ landed | `ClaudeSdkHarness` as peer harness (still dormant; bridge unchanged) | Yes — leave default on cc-cli |
+| 3 | future | Soak SDK harness in one test topic via `/harness cc-sdk`. Compare behavior. | Yes — `/harness cc-cli` to revert that topic |
+| 4 | future | Flip default to `cc-sdk`. Keep `cc-cli` as fallback. | Hard — but cc-cli still in tree |
+| 5 | future | Add codex/pi, cursor, … as additional harnesses | Per-harness |
 
 ## Decision points for review
 
