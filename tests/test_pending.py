@@ -73,9 +73,7 @@ class TestReplayPending:
 
     @pytest.mark.asyncio
     async def test_skips_missing_required_keys(self):
-        (PENDING_DIR / "incomplete.json").write_text(
-            json.dumps({"chat_id": 1, "text": "hi"})
-        )
+        (PENDING_DIR / "incomplete.json").write_text(json.dumps({"chat_id": 1, "text": "hi"}))
         bot = AsyncMock()
         await bridge.replay_pending(bot)
         assert not (PENDING_DIR / "incomplete.json").exists()
@@ -105,9 +103,7 @@ class TestReplayPending:
         assert not (PENDING_DIR / f"{pid}.json").exists()
         bot.send_message.assert_called_once()
         call_kwargs = bot.send_message.call_args
-        text_sent = call_kwargs.kwargs.get(
-            "text", call_kwargs.args[0] if call_kwargs.args else ""
-        )
+        text_sent = call_kwargs.kwargs.get("text", call_kwargs.args[0] if call_kwargs.args else "")
         assert "Recovered after bridge restart" in text_sent
 
     @pytest.mark.asyncio
@@ -117,19 +113,22 @@ class TestReplayPending:
         bot.send_message.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_file_deleted_before_processing(self):
-        """Pending file is removed before run_claude to prevent crash loops."""
-        pid = bridge.save_pending(1, None, "msg", "1:None")
+    async def test_file_present_with_bumped_attempts_during_processing(self):
+        """File stays during run_claude (so crashes don't lose it), but with
+        attempts incremented to 1. After successful send, file is deleted."""
+        pid = bridge.save_pending(1, None, "msg", "1_None")
         path = PENDING_DIR / f"{pid}.json"
 
-        file_existed_during_claude = []
+        observed = []
 
         def fake_run_claude(text, key):
-            file_existed_during_claude.append(path.exists())
+            data = json.loads(path.read_text())
+            observed.append((path.exists(), data.get("attempts")))
             return "ok"
 
         bot = AsyncMock()
         with patch.object(bridge, "run_claude", side_effect=fake_run_claude):
             await bridge.replay_pending(bot)
 
-        assert file_existed_during_claude == [False]
+        assert observed == [(True, 1)]
+        assert not path.exists()  # deleted on successful delivery

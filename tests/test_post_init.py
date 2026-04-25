@@ -195,7 +195,10 @@ class TestReplayPendingLive:
         assert not (self._pending / "abc123.json").exists()
 
     @pytest.mark.asyncio
-    async def test_replay_claude_error_caught(self):
+    async def test_replay_claude_error_does_not_notify_on_first_attempt(self):
+        """run_claude error: leave the bumped pending file, do not send.
+        The next bridge restart will retry; only after PENDING_MAX_ATTEMPTS
+        do we archive and notify."""
         import time
 
         pending_data = {
@@ -204,8 +207,10 @@ class TestReplayPendingLive:
             "text": "test",
             "session_key": "100",
             "timestamp": time.time(),
+            "attempts": 0,
         }
-        (self._pending / "def456.json").write_text(json.dumps(pending_data))
+        path = self._pending / "def456.json"
+        path.write_text(json.dumps(pending_data))
 
         bot = MagicMock()
         bot.send_message = AsyncMock()
@@ -214,9 +219,41 @@ class TestReplayPendingLive:
         with patch.object(bridge, "run_claude", side_effect=RuntimeError("crash")):
             await bridge.replay_pending(bot)
 
-        bot.send_message.assert_called()
-        sent_text = bot.send_message.call_args.kwargs.get("text", bot.send_message.call_args[1].get("text", ""))
-        assert "Error" in sent_text
+        bot.send_message.assert_not_called()
+        # File survived with bumped attempt counter so the next bridge run retries.
+        assert path.exists()
+        assert json.loads(path.read_text())["attempts"] == 1
+
+    @pytest.mark.asyncio
+    async def test_replay_gives_up_after_max_attempts(self):
+        """After PENDING_MAX_ATTEMPTS failed retries, archive and notify."""
+        import time
+
+        pending_data = {
+            "chat_id": 100,
+            "thread_id": 5,
+            "text": "stubborn message",
+            "session_key": "100_5",
+            "timestamp": time.time(),
+            "attempts": bridge.PENDING_MAX_ATTEMPTS,  # already at the cap
+        }
+        path = self._pending / "ghi789.json"
+        path.write_text(json.dumps(pending_data))
+
+        bot = MagicMock()
+        bot.send_message = AsyncMock()
+        bot.send_chat_action = AsyncMock()
+
+        with patch.object(bridge, "run_claude", side_effect=RuntimeError("crash")):
+            await bridge.replay_pending(bot)
+
+        # Original file moved to failed/, gave-up message sent
+        assert not path.exists()
+        assert (self._pending / "failed" / "ghi789.json").exists()
+        bot.send_message.assert_called_once()
+        sent_text = bot.send_message.call_args.kwargs.get("text", "")
+        assert "giving up" in sent_text
+        assert "stubborn message" in sent_text
 
     @pytest.mark.asyncio
     async def test_replay_no_thread_id(self):

@@ -83,7 +83,11 @@ def clear_session(session_key: str) -> None:
 
 
 def save_pending(chat_id: int, thread_id: int | None, text: str, session_key: str) -> str:
-    """Save a message as pending before processing. Returns pending ID. Atomic."""
+    """Save a message as pending before processing. Returns pending ID. Atomic.
+
+    The `attempts` counter starts at 0; replay_pending in bridge.py increments
+    it before each retry and archives to PENDING_DIR/failed/ after 3 attempts.
+    """
     pending_id = uuid.uuid4().hex[:12]
     atomic_write_text(
         PENDING_DIR / f"{pending_id}.json",
@@ -94,6 +98,7 @@ def save_pending(chat_id: int, thread_id: int | None, text: str, session_key: st
                 "text": text,
                 "session_key": session_key,
                 "timestamp": time.time(),
+                "attempts": 0,
             }
         ),
     )
@@ -103,6 +108,37 @@ def save_pending(chat_id: int, thread_id: int | None, text: str, session_key: st
 def clear_pending(pending_id: str) -> None:
     """Remove a pending message file."""
     (PENDING_DIR / f"{pending_id}.json").unlink(missing_ok=True)
+
+
+PENDING_MAX_ATTEMPTS = 3
+
+
+def bump_pending_attempts(pending_file) -> int:
+    """Increment the `attempts` counter in a pending file. Returns the new value.
+
+    Atomic — writes via atomic_write_text. If the file is malformed, returns 0
+    (caller should treat as "first attempt"); the on-disk file is left alone."""
+    try:
+        data = json.loads(pending_file.read_text())
+    except (json.JSONDecodeError, OSError):
+        return 0
+    attempts = int(data.get("attempts", 0)) + 1
+    data["attempts"] = attempts
+    atomic_write_text(pending_file, json.dumps(data))
+    return attempts
+
+
+def archive_failed_pending(pending_file) -> None:
+    """Move a pending file we've given up on into PENDING_DIR/failed/."""
+    failed_dir = PENDING_DIR / "failed"
+    failed_dir.mkdir(exist_ok=True)
+    target = failed_dir / pending_file.name
+    try:
+        pending_file.rename(target)
+    except OSError as exc:
+        logger.warning("Could not archive failed pending %s: %s", pending_file.name, exc)
+        # Best-effort fallback: at least delete it so we don't loop forever.
+        pending_file.unlink(missing_ok=True)
 
 
 def mark_stall_kill(session_key: str, idle_minutes: float) -> None:

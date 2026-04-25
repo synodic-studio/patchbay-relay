@@ -91,8 +91,11 @@ from stargate.config import (  # noqa: E402
     logger,
 )
 from stargate.sessions import (  # noqa: E402
+    PENDING_MAX_ATTEMPTS,
     _sanitize_session_key,  # noqa: F401 — used by tests via bridge._sanitize_session_key
     _session_key,
+    archive_failed_pending,
+    bump_pending_attempts,
     clear_pending,
     clear_session,
     consume_stall_kill,
@@ -664,10 +667,39 @@ async def replay_pending(bot) -> None:
         session_key = data["session_key"]
         text = data["text"]
 
-        logger.info("Replaying message for %s: %s", session_key, text[:80])
+        # Bump attempt count BEFORE processing. After PENDING_MAX_ATTEMPTS
+        # failed retries, archive the file and tell the user we gave up
+        # rather than risking another crash loop.
+        attempts = bump_pending_attempts(f)
+        if attempts > PENDING_MAX_ATTEMPTS:
+            logger.warning(
+                "Giving up on pending %s after %d attempts; archiving",
+                f.stem,
+                attempts - 1,
+            )
+            archive_failed_pending(f)
+            send_kwargs = {"chat_id": chat_id}
+            if thread_id is not None:
+                send_kwargs["message_thread_id"] = thread_id
+            try:
+                await bot.send_message(
+                    text=(
+                        f"[Tried {PENDING_MAX_ATTEMPTS}× to replay your message after bridge restart; "
+                        f"giving up. Original: {text[:200]}]"
+                    ),
+                    **send_kwargs,
+                )
+            except Exception as exc:
+                logger.error("Failed to notify give-up for %s: %s", f.stem, exc)
+            continue
 
-        # Delete pending file BEFORE processing to prevent crash loops.
-        f.unlink()
+        logger.info(
+            "Replaying message for %s (attempt %d/%d): %s",
+            session_key,
+            attempts,
+            PENDING_MAX_ATTEMPTS,
+            text[:80],
+        )
 
         stop_typing = asyncio.Event()
         typing_task = asyncio.create_task(keep_typing(chat_id, thread_id, stop_typing, bot))
@@ -676,13 +708,13 @@ async def replay_pending(bot) -> None:
         try:
             response = await loop.run_in_executor(_executor, run_claude, text, session_key)
         except Exception as e:
-            logger.error("Error replaying %s: %s", f.stem, e)
-            response = (
-                f"Error replaying your message after bridge restart.\n"
-                f"Original message: {text[:200]}\n"
-                f"Error: {type(e).__name__}: {e}"
-            )
-        finally:
+            # Leave the pending file in place — the bumped attempt count
+            # persists, so the next bridge start will retry until the cap.
+            logger.error("Error replaying %s (attempt %d): %s", f.stem, attempts, e)
+            stop_typing.set()
+            await typing_task
+            continue
+        else:
             stop_typing.set()
             await typing_task
 
@@ -692,9 +724,17 @@ async def replay_pending(bot) -> None:
         if thread_id is not None:
             send_kwargs["message_thread_id"] = thread_id
 
-        for i in range(0, len(full_response), TELEGRAM_MSG_LIMIT):
-            await bot.send_message(text=full_response[i : i + TELEGRAM_MSG_LIMIT], **send_kwargs)
+        try:
+            for i in range(0, len(full_response), TELEGRAM_MSG_LIMIT):
+                await bot.send_message(text=full_response[i : i + TELEGRAM_MSG_LIMIT], **send_kwargs)
+        except Exception as exc:
+            # Delivery failed — leave the file with its bumped attempt count
+            # so the next bridge start can retry until we hit the cap.
+            logger.error("Failed to deliver replayed response for %s: %s", f.stem, exc)
+            continue
 
+        # Success: drop the pending record.
+        f.unlink(missing_ok=True)
         logger.info("Replayed pending message %s", f.stem)
 
 
