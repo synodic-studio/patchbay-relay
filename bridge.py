@@ -424,7 +424,13 @@ def run_claude(message: str, session_key: str, _retry: bool = False, model: str 
         proc.kill()
         proc.communicate()  # drain pipes
         duration = time.time() - invoke_start
-        _log_activity("claude_timeout", session_key=session_key, pid=proc.pid, duration=duration)
+        _log_activity(
+            "claude_timeout",
+            session_key=session_key,
+            pid=proc.pid,
+            duration=duration,
+            elapsed_ms=int(duration * 1000),
+        )
         return f"[Timed out after {MAX_TIMEOUT // 60} min] Session preserved — send your message again to resume."
     finally:
         state = _sessions.get(session_key)
@@ -454,16 +460,22 @@ def run_claude(message: str, session_key: str, _retry: bool = False, model: str 
             "claude_error",
             session_key=session_key,
             duration=duration,
+            elapsed_ms=int(duration * 1000),
             error=stderr[:200] if stderr else "no output",
         )
         if stderr:
             return f"(no output. stderr: {stderr[:500]})"
         return "(no output)"
 
+    events = _parse_events(stdout)
+    result_event = next((e for e in reversed(events) if e.get("type") == "result"), None)
+    turns_used = result_event.get("num_turns") if result_event else None
     _log_activity(
         "claude_complete",
         session_key=session_key,
         duration=duration,
+        elapsed_ms=int(duration * 1000),
+        turns_used=turns_used,
         exit_code=proc.returncode,
         response_len=len(stdout),
     )
@@ -476,7 +488,6 @@ def run_claude(message: str, session_key: str, _retry: bool = False, model: str 
         )
 
     # Check for quota error in completed response
-    events = _parse_events(stdout)
     if _is_quota_error(events, stderr):
         logger.warning("Quota/rate limit detected for %s", session_key)
         _log_activity(
