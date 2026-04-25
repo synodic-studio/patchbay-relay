@@ -60,6 +60,15 @@ what's landed and what's still open. Full audit detail follows unchanged.
 - **System-prompt tightening** for "always close with text". (`e3d1976`)
 - **Outbound audit log** (CTB-80f): every Claude→Telegram chunk recorded
   with parse mode and status. (`bbbb5d3`)
+- **certifi 2026.1.4 → 2026.4.22** (CTB-psz). Routine CA-bundle hygiene.
+  (`8d6cee4`)
+- **Phase 3 test layers** (CTB-dnc, audit §3a-e): property tests for
+  the four file-backed dicts (`81cbd84`), chaos test for `run_claude`
+  with a real fake binary covering 7 failure modes plus orphan-process
+  check (`79e4623`), drain/debounce integration test that fires a real
+  second handler via threading.Event barriers (`aa247e7`). The two
+  legacy `asyncio.sleep(0)` flakes from audit §18 are retrofitted to
+  the same barrier pattern. 21 new tests, 403 total.
 
 ### Still open (audit items not yet addressed)
 
@@ -73,7 +82,7 @@ what's landed and what's still open. Full audit detail follows unchanged.
 | §15 | auth_server reflected XSS via raw `error` | **Moot 2026-04-24** — auth_server.py and the entire auth layer deleted from the repo. See `docs/apple-auth-implementation.md`. |
 | §16 | IPv6 prefix rotation locking mobile sessions | Open. |
 | §17 | `cmd_remote_control` stdout-only deadlock | Open. |
-| §18 | pytest-asyncio mode + drain test flake | Drain test no longer fails on develop, but the underlying flake potential (no declared mode) remains. |
+| §18 | pytest-asyncio mode + drain test flake | **Resolved 2026-04-24** — the two `asyncio.sleep(0)` sites in `test_debounce.py` now synchronize via `threading.Event` barriers (CTB-dnc, `aa247e7`). Declaring an explicit pytest-asyncio mode is still hygiene but no longer urgent. |
 | §19–21 | run.sh rollback freshness, py-version matrix, coverage claim | Hygiene. |
 | §4a | Agent SDK migration | Bryan: "interested later." Channels MCP unblocks once this is done. |
 | §4b | Thin `bridge.py` | Open — `bridge.py` is still the orchestrator. |
@@ -81,15 +90,17 @@ what's landed and what's still open. Full audit detail follows unchanged.
 
 ### Recommended next (ranked)
 
-1. **Emit `turns_used` and `elapsed_ms` to `activity.jsonl` per `claude_invoke`.**
-   One-line addition; gives us data before we touch `max_turns`.
-2. **Sanitize `auth_server` error HTML** (audit §15 / §1g). One-line fix,
-   small XSS-shaped risk.
-3. **Phase 3 chaos test + property tests** (CTB-dnc). Hardens the work
-   we just did before adding more.
-4. **certifi bump** (CTB-psz). Routine security hygiene.
-5. **Pluggable backends per-topic** (CTB-cyz). New territory; not urgent.
-6. **Repair-agent dispatch pattern** (CTB-die). Self-healing infrastructure.
+1. ~~**Emit `turns_used` and `elapsed_ms` to `activity.jsonl`.**~~ Landed
+   2026-04-24 (`7acc661`). Wait ~2 weeks for data, then revisit `max_turns`
+   (CTB-sp6).
+2. ~~**Sanitize `auth_server` error HTML.**~~ Moot — auth layer deleted.
+3. ~~**Phase 3 chaos test + property tests** (CTB-dnc).~~ Landed 2026-04-24
+   (`81cbd84` / `79e4623` / `aa247e7`).
+4. ~~**certifi bump** (CTB-psz).~~ Landed 2026-04-24 (`8d6cee4`).
+5. **Repair-agent dispatch pattern** (CTB-die). Self-healing infrastructure.
+   The `self_heal.py` module — start with three failure classes and grow.
+6. **Pluggable backends per-topic** (CTB-cyz). New territory; depends on
+   the claude-pi-shim spike succeeding end-to-end first.
 7. **Event-cadence stall detector** (audit §1a full). Bigger; needs design.
 8. **Agent SDK migration** (audit §4a). Unblocks Channels MCP.
 
