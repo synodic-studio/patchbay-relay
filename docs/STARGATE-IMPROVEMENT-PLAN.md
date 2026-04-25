@@ -79,15 +79,28 @@ what's landed and what's still open. Full audit detail follows unchanged.
   `--max-turns 50` and a trimmed prompt; `sessions.get_session_id`
   routes corrupt JSON through dispatch so the outcome lands in
   `activity.jsonl` as a `self_heal` event. 19 new tests, 422 total.
+- **Markdown mode decided once per response** (audit §13): `_send_response`
+  now converts every chunk upfront — if any chunk fails to convert, the
+  entire response goes plain. If a `MarkdownV2` send fails mid-response,
+  remaining chunks downgrade to plain so we never ship a half-formatted
+  message. Two new tests pin both invariants.
+- **Event-cadence stall detector** (audit §1a full): replaced the CPU
+  poller with a streaming reader thread in `_read_proc_streaming`. Each
+  line of claude's JSON-mode stdout updates `state.last_event_at`; the
+  stall detector compares against that timestamp. CPU polling and
+  `_get_proc_cpu` are gone. Default `STALL_TIMEOUT` drops from 2400s
+  (40 min) to 600s (10 min) — env-overridable. Catches genuine hangs
+  *and* TCC-dialog blocks (both produce no events) sooner without
+  reaping legitimate long runs (which stream events continuously).
 
 ### Still open (audit items not yet addressed)
 
 | Audit ref | Item | Notes |
 |---|---|---|
-| §1a (full) | Event-cadence stall detector | Replace CPU polling with stdout-event cadence. The 40-min slack is interim. |
+| §1a (full) | Event-cadence stall detector | **Resolved 2026-04-25** — `_read_proc_streaming` reader thread refreshes `state.last_event_at` on every stdout line; stall detector watches that. CPU polling removed. Default threshold dropped to 10 min. |
 | §11 / §5 | Channels MCP plan can't run on `claude -p` | Blocked on Agent SDK migration (§4a). |
 | §12 | `max_turns=500` runaway risk | Decision 2026-04-24: don't lower until we have data. Add `turns_used` / `elapsed_ms` to `activity.jsonl` first; revisit once real distribution is known. |
-| §13 | `_to_markdownv2` partial-render leaks | Open. |
+| §13 | `_to_markdownv2` partial-render leaks | **Resolved 2026-04-25** — markdown vs plain decided once per response; mid-response downgrade propagates to remaining chunks. |
 | §14 | Three handler duplication | Open. The CTB-ucw helpers (`_claim_or_queue`, `_drain_next`, `_release_processing`) are a partial down-payment but the wider `_process_with_claude` extraction is still ahead. |
 | §15 | auth_server reflected XSS via raw `error` | **Moot 2026-04-24** — auth_server.py and the entire auth layer deleted from the repo. See `docs/apple-auth-implementation.md`. |
 | §16 | IPv6 prefix rotation locking mobile sessions | Open. |

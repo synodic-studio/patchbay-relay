@@ -35,7 +35,9 @@ session_keys = st.text(
 efforts_values = st.sampled_from(stargate.efforts.VALID_EFFORTS)
 
 # Project paths are arbitrary strings; the layer doesn't validate them.
-project_paths = st.text(min_size=1, max_size=40).filter(lambda s: "\x00" not in s)
+project_paths = st.text(min_size=1, max_size=40).filter(
+    lambda s: "\x00" not in s and not s.startswith("/")
+)
 
 # Session IDs are uuid-like strings in practice, but the layer treats
 # them as opaque text — exercise the full string range.

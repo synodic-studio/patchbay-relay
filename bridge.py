@@ -83,7 +83,6 @@ from stargate.config import (  # noqa: E402
     SESSION_EXPIRY,
     SESSION_KEY_RE,
     SHUTDOWN_PROCESS_TIMEOUT,
-    STALL_CPU_THRESHOLD,
     STALL_POLL_INTERVAL,
     STALL_TIMEOUT,
     TELEGRAM_MSG_LIMIT,
@@ -261,6 +260,62 @@ _BRIDGE_STARTED_AT = time.time()
 # ---------------------------------------------------------------------------
 
 
+def _read_proc_streaming(
+    proc: subprocess.Popen,
+    state: "SessionState",
+    timeout: float,
+) -> tuple[str, str]:
+    """Drain proc.stdout/stderr via reader threads and return their full text.
+
+    Replaces `proc.communicate(timeout=timeout)` so we can update
+    `state.last_event_at` on every line of stdout — that timestamp is the
+    signal the stall detector watches for. With JSON output mode, claude -p
+    streams an event per tool call / assistant chunk / result, so a real
+    hang shows up as no-events-for-N-minutes regardless of CPU usage.
+
+    Raises subprocess.TimeoutExpired if the process doesn't exit before
+    `timeout` elapses; the caller is responsible for killing the proc and
+    cleaning up. Reader threads are daemons and will be torn down when the
+    main process exits even if a kill races.
+    """
+    import threading
+
+    stdout_buf: list[str] = []
+    stderr_buf: list[str] = []
+
+    def _drain(stream, buf, mark_event: bool) -> None:
+        try:
+            for line in iter(stream.readline, ""):
+                buf.append(line)
+                if mark_event:
+                    state.last_event_at = time.time()
+        except (OSError, ValueError):
+            # Stream closed under us during a kill; nothing to drain.
+            pass
+        finally:
+            try:
+                stream.close()
+            except OSError:
+                pass
+
+    t_out = threading.Thread(target=_drain, args=(proc.stdout, stdout_buf, True), daemon=True)
+    t_err = threading.Thread(target=_drain, args=(proc.stderr, stderr_buf, False), daemon=True)
+    t_out.start()
+    t_err.start()
+
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        # Caller will kill; let the threads finish via the wait below in
+        # the caller's exception path. Re-raise so caller can decide.
+        raise
+
+    # Flush the readers — they should exit on their own once the pipes close.
+    t_out.join(timeout=2)
+    t_err.join(timeout=2)
+    return "".join(stdout_buf), "".join(stderr_buf)
+
+
 def run_claude(
     message: str,
     session_key: str,
@@ -432,10 +487,13 @@ def run_claude(
     state.last_event_at = time.time()
 
     try:
-        stdout, stderr = proc.communicate(timeout=MAX_TIMEOUT)
+        stdout, stderr = _read_proc_streaming(proc, state, MAX_TIMEOUT)
     except subprocess.TimeoutExpired:
         proc.kill()
-        proc.communicate()  # drain pipes
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            pass
         duration = time.time() - invoke_start
         _log_activity(
             "claude_timeout",
@@ -702,9 +760,13 @@ def _to_markdownv2(text: str) -> str | None:
 async def _send_response(bot, chat_id: int, thread_id: int | None, response: str) -> None:
     """Send a response, splitting at Telegram's message limit.
 
-    Each chunk is sent with MarkdownV2 formatting when possible, falling
-    back to plain text if conversion or rendering fails. Retries each
-    chunk up to SEND_RETRY_ATTEMPTS times with exponential backoff.
+    Decides MarkdownV2 vs plain *once for the whole response* rather than
+    per chunk (audit §13). If any chunk fails to convert upfront, every
+    chunk goes plain — no half-formatted / half-raw output. If a chunk's
+    MarkdownV2 send fails mid-response, the *remaining* chunks downgrade
+    to plain too (the chunk that already shipped is unrecoverable, but at
+    least the rest of the message stays consistent). Retries each chunk
+    up to SEND_RETRY_ATTEMPTS times with exponential backoff.
 
     Every send attempt's outcome is recorded to the outbound audit log
     (source="claude-response") for diagnosing client-side render drops
@@ -715,12 +777,24 @@ async def _send_response(bot, chat_id: int, thread_id: int | None, response: str
     if thread_id is not None:
         send_kwargs["message_thread_id"] = thread_id
     audit_session_key = _session_key(chat_id, thread_id)
-    chunk_total = max(1, (len(response) + TELEGRAM_MSG_LIMIT - 1) // TELEGRAM_MSG_LIMIT)
-    chunk_index = -1
-    for i in range(0, len(response), TELEGRAM_MSG_LIMIT):
-        chunk_index += 1
-        chunk = response[i : i + TELEGRAM_MSG_LIMIT]
-        md_chunk = _to_markdownv2(chunk)
+
+    chunks = [response[i : i + TELEGRAM_MSG_LIMIT] for i in range(0, len(response), TELEGRAM_MSG_LIMIT)]
+    if not chunks:
+        return
+    chunk_total = len(chunks)
+
+    # Decide once: if any chunk fails to convert, send everything as plain.
+    md_chunks = [_to_markdownv2(c) for c in chunks]
+    use_markdown = all(m is not None for m in md_chunks)
+    if not use_markdown:
+        logger.debug(
+            "MarkdownV2 conversion failed for at least one of %d chunks; "
+            "sending entire response as plain to avoid mixed rendering",
+            chunk_total,
+        )
+
+    for chunk_index, chunk in enumerate(chunks):
+        md_chunk = md_chunks[chunk_index] if use_markdown else None
         last_exc: Exception | None = None
         for attempt in range(SEND_RETRY_ATTEMPTS):
             sent_as_md = md_chunk is not None
@@ -749,19 +823,28 @@ async def _send_response(bot, chat_id: int, thread_id: int | None, response: str
                 break
             except Exception as e:
                 last_exc = e
-                # If the markdown variant failed (likely malformed entities),
-                # drop markdown and retry the remaining attempts as plain text.
+                # MarkdownV2 send failed: drop to plain for this attempt and
+                # propagate the downgrade to all remaining chunks of this
+                # response so we don't ship a half-formatted message.
                 if md_chunk is not None:
-                    logger.debug("MarkdownV2 send failed, falling back to plain: %s", e)
+                    logger.debug(
+                        "MarkdownV2 send failed mid-response (chunk %d/%d), "
+                        "switching this and all remaining chunks to plain: %s",
+                        chunk_index + 1,
+                        chunk_total,
+                        e,
+                    )
                     md_chunk = None
+                    use_markdown = False
                 delay = SEND_RETRY_BASE_DELAY * (2**attempt)
                 logger.warning(
-                    "Telegram send failed (attempt %d/%d) for chat=%s thread=%s chunk_start=%d: %s — retrying in %.1fs",
+                    "Telegram send failed (attempt %d/%d) for chat=%s thread=%s chunk %d/%d: %s — retrying in %.1fs",
                     attempt + 1,
                     SEND_RETRY_ATTEMPTS,
                     chat_id,
                     thread_id,
-                    i,
+                    chunk_index + 1,
+                    chunk_total,
                     e,
                     delay,
                 )
@@ -769,11 +852,12 @@ async def _send_response(bot, chat_id: int, thread_id: int | None, response: str
                     await asyncio.sleep(delay)
         if last_exc is not None:
             logger.error(
-                "Telegram send failed after %d attempts for chat=%s thread=%s chunk_start=%d: %s",
+                "Telegram send failed after %d attempts for chat=%s thread=%s chunk %d/%d: %s",
                 SEND_RETRY_ATTEMPTS,
                 chat_id,
                 thread_id,
-                i,
+                chunk_index + 1,
+                chunk_total,
                 last_exc,
             )
             try:
@@ -1817,24 +1901,15 @@ async def cmd_ping(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _get_proc_cpu(pid: int) -> float | None:
-    """Get %CPU for a process via ps. Returns None if process not found."""
-    try:
-        result = subprocess.run(
-            ["ps", "-p", str(pid), "-o", "%cpu="],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            return float(result.stdout.strip())
-    except (subprocess.TimeoutExpired, ValueError):
-        pass
-    return None
-
-
 async def _stall_detector() -> None:
-    """Background task: poll active Claude processes for CPU stalls."""
+    """Background task: kill claude processes that have gone silent.
+
+    Watches `state.last_event_at`, which the stdout reader thread in
+    `_read_proc_streaming` refreshes on every line of claude's JSON-mode
+    output. A real hang — including a process blocked on a TCC dialog
+    that nobody can click — produces zero events; the reader's timestamp
+    stops advancing and we kill after STALL_TIMEOUT seconds of silence.
+    """
     while True:
         await asyncio.sleep(STALL_POLL_INTERVAL)
         now = time.time()
@@ -1843,17 +1918,10 @@ async def _stall_detector() -> None:
             if proc.poll() is not None:
                 state.last_event_at = None
                 continue
-            cpu = _get_proc_cpu(proc.pid)
-            if cpu is None:
-                continue
-            if cpu >= STALL_CPU_THRESHOLD:
-                state.last_event_at = now
-                continue
             if state.last_event_at is None:
                 state.last_event_at = now
                 continue
-            last_active = state.last_event_at
-            stall_duration = now - last_active
+            stall_duration = now - state.last_event_at
             if stall_duration >= STALL_TIMEOUT:
                 logger.warning(
                     "Killing stalled Claude process for %s (pid %d, idle %.0fs)",

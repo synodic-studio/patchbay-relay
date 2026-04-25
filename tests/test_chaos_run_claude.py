@@ -243,6 +243,47 @@ class TestChaosRunClaude:
         assert retry_args[idx + 1] == str(OOM_RETRY_MAX_TURNS)
         assert _no_orphan_procs(fake)
 
+    def test_reader_thread_refreshes_last_event_at_during_run(
+        self, monkeypatch, tmp_path
+    ):
+        """`_read_proc_streaming` updates state.last_event_at on each stdout
+        line. We exercise it directly with a fake that drips lines, then
+        confirm the timestamp moved forward from its initial value."""
+        import subprocess as _sp
+        import time as _time
+
+        fake = _write_fake(
+            tmp_path,
+            "import time as _t\n"
+            "for i in range(5):\n"
+            '    sys.stdout.write(f"line {i}\\n")\n'
+            "    sys.stdout.flush()\n"
+            "    _t.sleep(0.05)\n"
+            "sys.exit(0)\n",
+        )
+
+        # Real Popen so the reader threads see real file objects.
+        proc = _sp.Popen(
+            [str(fake)],
+            stdout=_sp.PIPE,
+            stderr=_sp.PIPE,
+            text=True,
+        )
+        state = bridge.SessionState()
+        baseline = _time.time()
+        state.last_event_at = baseline
+
+        out, _err = bridge._read_proc_streaming(proc, state, timeout=5)
+
+        # All 5 lines drained
+        assert out.count("line ") == 5
+        # last_event_at was advanced past the baseline by the reader
+        assert state.last_event_at is not None
+        assert state.last_event_at >= baseline
+        # And it advanced by at least one drip interval (~50ms cumulative,
+        # so the last update should be ~50ms+ later than the baseline)
+        assert state.last_event_at - baseline >= 0.04
+
     def test_no_active_proc_left_after_chaos_run(self, monkeypatch, tmp_path):
         """After every chaos invocation, _sessions[key].proc must be None
         so the stall detector and shutdown paths don't trip on a stale handle."""

@@ -3,7 +3,7 @@ stall detector bot notifications, and cmd_ping edge cases."""
 
 import asyncio
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -69,14 +69,13 @@ class TestStallDetectorNotify:
         bridge._get_session_state("100_200").proc = proc
         bridge._get_session_state("100_200").last_event_at = time.time() - 10000
 
-        with patch.object(bridge, "_get_proc_cpu", return_value=0.0):
-            task = asyncio.create_task(bridge._stall_detector())
-            await asyncio.sleep(0.15)
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
+        task = asyncio.create_task(bridge._stall_detector())
+        await asyncio.sleep(0.15)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
         proc.kill.assert_called()
         bot.send_message.assert_called()
@@ -97,14 +96,13 @@ class TestStallDetectorNotify:
         bridge._get_session_state("100_200").proc = proc
         bridge._get_session_state("100_200").last_event_at = time.time() - 10000
 
-        with patch.object(bridge, "_get_proc_cpu", return_value=0.0):
-            task = asyncio.create_task(bridge._stall_detector())
-            await asyncio.sleep(0.15)
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
+        task = asyncio.create_task(bridge._stall_detector())
+        await asyncio.sleep(0.15)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
         # Process should still have been killed even if notification failed
         proc.kill.assert_called()
@@ -122,45 +120,22 @@ class TestStallDetectorNotify:
         bridge._get_session_state("100").proc = proc
         bridge._get_session_state("100").last_event_at = time.time() - 10000
 
-        with patch.object(bridge, "_get_proc_cpu", return_value=0.0):
-            task = asyncio.create_task(bridge._stall_detector())
-            await asyncio.sleep(0.15)
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
+        task = asyncio.create_task(bridge._stall_detector())
+        await asyncio.sleep(0.15)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
         proc.kill.assert_called()
         call_kwargs = bot.send_message.call_args.kwargs
         assert call_kwargs["chat_id"] == 100
 
     @pytest.mark.asyncio
-    async def test_cpu_none_continues(self, monkeypatch):
-        """When _get_proc_cpu returns None, the process should be skipped."""
-        monkeypatch.setattr(bridge, "_bot_instance", None)
-
-        proc = MagicMock()
-        proc.poll.return_value = None
-        proc.pid = 555
-        bridge._get_session_state("100").proc = proc
-        bridge._get_session_state("100").last_event_at = time.time() - 10000
-
-        with patch.object(bridge, "_get_proc_cpu", return_value=None):
-            task = asyncio.create_task(bridge._stall_detector())
-            await asyncio.sleep(0.15)
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-
-        proc.kill.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_first_low_cpu_reading_sets_baseline(self, monkeypatch):
-        """First time a process shows low CPU, it should set a baseline
-        rather than immediately killing."""
+    async def test_first_seen_proc_gets_baseline_not_killed(self, monkeypatch):
+        """A proc that's tracked for the first time (last_event_at is None)
+        gets a baseline timestamp rather than being killed immediately."""
         monkeypatch.setattr(bridge, "_bot_instance", None)
         monkeypatch.setattr(bridge, "STALL_TIMEOUT", 9999)  # very long timeout
 
@@ -168,19 +143,18 @@ class TestStallDetectorNotify:
         proc.poll.return_value = None
         proc.pid = 444
         bridge._get_session_state("100").proc = proc
-        # Don't pre-set _proc_last_active — first reading
+        bridge._sessions["100"].last_event_at = None  # first reading
 
-        with patch.object(bridge, "_get_proc_cpu", return_value=0.0):
-            task = asyncio.create_task(bridge._stall_detector())
-            await asyncio.sleep(0.1)
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
+        task = asyncio.create_task(bridge._stall_detector())
+        await asyncio.sleep(0.1)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
         proc.kill.assert_not_called()
-        assert bridge._sessions.get("100") is not None and bridge._sessions["100"].last_event_at is not None
+        assert bridge._sessions["100"].last_event_at is not None
 
 
 # ---------------------------------------------------------------------------

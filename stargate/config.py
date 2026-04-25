@@ -189,12 +189,12 @@ MAX_QUEUED_MESSAGES = 20  # max pending messages per session before dropping
 
 # --- Stall detection ---
 # Claude CLI is API-bound, so CPU hovers near zero during normal operation.
-# CPU-idleness alone is not a reliable hang signal; legitimate long runs get
-# reaped. Default is 40 min — tolerates real long work while still catching
-# TCC/GUI-dialog hangs eventually. Env-overridable.
-STALL_POLL_INTERVAL = 120  # check every 2 minutes
-STALL_CPU_THRESHOLD = 1.0  # %CPU below this = idle
-STALL_TIMEOUT = _env_int("STALL_TIMEOUT", "2400", min_value=1)  # 40 min
+# Stall detection watches stdout-event cadence, not CPU: claude -p in JSON
+# output mode streams events on every tool call / assistant chunk / result,
+# so a real hang (or a process blocked on a TCC dialog with no one to click
+# it) shows up as no-events-for-N-minutes regardless of CPU. Default 10 min.
+STALL_POLL_INTERVAL = 60  # check every minute
+STALL_TIMEOUT = _env_int("STALL_TIMEOUT", "600", min_value=1)  # 10 min
 
 # --- Shutdown ---
 SHUTDOWN_PROCESS_TIMEOUT = 30  # seconds to wait for active processes

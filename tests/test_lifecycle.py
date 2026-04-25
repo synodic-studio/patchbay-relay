@@ -1,47 +1,12 @@
-"""Tests for lifecycle functions: _graceful_shutdown, _get_proc_cpu, post_init, _stall_detector."""
+"""Tests for lifecycle functions: _graceful_shutdown, post_init, _stall_detector."""
 
 import signal
 import subprocess
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
 import bridge
-
-
-# ── _get_proc_cpu ──────────────────────────────────────────────────────────
-
-
-class TestGetProcCpu:
-    def test_returns_float_for_running_process(self):
-        with patch("bridge.subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stdout="12.5\n")
-            result = bridge._get_proc_cpu(1234)
-        assert result == 12.5
-
-    def test_returns_none_for_dead_process(self):
-        with patch("bridge.subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=1, stdout="")
-            result = bridge._get_proc_cpu(99999)
-        assert result is None
-
-    def test_returns_none_on_timeout(self):
-        with patch("bridge.subprocess.run") as mock_run:
-            mock_run.side_effect = subprocess.TimeoutExpired(cmd="ps", timeout=5)
-            result = bridge._get_proc_cpu(1234)
-        assert result is None
-
-    def test_returns_none_on_invalid_output(self):
-        with patch("bridge.subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stdout="not a number\n")
-            result = bridge._get_proc_cpu(1234)
-        assert result is None
-
-    def test_returns_zero_cpu(self):
-        with patch("bridge.subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stdout="0.0\n")
-            result = bridge._get_proc_cpu(1234)
-        assert result == 0.0
 
 
 # ── _graceful_shutdown ─────────────────────────────────────────────────────
@@ -148,49 +113,49 @@ class TestStallDetector:
 
     @pytest.mark.asyncio
     async def test_kills_stalled_process(self):
-        """A process idle beyond the timeout should be killed."""
+        """A process whose last_event_at is older than STALL_TIMEOUT is killed."""
+        import asyncio
         import time
 
         proc = MagicMock()
         proc.poll.return_value = None
         proc.pid = 999
         bridge._get_session_state("stalled").proc = proc
-        bridge._get_session_state("stalled").last_event_at = time.time() - 1000  # way past timeout
+        bridge._get_session_state("stalled").last_event_at = time.time() - 1000  # well past 0.01s
 
-        with patch.object(bridge, "_get_proc_cpu", return_value=0.0):
-            import asyncio
-
-            task = asyncio.create_task(bridge._stall_detector())
-            await asyncio.sleep(0.1)
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
+        task = asyncio.create_task(bridge._stall_detector())
+        await asyncio.sleep(0.1)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
         assert proc.kill.call_count >= 1
 
     @pytest.mark.asyncio
-    async def test_does_not_kill_active_process(self):
-        """A process with high CPU should not be killed."""
+    async def test_does_not_kill_recently_active_process(self, monkeypatch):
+        """A process whose last_event_at was just refreshed must not be killed."""
+        import asyncio
         import time
+
+        # Use a more realistic timeout for this test so we can credibly say
+        # "the proc was active recently" without racing the 0.01s threshold.
+        monkeypatch.setattr(bridge, "STALL_TIMEOUT", 60)
 
         proc = MagicMock()
         proc.poll.return_value = None
         proc.pid = 888
         bridge._get_session_state("active").proc = proc
-        bridge._get_session_state("active").last_event_at = time.time() - 1000
+        bridge._get_session_state("active").last_event_at = time.time()
 
-        with patch.object(bridge, "_get_proc_cpu", return_value=50.0):
-            import asyncio
-
-            task = asyncio.create_task(bridge._stall_detector())
-            await asyncio.sleep(0.1)
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
+        task = asyncio.create_task(bridge._stall_detector())
+        await asyncio.sleep(0.05)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
         proc.kill.assert_not_called()
 

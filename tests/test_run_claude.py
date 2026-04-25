@@ -65,7 +65,15 @@ def _patch_dependencies():
     """Patch all external dependencies that run_claude touches.
 
     Every test gets these mocks; individual tests can override as needed.
+
+    `_read_proc_streaming` is proxied to `proc.communicate(timeout=...)` so
+    tests written for the old `proc.communicate.return_value` / `side_effect`
+    pattern keep working after the streaming-reader refactor.
     """
+
+    def _fake_read_streaming(proc, _state, timeout):
+        return proc.communicate(timeout=timeout)
+
     with (
         patch("bridge.get_session_id", return_value=None) as mock_get_session,
         patch("bridge.clear_session") as mock_clear_session,
@@ -74,6 +82,7 @@ def _patch_dependencies():
         patch("bridge._load_chat_projects", return_value={}) as mock_load_projects,
         patch("bridge._parse_project_entry", return_value=(None, None)) as mock_parse_entry,
         patch("bridge._log_activity") as mock_log_activity,
+        patch("bridge._read_proc_streaming", side_effect=_fake_read_streaming),
     ):
         yield {
             "get_session_id": mock_get_session,
