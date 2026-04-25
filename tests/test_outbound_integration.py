@@ -36,7 +36,7 @@ def _isolate(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _patch_deps():
-    def _fake_read_streaming(proc, _state, timeout):
+    def _fake_drain_streams(self, proc, timeout):
         return proc.communicate(timeout=timeout)
 
     with (
@@ -48,7 +48,10 @@ def _patch_deps():
         patch("bridge._load_chat_projects", return_value={}),
         patch("bridge._parse_project_entry", return_value=(None, None)),
         patch("bridge._log_activity"),
-        patch("bridge._read_proc_streaming", side_effect=_fake_read_streaming),
+        patch(
+            "stargate.harness.claude_cli.ClaudeCliHarness._drain_streams",
+            _fake_drain_streams,
+        ),
     ):
         yield
 

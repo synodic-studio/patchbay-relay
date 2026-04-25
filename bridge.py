@@ -104,10 +104,17 @@ from stargate.sessions import (  # noqa: E402
     get_session_id,
     mark_stall_kill,
     save_pending,
-    save_session_id,  # noqa: F401 — used by tests via bridge.save_session_id
+    save_session_id,
+)
+from stargate.harness import (  # noqa: E402
+    ClaudeCliHarness,
+    ToolUse,
+    TurnError,
+    TurnFinal,
+    TurnRequest,
 )
 from stargate.parser import (  # noqa: E402
-    _parse_events,
+    _parse_events,  # noqa: F401 — re-exported for validate.py smoke tests
     is_empty_success_response,
     parse_claude_response,
 )
@@ -291,60 +298,26 @@ _BRIDGE_STARTED_AT = time.time()
 # ---------------------------------------------------------------------------
 
 
-def _read_proc_streaming(
-    proc: subprocess.Popen,
-    state: "SessionState",
-    timeout: float,
-) -> tuple[str, str]:
-    """Drain proc.stdout/stderr via reader threads and return their full text.
+def _drive_harness_sync(
+    harness: ClaudeCliHarness,
+    req: TurnRequest,
+) -> list:
+    """Drive the harness async iterator from a sync context, return all events.
 
-    Replaces `proc.communicate(timeout=timeout)` so we can update
-    `state.last_event_at` on every line of stdout — that timestamp is the
-    signal the stall detector watches for. With JSON output mode, claude -p
-    streams an event per tool call / assistant chunk / result, so a real
-    hang shows up as no-events-for-N-minutes regardless of CPU usage.
-
-    Raises subprocess.TimeoutExpired if the process doesn't exit before
-    `timeout` elapses; the caller is responsible for killing the proc and
-    cleaning up. Reader threads are daemons and will be torn down when the
-    main process exits even if a kill races.
+    `run_claude` is sync (called via `loop.run_in_executor` by the orchestrator),
+    but the harness exposes an async iterator. This helper bridges the two:
+    we run a fresh event loop on the worker thread, drain the iterator, and
+    hand back the collected `TurnEvent` list. One loop per call is fine —
+    harness work is dominated by the subprocess wait, not loop overhead.
     """
-    import threading
+    events: list = []
 
-    stdout_buf: list[str] = []
-    stderr_buf: list[str] = []
+    async def _drive() -> None:
+        async for event in harness.run_turn(req):
+            events.append(event)
 
-    def _drain(stream, buf, mark_event: bool) -> None:
-        try:
-            for line in iter(stream.readline, ""):
-                buf.append(line)
-                if mark_event:
-                    state.last_event_at = time.time()
-        except (OSError, ValueError):
-            # Stream closed under us during a kill; nothing to drain.
-            pass
-        finally:
-            try:
-                stream.close()
-            except OSError:
-                pass
-
-    t_out = threading.Thread(target=_drain, args=(proc.stdout, stdout_buf, True), daemon=True)
-    t_err = threading.Thread(target=_drain, args=(proc.stderr, stderr_buf, False), daemon=True)
-    t_out.start()
-    t_err.start()
-
-    try:
-        proc.wait(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        # Caller will kill; let the threads finish via the wait below in
-        # the caller's exception path. Re-raise so caller can decide.
-        raise
-
-    # Flush the readers — they should exit on their own once the pipes close.
-    t_out.join(timeout=2)
-    t_err.join(timeout=2)
-    return "".join(stdout_buf), "".join(stderr_buf)
+    asyncio.run(_drive())
+    return events
 
 
 def run_claude(
@@ -354,7 +327,7 @@ def run_claude(
     model: str | None = None,
     max_turns_override: int | None = None,
 ) -> str:
-    """Invoke claude CLI via Popen. Does not kill on timeout.
+    """Invoke claude via ClaudeCliHarness, translate the event stream to a string.
 
     max_turns_override: when set, replaces MAX_TURNS for this invocation
     only. Used by the OOM self-heal path (see stargate/self_heal.py) to
@@ -453,44 +426,13 @@ def run_claude(
             "headless-safe alternative (swift test, tuist build, unit tests, static analysis)."
         )
 
-    # stream-json (not json) so each tool-use / assistant chunk / result lands
-    # as its own NDJSON line in real time. The stall detector relies on stdout
-    # cadence (state.last_event_at) to tell a hung process from a working one;
-    # plain `json` mode buffers everything until the run ends, which produces
-    # false-positive stall kills on long-but-progressing turns. parser.py's
-    # NDJSON path already handles this shape.
-    cmd = [
-        CLAUDE_PATH,
-        "-p",
-        message,
-        "--output-format",
-        "stream-json",
-        "--verbose",
-        "--dangerously-skip-permissions",
-        "--disallowed-tools",
-        "AskUserQuestion,EnterPlanMode,ExitPlanMode",
-        "--max-turns",
-        str(max_turns_override if max_turns_override is not None else MAX_TURNS),
-        "--plugin-dir",
-        PA_PLUGIN_DIR,
-        "--append-system-prompt",
-        system_prompt,
-    ]
-
-    # Resolve model: per-message override > sticky setting > default
+    # Resolve model / effort the same way the legacy path did.
     if not model:
         model = get_chat_model(session_key)
-    if model:
-        cmd.extend(["--model", model])
-
-    # Resolve effort: per-chat sticky setting > DEFAULT_EFFORT
     effort = resolve_effort(session_key)
-    cmd.extend(["--effort", effort])
 
     if session_id:
-        cmd.extend(["--resume", session_id])
         logger.info("Resuming session %s for %s", session_id[:12], session_key)
-
     logger.info(
         "Launching claude in %s for %s (model=%s, effort=%s)",
         chat_cwd,
@@ -508,64 +450,93 @@ def run_claude(
         resume=bool(session_id),
     )
 
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        cwd=chat_cwd,
-    )
     state = _get_session_state(session_key)
-    state.proc = proc
     state.last_event_at = time.time()
 
+    def _on_progress() -> None:
+        st = _sessions.get(session_key)
+        if st is not None:
+            st.last_event_at = time.time()
+
+    def _proc_setter(proc: subprocess.Popen | None) -> None:
+        st = _sessions.get(session_key)
+        if st is not None:
+            st.proc = proc
+
+    harness = ClaudeCliHarness(
+        claude_path=CLAUDE_PATH,
+        max_timeout_seconds=MAX_TIMEOUT,
+        on_progress=_on_progress,
+        proc_setter=_proc_setter,
+        max_turns_default=(
+            max_turns_override if max_turns_override is not None else MAX_TURNS
+        ),
+    )
+    req = TurnRequest(
+        prompt=message,
+        session_key=session_key,
+        project_dir=Path(chat_cwd),
+        system_prompt=system_prompt,
+        resume_session_id=session_id,
+        model=model,
+        effort=effort,
+        allowed_tools=None,
+        disallowed_tools=["AskUserQuestion", "EnterPlanMode", "ExitPlanMode"],
+        max_turns=(max_turns_override if max_turns_override is not None else MAX_TURNS),
+        plugin_dir=PA_PLUGIN_DIR,
+        extra=None,
+    )
+
     try:
-        stdout, stderr = _read_proc_streaming(proc, state, MAX_TIMEOUT)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        try:
-            proc.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            pass
-        duration = time.time() - invoke_start
-        _log_activity(
-            "claude_timeout",
-            session_key=session_key,
-            pid=proc.pid,
-            duration=duration,
-            elapsed_ms=int(duration * 1000),
-        )
-        return f"[Timed out after {MAX_TIMEOUT // 60} min] Session preserved — send your message again to resume."
+        events = _drive_harness_sync(harness, req)
     finally:
-        state = _sessions.get(session_key)
-        if state is not None:
-            state.proc = None
-            state.last_event_at = None
+        st = _sessions.get(session_key)
+        if st is not None:
+            st.proc = None
+            st.last_event_at = None
 
     duration = time.time() - invoke_start
-    stderr = stderr or ""
-    stdout = stdout.strip()
-    if not stdout:
-        # Stale session: Claude couldn't find the conversation. Clear and retry.
-        if stderr and "No conversation found" in stderr and session_id and not _retry:
-            logger.warning("Stale session %s for %s, retrying fresh", session_id[:12], session_key)
+    final = events[-1] if events else None
+
+    # Failure path — TurnError. Each kind maps to an existing recovery branch.
+    if isinstance(final, TurnError):
+        if final.kind == "timeout":
+            _log_activity(
+                "claude_timeout",
+                session_key=session_key,
+                duration=duration,
+                elapsed_ms=int(duration * 1000),
+            )
+            return (
+                f"[Timed out after {MAX_TIMEOUT // 60} min] "
+                "Session preserved — send your message again to resume."
+            )
+
+        if final.kind == "corrupt_session" and not _retry:
+            stale = final.metadata.get("stale_session_id") or session_id
+            logger.warning(
+                "Stale session %s for %s, retrying fresh",
+                (stale or "?")[:12],
+                session_key,
+            )
             clear_session(session_key)
             return run_claude(message, session_key, _retry=True)
-        # OOM-shaped exit: dispatch self-heal, retry once with reduced budget.
-        if proc.returncode in (137, -9) and not _retry:
+
+        if final.kind == "oom" and not _retry:
             from stargate.self_heal import (
                 OOM_RETRY_MAX_TURNS,
                 OOM_RETRY_PROMPT_TRIM,
                 dispatch_repair,
             )
+            rc = final.metadata.get("exit_code", 0)
             result = dispatch_repair(
                 "claude_oom_137",
-                {"session_key": session_key, "returncode": proc.returncode},
+                {"session_key": session_key, "returncode": rc},
             )
             if result.fixed:
                 logger.warning(
                     "OOM kill (rc=%d) for %s, retrying with max_turns=%d trimmed_prompt=%dch",
-                    proc.returncode,
+                    rc,
                     session_key,
                     OOM_RETRY_MAX_TURNS,
                     OOM_RETRY_PROMPT_TRIM,
@@ -577,83 +548,106 @@ def run_claude(
                     model=model,
                     max_turns_override=OOM_RETRY_MAX_TURNS,
                 )
-        # Check for quota error in stderr even when stdout is empty
-        if _is_quota_error([], stderr):
-            logger.warning(
-                "Quota/rate limit detected (no output) for %s: %s",
-                session_key,
-                stderr[:200],
+
+        if final.kind == "rate_limit":
+            stderr = final.metadata.get("stderr", "")
+            source = "stderr" if stderr else "events+stderr"
+            if stderr:
+                logger.warning(
+                    "Quota/rate limit detected (no output) for %s: %s",
+                    session_key,
+                    stderr[:200],
+                )
+            else:
+                logger.warning("Quota/rate limit detected for %s", session_key)
+            _log_activity(
+                "quota_hit",
+                session_key=session_key,
+                duration=duration,
+                source=source,
             )
-            _log_activity("quota_hit", session_key=session_key, duration=duration, source="stderr")
             return QUOTA_HIT_PREFIX + message
+
+        if final.kind == "max_turns":
+            sess_id = final.metadata.get("session_id")
+            if sess_id:
+                save_session_id(session_key, sess_id)
+            num_turns = final.metadata.get("num_turns")
+            _log_activity(
+                "claude_complete",
+                session_key=session_key,
+                duration=duration,
+                elapsed_ms=int(duration * 1000),
+                turns_used=num_turns,
+                exit_code=0,
+                response_len=len(final.message),
+            )
+            return final.message
+
+        # unknown / process_died — surface what we have.
+        rc = final.metadata.get("exit_code", 0)
+        stderr = final.metadata.get("stderr", "")
+        if rc and stderr:
+            logger.warning(
+                "Claude exited %d for %s. stderr: %s",
+                rc,
+                session_key,
+                stderr[:300],
+            )
         _log_activity(
             "claude_error",
             session_key=session_key,
             duration=duration,
             elapsed_ms=int(duration * 1000),
-            error=stderr[:200] if stderr else "no output",
+            error=(stderr[:200] if stderr else final.message[:200]) or "no output",
         )
-        if stderr:
-            return f"(no output. stderr: {stderr[:500]})"
-        return "(no output)"
+        return final.message or "(no output)"
 
-    events = _parse_events(stdout)
-    result_event = next((e for e in reversed(events) if e.get("type") == "result"), None)
-    turns_used = result_event.get("num_turns") if result_event else None
+    # Success path — TurnFinal with the aggregated text.
+    if isinstance(final, TurnFinal):
+        if final.session_id:
+            save_session_id(session_key, final.session_id)
+            logger.info("Saved session %s for %s", final.session_id[:12], session_key)
+        _log_activity(
+            "claude_complete",
+            session_key=session_key,
+            duration=duration,
+            elapsed_ms=int(duration * 1000),
+            turns_used=final.num_turns,
+            exit_code=0,
+            response_len=len(final.raw_text),
+        )
+        response = final.raw_text or "(no parseable response)"
+
+        # Empty-success: claude finished cleanly but produced no final text.
+        # One-shot summary retry against the freshly-saved session_id; gives
+        # the user a real reply instead of the "(Completed N turns…)" placeholder.
+        if is_empty_success_response(response) and not _retry:
+            new_session_id = get_session_id(session_key)
+            if new_session_id:
+                summary = _request_summary(session_key, new_session_id, chat_cwd)
+                if summary:
+                    _log_activity(
+                        "summary_retry_success",
+                        session_key=session_key,
+                        response_len=len(summary),
+                    )
+                    return summary
+                _log_activity("summary_retry_empty", session_key=session_key)
+            else:
+                _log_activity("summary_retry_skipped_no_session", session_key=session_key)
+
+        return response
+
+    # Defensive: harness didn't terminate properly. Treat as no output.
     _log_activity(
-        "claude_complete",
+        "claude_error",
         session_key=session_key,
         duration=duration,
         elapsed_ms=int(duration * 1000),
-        turns_used=turns_used,
-        exit_code=proc.returncode,
-        response_len=len(stdout),
+        error="harness returned no terminator",
     )
-    if proc.returncode != 0 and stderr:
-        logger.warning(
-            "Claude exited %d for %s. stderr: %s",
-            proc.returncode,
-            session_key,
-            stderr[:300],
-        )
-
-    # Check for quota error in completed response
-    if _is_quota_error(events, stderr):
-        logger.warning("Quota/rate limit detected for %s", session_key)
-        _log_activity(
-            "quota_hit",
-            session_key=session_key,
-            duration=duration,
-            source="events+stderr",
-        )
-        parse_claude_response(stdout, session_key)  # side-effect: saves session_id
-        return QUOTA_HIT_PREFIX + message
-
-    response = parse_claude_response(stdout, session_key)
-
-    # If parsing produced nothing useful and Claude errored, surface stderr
-    if response == "(no parseable response)" and proc.returncode != 0 and stderr:
-        return f"(Claude exited with error: {stderr[:500]})"
-
-    # Empty-success: claude finished cleanly but produced no final text.
-    # One-shot summary retry against the freshly-saved session_id; gives
-    # the user a real reply instead of the "(Completed N turns…)" placeholder.
-    if is_empty_success_response(response) and not _retry:
-        new_session_id = get_session_id(session_key)
-        if new_session_id:
-            summary = _request_summary(session_key, new_session_id, chat_cwd)
-            if summary:
-                _log_activity(
-                    "summary_retry_success",
-                    session_key=session_key,
-                    response_len=len(summary),
-                )
-                return summary
-            _log_activity("summary_retry_empty", session_key=session_key)
-        else:
-            _log_activity("summary_retry_skipped_no_session", session_key=session_key)
-
-    return response
+    return "(no output)"
 
 
 def _request_summary(session_key: str, session_id: str, chat_cwd: str) -> str | None:
@@ -2069,11 +2063,12 @@ async def _conflict_storm_watcher() -> None:
 async def _stall_detector() -> None:
     """Background task: kill claude processes that have gone silent.
 
-    Watches `state.last_event_at`, which the stdout reader thread in
-    `_read_proc_streaming` refreshes on every line of claude's JSON-mode
-    output. A real hang — including a process blocked on a TCC dialog
-    that nobody can click — produces zero events; the reader's timestamp
-    stops advancing and we kill after STALL_TIMEOUT seconds of silence.
+    Watches `state.last_event_at`, which the harness's `on_progress`
+    callback (wired into `ClaudeCliHarness._drain_streams`) refreshes on
+    every line of claude's JSON-mode output. A real hang — including a
+    process blocked on a TCC dialog that nobody can click — produces
+    zero events; the reader's timestamp stops advancing and we kill
+    after STALL_TIMEOUT seconds of silence.
     """
     while True:
         await asyncio.sleep(STALL_POLL_INTERVAL)

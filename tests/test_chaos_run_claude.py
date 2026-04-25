@@ -246,11 +246,15 @@ class TestChaosRunClaude:
     def test_reader_thread_refreshes_last_event_at_during_run(
         self, monkeypatch, tmp_path
     ):
-        """`_read_proc_streaming` updates state.last_event_at on each stdout
-        line. We exercise it directly with a fake that drips lines, then
+        """The harness's reader-thread drain (now `ClaudeCliHarness._drain_streams`)
+        updates `last_event_at` on each stdout line by invoking the
+        `on_progress` callback the bridge wires into the harness. We
+        exercise the harness directly with a fake that drips lines, then
         confirm the timestamp moved forward from its initial value."""
         import subprocess as _sp
         import time as _time
+
+        from stargate.harness.claude_cli import ClaudeCliHarness
 
         fake = _write_fake(
             tmp_path,
@@ -273,7 +277,11 @@ class TestChaosRunClaude:
         baseline = _time.time()
         state.last_event_at = baseline
 
-        out, _err = bridge._read_proc_streaming(proc, state, timeout=5)
+        def _on_progress() -> None:
+            state.last_event_at = _time.time()
+
+        harness = ClaudeCliHarness(on_progress=_on_progress)
+        out, _err = harness._drain_streams(proc, timeout=5)
 
         # All 5 lines drained
         assert out.count("line ") == 5

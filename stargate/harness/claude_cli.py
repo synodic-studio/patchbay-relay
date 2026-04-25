@@ -71,11 +71,16 @@ class ClaudeCliHarness:
         max_timeout_seconds: float = MAX_TIMEOUT,
         max_turns_default: int = MAX_TURNS,
         on_progress: Callable[[], None] | None = None,
+        proc_setter: Callable[[subprocess.Popen | None], None] | None = None,
     ) -> None:
         self._claude_path = claude_path
         self._max_timeout = max_timeout_seconds
         self._max_turns_default = max_turns_default
         self._on_progress = on_progress
+        # External observer that wants to mirror the active proc handle
+        # (used by the bridge to populate SessionState.proc so /kill,
+        # the stall detector, and graceful shutdown can reach it).
+        self._proc_setter = proc_setter
         # Track the active subprocess so cancel() can kill it.
         self._proc: subprocess.Popen | None = None
         self._proc_lock = threading.Lock()
@@ -119,6 +124,29 @@ class ClaudeCliHarness:
 
         # Have stdout. Parse and emit.
         events = _parse_events(stdout)
+
+        # Legacy fallback: if stdout didn't parse to any events, surface the
+        # raw text verbatim so the user/operator can see what claude said.
+        # parser.parse_claude_response did the same with `stdout.strip() or
+        # "(no parseable response)"`.
+        if not events:
+            fallback_text = stdout.strip() or "(no parseable response)"
+            yield TextDelta(text=fallback_text, final=True)
+            if result.returncode != 0 and stderr:
+                yield TurnError(
+                    kind="unknown",
+                    message=f"(Claude exited with error: {stderr[:500]})",
+                    retryable=False,
+                    metadata={"exit_code": result.returncode, "stderr": stderr[:500]},
+                )
+                return
+            yield TurnFinal(
+                session_id=None,
+                num_turns=None,
+                total_cost_usd=None,
+                raw_text=fallback_text,
+            )
+            return
 
         # Quota detection runs over parsed events + stderr.
         if is_quota_error(events, stderr):
@@ -215,16 +243,33 @@ class ClaudeCliHarness:
         # Normal success path.
         if text:
             yield TextDelta(text=text, final=True)
-        else:
-            # Couldn't parse anything useful out of stdout.
-            fallback = stdout if stdout else "(no parseable response)"
-            yield TextDelta(text=fallback, final=True)
+            yield TurnFinal(
+                session_id=session_id,
+                num_turns=num_turns,
+                total_cost_usd=cost,
+                raw_text=text,
+            )
+            return
 
+        # No extractable text and no classified result_event subtype: this
+        # is "(no parseable response)" territory. If the proc also exited
+        # nonzero with stderr, surface that as a classified error so the
+        # bridge can render the stderr to the user.
+        if result.returncode != 0 and stderr:
+            yield TurnError(
+                kind="unknown",
+                message=f"(Claude exited with error: {stderr[:500]})",
+                retryable=False,
+                metadata={"exit_code": result.returncode, "stderr": stderr[:500]},
+            )
+            return
+
+        yield TextDelta(text="(no parseable response)", final=True)
         yield TurnFinal(
             session_id=session_id,
             num_turns=num_turns,
             total_cost_usd=cost,
-            raw_text=text or stdout or "(no parseable response)",
+            raw_text="(no parseable response)",
         )
 
     async def cancel(self) -> None:
@@ -291,6 +336,11 @@ class ClaudeCliHarness:
         )
         with self._proc_lock:
             self._proc = proc
+        if self._proc_setter is not None:
+            try:
+                self._proc_setter(proc)
+            except Exception:  # noqa: BLE001 — never let a callback bring us down
+                logger.exception("proc_setter callback raised")
 
         try:
             stdout, stderr = self._drain_streams(proc, self._max_timeout)
@@ -310,6 +360,11 @@ class ClaudeCliHarness:
         finally:
             with self._proc_lock:
                 self._proc = None
+            if self._proc_setter is not None:
+                try:
+                    self._proc_setter(None)
+                except Exception:  # noqa: BLE001
+                    logger.exception("proc_setter callback raised")
 
         return _RunResult(
             stdout=stdout,

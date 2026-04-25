@@ -10,36 +10,47 @@ Code CLI, Claude Agent SDK, codex/pi, cursor, …) behind one interface.
 | 0 — Design | ✅ | This doc + 4 open questions resolved |
 | 1a — Protocol + CLI harness | ✅ | `stargate/harness/{base,claude_cli}.py`, 16 tests. Dormant — bridge unchanged. |
 | 2 — SDK harness | ✅ | `stargate/harness/claude_sdk.py`, 24 tests. Dormant. Validated the protocol from a 2nd angle without any changes. |
-| 1b — Rewire bridge | next | Make `bridge.run_claude` consume the harness stream; delete duplicated Popen/parse logic. Add `chat_projects.json.harness` field + `/harness` command. |
+| 1b — Rewire bridge (core) | ✅ | `bridge.run_claude` now drives `ClaudeCliHarness` via `_drive_harness_sync`. Popen/drain/parse moved out of the bridge. `proc_setter` callback mirrors the running proc into `SessionState.proc` so `/kill`, the stall detector, and graceful shutdown still work. `on_progress` keeps `state.last_event_at` fresh. 559 tests pass. |
+| 1c — Per-chat selection + activity field | next | `chat_projects.json.harness` field + `STARGATE_DEFAULT_HARNESS` env + `/harness` command. Add `harness=` to every `activity.jsonl` entry that touches a turn. |
 | 3 — Live soak | future | One topic on `cc-sdk` for as long as it takes to be boring. Compare via `harness=` field on `activity.jsonl`. |
 | 4 — Flip default | future | `STARGATE_DEFAULT_HARNESS=cc-sdk`. Keep `cc-cli` as fallback. |
 | 5 — Other backends | future | codex/pi, cursor — exercises `HarnessCapabilities.supports_resume=False`. |
 
-## Forward plan: phase 1b
+## What 1b core delivered
 
-The work that remains in this phase:
+- `bridge.run_claude` is now ~190 lines (was ~280). The cmd-construction,
+  Popen, drain, and parse logic is gone — it lives in `ClaudeCliHarness`.
+- `bridge._read_proc_streaming` deleted (replaced by
+  `ClaudeCliHarness._drain_streams`). The stall detector still reads
+  `SessionState.last_event_at`; the harness's `on_progress` callback
+  refreshes it on each stdout line, same as before.
+- `ClaudeCliHarness` gained a `proc_setter: Callable[[Popen | None], None]`
+  param so the bridge can mirror the active subprocess into
+  `SessionState.proc` for `/kill`, `_iter_active_procs`, the stall
+  detector, and graceful shutdown.
+- `TurnError.kind` is mapped one-to-one to the bridge's recovery
+  branches:
+  - `timeout` → "Timed out after N min" message
+  - `corrupt_session` → `clear_session()` + recursive retry without resume
+  - `oom` → `dispatch_repair("claude_oom_137")` + retry with trimmed prompt
+  - `rate_limit` → `QUOTA_HIT_PREFIX + message` (Forge handoff)
+  - `max_turns` → save session_id + return harness-built notice text
+  - `unknown` / `process_died` → surface message verbatim
+- Test fixtures updated to patch
+  `stargate.harness.claude_cli.ClaudeCliHarness._drain_streams` instead
+  of the removed `bridge._read_proc_streaming`. The
+  `proc.communicate(timeout=...)` mocking pattern still works.
 
-1. Build `TurnRequest` from per-message + per-chat config inside
-   `bridge.run_claude` (system prompt construction stays in the bridge).
-2. Iterate `harness.run_turn(req)` and translate the event stream back to
-   the existing return-string contract for `_process_with_claude_turn`.
-3. Wire `on_progress` (or per-event consumption) to keep
-   `SessionState.last_event_at` updating — this is what the stall
-   detector reads.
-4. Map `TurnError.kind` to existing recovery paths:
-   - `oom` / `retryable=True` → existing OOM self-heal retry with trimmed prompt
-   - `corrupt_session` → `clear_session()` + one-shot retry
-   - `rate_limit` → existing Forge handoff (`_maybe_handoff_quota`)
-   - `max_turns` → append the existing turn-limit notice to the text
-   - `timeout` → existing "Timed out after N min" message
-   - `process_died` (new kind) → surface stderr to user, no retry
-5. Delete the now-duplicated Popen/drain/parse logic from `bridge.run_claude`.
-6. Add per-chat harness selection: `chat_projects.json` gains an optional
-   `"harness": "cc-cli" | "cc-sdk"` field; default from env
-   `STARGATE_DEFAULT_HARNESS=cc-cli`. New `/harness <name>` command.
-7. Add `harness=` field to every `activity.jsonl` entry that touches a turn.
+## What's left for 1c
 
-After 1b ships, phase 3 is just flipping one topic to `cc-sdk` and
+1. `chat_projects.json` gains an optional `"harness": "cc-cli" | "cc-sdk"`
+   field; default from env `STARGATE_DEFAULT_HARNESS=cc-cli`. New
+   `/harness <name>` command surfaces and toggles the per-topic value.
+2. Add `harness=` to every `activity.jsonl` entry that touches a turn so
+   live-soak comparisons (phase 3) can grep `harness=cc-sdk` vs
+   `harness=cc-cli` for behavioural diffs.
+
+After 1c ships, phase 3 is just flipping one topic to `cc-sdk` and
 watching.
 
 ## Open questions — resolved

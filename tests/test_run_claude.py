@@ -66,12 +66,16 @@ def _patch_dependencies():
 
     Every test gets these mocks; individual tests can override as needed.
 
-    `_read_proc_streaming` is proxied to `proc.communicate(timeout=...)` so
-    tests written for the old `proc.communicate.return_value` / `side_effect`
-    pattern keep working after the streaming-reader refactor.
+    `ClaudeCliHarness._drain_streams` is proxied to
+    `proc.communicate(timeout=...)` so tests written for the old
+    `proc.communicate.return_value` / `side_effect` pattern keep working
+    after the harness refactor (phase 1b of CTB-cyz). The harness uses
+    line-based readline drain in production for stall-detector cadence;
+    in tests we collapse it to communicate() since the mocks set up
+    .communicate.return_value or .side_effect.
     """
 
-    def _fake_read_streaming(proc, _state, timeout):
+    def _fake_drain_streams(self, proc, timeout):
         return proc.communicate(timeout=timeout)
 
     with (
@@ -82,7 +86,10 @@ def _patch_dependencies():
         patch("bridge._load_chat_projects", return_value={}) as mock_load_projects,
         patch("bridge._parse_project_entry", return_value=(None, None)) as mock_parse_entry,
         patch("bridge._log_activity") as mock_log_activity,
-        patch("bridge._read_proc_streaming", side_effect=_fake_read_streaming),
+        patch(
+            "stargate.harness.claude_cli.ClaudeCliHarness._drain_streams",
+            _fake_drain_streams,
+        ),
     ):
         yield {
             "get_session_id": mock_get_session,
@@ -112,19 +119,13 @@ class TestNormalResponse:
 
         assert result == "Everything is fine"
 
-    def test_parse_claude_response_is_invoked(self):
-        stdout = _valid_json_stdout("Parsed OK")
-        proc = _make_proc(stdout=stdout)
-
-        with (
-            patch("bridge.subprocess.Popen", return_value=proc),
-            patch("bridge.parse_claude_response", return_value="Parsed OK") as mock_parse,
-        ):
-            result = bridge.run_claude(MESSAGE, SESSION_KEY)
-
-        mock_parse.assert_called_once_with(stdout, SESSION_KEY)
-        assert result == "Parsed OK"
-
+    # Removed `test_parse_claude_response_is_invoked` (CTB-cyz phase 1b):
+    # post-rewire the bridge no longer goes through `parse_claude_response`.
+    # The harness extracts text via `_extract_text_from_events` and yields
+    # a `TurnFinal(raw_text=...)`; the bridge uses that text directly and
+    # saves the session_id from `TurnFinal.session_id`. The function is
+    # still used by `_request_summary` (empty-success path), exercised by
+    # `tests/test_summary_retry.py`.
 
 # ---------------------------------------------------------------------------
 # 2. Timeout
