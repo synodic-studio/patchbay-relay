@@ -21,11 +21,9 @@ def _clean_bridge_state():
     """Reset bridge module-level debounce state between tests."""
     bridge._processing_sessions.clear()
     bridge._queued_messages.clear()
-    bridge._session_start_times.clear()
     yield
     bridge._processing_sessions.clear()
     bridge._queued_messages.clear()
-    bridge._session_start_times.clear()
 
 
 def _make_update(chat_id=1, thread_id=None, text="hello", user_id=42):
@@ -238,7 +236,7 @@ async def test_session_cleared_after_processing_completes():
         await bridge.handle_message(update, ctx)
 
     assert key not in bridge._processing_sessions
-    assert key not in bridge._session_start_times
+    assert (bridge._sessions.get(key) is None or bridge._sessions[key].started_at is None)
 
 
 @pytest.mark.asyncio

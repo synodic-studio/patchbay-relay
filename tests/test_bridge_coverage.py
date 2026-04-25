@@ -192,10 +192,8 @@ class TestCmdPingUnknownStart:
     @pytest.fixture(autouse=True)
     def _isolate(self):
         bridge._processing_sessions.clear()
-        bridge._session_start_times.clear()
         yield
         bridge._processing_sessions.clear()
-        bridge._session_start_times.clear()
 
     @pytest.mark.asyncio
     async def test_unknown_start_time(self):

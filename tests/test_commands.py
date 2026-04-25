@@ -277,10 +277,8 @@ class TestCmdPing:
     @pytest.fixture(autouse=True)
     def _isolate(self):
         bridge._processing_sessions.clear()
-        bridge._session_start_times.clear()
         yield
         bridge._processing_sessions.clear()
-        bridge._session_start_times.clear()
 
     @pytest.mark.asyncio
     async def test_no_active_sessions(self):
@@ -294,7 +292,7 @@ class TestCmdPing:
     @pytest.mark.asyncio
     async def test_with_active_sessions(self):
         bridge._processing_sessions.add("1_2")
-        bridge._session_start_times["1_2"] = time.time() - 65
+        bridge._get_session_state("1_2").started_at = time.time() - 65
         update = _make_update()
         ctx = _make_context()
         await bridge.cmd_ping(update, ctx)

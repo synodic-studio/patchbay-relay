@@ -190,7 +190,6 @@ _remote_proc_key: str | None = None
 
 # Message debounce: batch messages that arrive while Claude is processing
 _processing_sessions: set[str] = set()
-_session_start_times: dict[str, float] = {}  # session_key -> time.time() when processing began
 _queued_messages: dict[str, list[str]] = {}
 
 
@@ -694,7 +693,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     msg_model, clean_text = extract_model_prefix(text)
 
     _processing_sessions.add(key)
-    _session_start_times[key] = time.time()
+    _get_session_state(key).started_at = time.time()
     pending_id = save_pending(chat_id, thread_id, clean_text, key)
 
     stop_typing = asyncio.Event()
@@ -762,7 +761,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         stop_typing.set()
         await typing_task
         _processing_sessions.discard(key)
-        _session_start_times.pop(key, None)
+        _sessions[key].started_at = None  # type: ignore[union-attr]
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -805,7 +804,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     _processing_sessions.add(key)
-    _session_start_times[key] = time.time()
+    _get_session_state(key).started_at = time.time()
     pending_id = save_pending(chat_id, thread_id, prompt, key)
 
     stop_typing = asyncio.Event()
@@ -848,7 +847,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         stop_typing.set()
         await typing_task
         _processing_sessions.discard(key)
-        _session_start_times.pop(key, None)
+        _sessions[key].started_at = None  # type: ignore[union-attr]
         local_path.unlink(missing_ok=True)
 
 
@@ -901,7 +900,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     _processing_sessions.add(key)
-    _session_start_times[key] = time.time()
+    _get_session_state(key).started_at = time.time()
     pending_id = save_pending(chat_id, thread_id, prompt, key)
 
     stop_typing = asyncio.Event()
@@ -944,7 +943,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         stop_typing.set()
         await typing_task
         _processing_sessions.discard(key)
-        _session_start_times.pop(key, None)
+        _sessions[key].started_at = None  # type: ignore[union-attr]
 
 
 # ---------------------------------------------------------------------------
@@ -1470,7 +1469,7 @@ async def cmd_ping(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     now = time.time()
     lines = ["pong — active sessions:"]
     for key in sorted(_processing_sessions):
-        started = _session_start_times.get(key)
+        started = (_sessions[key].started_at if key in _sessions else None)
         if started:
             elapsed = int(now - started)
             mins, secs = divmod(elapsed, 60)
