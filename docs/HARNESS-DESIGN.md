@@ -14,9 +14,13 @@ Code CLI, Claude Agent SDK, codex/pi, cursor, …) behind one interface.
 | 1c — Per-chat selection + activity field | ✅ | `chat_projects.json.harness` field + `STARGATE_DEFAULT_HARNESS` env + `/harness` command. Every `activity.jsonl` entry that touches a turn carries `harness=<effective>` and `harness_requested=<requested>`. 573 tests. |
 | 3a — Backend-agnostic cancel | ✅ | `SessionState.harness` + `worker_loop` fields. `_cancel_session_async` dispatches `proc.kill()` for cc-cli or `run_coroutine_threadsafe(harness.cancel(), worker_loop)` for cc-sdk. `_iter_active_sessions` is the new backend-agnostic snapshot used by /ping, the stall detector, /restart, shutdown. 582 tests. |
 | 3b — cc-sdk dispatch | ✅ | `run_claude` instantiates `ClaudeSdkHarness` when cc-sdk is selected. SDK harness gained `on_progress` so `last_event_at` refreshes per SDK message. /kill, stall detector, shutdown all route cancellation through the unified helper. 583 tests. |
-| 3 — Live soak | next | Pick one topic, `/harness cc-sdk`, watch `activity.jsonl` for behavioural diffs over a few weeks. |
+| 3c — Soak tooling | ✅ | `scripts/harness_soak.py` + `/soak [since] [session]` Telegram command. Buckets `activity.jsonl` rows by `harness=` field, reports turn counts, outcome rates, p50/p95 duration, OOM/quota/stall counts. 18 tests. |
+| 3 — Live soak | running | cc-sdk active in synodic-kit topic; `/soak` for live readout. |
 | 4 — Flip default | future | `STARGATE_DEFAULT_HARNESS=cc-sdk`. Keep `cc-cli` as fallback. |
-| 5 — Other backends | future | codex/pi, cursor — exercises `HarnessCapabilities.supports_resume=False`. |
+| 5a — Pi harness | next | `badlogicgames/pi` — multi-model coding agent, default deepseek via openrouter. |
+| 5b — Aider harness | next | Python coding CLI, model-agnostic. |
+| 5c — OpenCode harness | next | sst/opencode, TUI-first coding agent with CLI mode. |
+| 5z — codex/cursor/gemini | future | Lower priority. |
 
 ## What 1b core delivered
 

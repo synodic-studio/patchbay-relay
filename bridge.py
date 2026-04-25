@@ -1481,6 +1481,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/ping - Check if bridge is alive\n"
         "/health - Disk, queues, uptime, counts\n"
         "/activity [event] [count] - Recent activity.jsonl entries (e.g. /activity self_heal)\n"
+        "/soak [since] [session] - Compare harness backends (e.g. /soak 7d)\n"
         "/usage - Show Claude Code quota (tokens + block time remaining)\n\n"
         "Each forum topic runs as an independent Claude session."
     )
@@ -2192,6 +2193,47 @@ async def cmd_activity(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await update.message.reply_text("\n".join(out_lines))
 
 
+async def cmd_soak(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Run the harness soak comparison and post the table.
+
+    Usage:
+      /soak               - all-time
+      /soak 7d            - last 7 days (e.g. 24h, 30m, 3d)
+      /soak 7d <session>  - filter to one session_key
+    """
+
+    parts = (update.message.text or "").split(maxsplit=2)
+    since = parts[1] if len(parts) > 1 else None
+    session = parts[2] if len(parts) > 2 else None
+
+    cmd = ["uv", "run", "python", "scripts/harness_soak.py"]
+    if since:
+        cmd += ["--since", since]
+    if session:
+        cmd += ["--session", session]
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            cwd=str(Path(__file__).parent),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+    except (asyncio.TimeoutError, OSError) as exc:
+        await update.message.reply_text(f"/soak failed: {exc}")
+        return
+
+    if proc.returncode != 0:
+        err = (stderr or b"").decode(errors="replace")[:500]
+        await update.message.reply_text(f"/soak exit {proc.returncode}: {err}")
+        return
+
+    out = (stdout or b"").decode(errors="replace").strip() or "(no output)"
+    escaped = out.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    await update.message.reply_text(f"<pre>{escaped}</pre>", parse_mode="HTML")
+
+
 async def cmd_ping(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not any(s.processing for s in _sessions.values()):
         await update.message.reply_text("pong — no active sessions")
@@ -2532,6 +2574,7 @@ def main() -> None:
     app.add_handler(CommandHandler("ping", cmd_ping))
     app.add_handler(CommandHandler("health", cmd_health))
     app.add_handler(CommandHandler("activity", cmd_activity))
+    app.add_handler(CommandHandler("soak", cmd_soak))
     app.add_handler(CommandHandler("usage", cmd_usage))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
