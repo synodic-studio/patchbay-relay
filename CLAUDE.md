@@ -18,6 +18,7 @@ The bridge is modularized into a `stargate/` package with focused modules. `brid
 | `stargate/activity.py` | Structured JSON-lines activity logging |
 | `stargate/projects.py` | Chat-to-project directory mapping |
 | `stargate/self_heal.py` | Repair-agent dispatcher — corrupt-session quarantine, stale-poller signal, claude OOM retry. See CTB-die. |
+| `stargate/harness/` | Pluggable agent backends — `base.py` = protocol + TurnEvent types, `claude_cli.py` = current CLI backend. See `docs/HARNESS-DESIGN.md`. CTB-cyz. |
 | `validate.py` | Pre-flight validation (syntax, imports, smoke tests for all modules) |
 
 ### Supporting files
@@ -28,7 +29,7 @@ The bridge is modularized into a `stargate/` package with focused modules. `brid
 
 ### Testing
 
-422 tests across the `tests/` dir. Run with `uv run pytest tests/`. The suite includes property tests (`hypothesis`), a `claude` chaos test that materializes a fake binary across 7 failure modes, real drain/debounce integration tests synchronized via `threading.Event`, and self-heal dispatcher tests.
+529 tests across the `tests/` dir. Run with `uv run pytest tests/`. The suite includes property tests (`hypothesis`), a `claude` chaos test that materializes a fake binary across 7 failure modes, real drain/debounce integration tests synchronized via `threading.Event`, and self-heal dispatcher tests.
 
 When patching in tests, use the actual module path (e.g., `stargate.sessions.SESSION_DIR`, not `bridge.SESSION_DIR`) since functions in `stargate/` reference their own module's imports.
 
