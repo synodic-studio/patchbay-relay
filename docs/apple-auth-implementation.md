@@ -2,19 +2,17 @@
 
 This document describes the Sign in with Apple (SIWA) and TOTP authentication system that was built for Stargate, how it worked, why it was separated from the bridge's message-handling path, and how to bring it back.
 
+> **Status note.** The repo's git history was squashed to a single Initial commit when the project went public. The pre-squash state is preserved on the remote at the `v0-pre-public` tag. To browse the historical implementation: `git fetch origin v0-pre-public && git checkout v0-pre-public`. Any commit SHAs referenced below resolve only from that tag.
+
 ## Why It Was Separated
 
-The auth layer was removed from bridge.py in commit `11dcacf` (2026-03-19) with the message:
-
-> The auth system (Sign in with Apple, session tokens, user allowlists, rate limiting) added fragility to an already fragile Telegram bridge.
-
-Specifically:
+The auth layer was separated from `bridge.py` because:
 
 - **Self-hosting friction.** Sign in with Apple requires an Apple Developer account ($99/year), a registered Services ID, a private key, domain verification, and a Cloudflare Tunnel (or equivalent reverse proxy). This makes self-hosting significantly harder.
 - **Fragility.** The auth guards, rate limiting, IP pinning, and session management added failure modes to a system that already had enough. A bug in auth could lock the operator out of their own bridge.
 - **Single-user context.** For a single-operator system, Telegram's own bot-token isolation (only people who know the bot token can find it) provides a reasonable baseline. The auth layer was defense-in-depth for a threat model that didn't justify the maintenance burden.
 
-The auth module files (`auth.py`, `auth_server.py`, `setup_totp.py`, `run_auth.sh`, `run_apple_auth.sh`, `dev.kj6.auth-bridge.plist`, `auth/` data dir, and the corresponding tests) were also removed on 2026-04-24. To revive auth, recover them from the git history at commit `7acc661` or earlier — this document describes the design they implemented.
+All auth module files (`auth.py`, `auth_server.py`, `setup_totp.py`, `run_auth.sh`, `run_apple_auth.sh`, `dev.kj6.auth-bridge.plist`, the `auth/` data dir, and the corresponding `tests/test_auth_*` files) were removed when the auth layer was retired. To revive auth, recover them from the `v0-pre-public` tag — this document describes the design they implemented.
 
 ## Architecture Overview
 
@@ -102,7 +100,7 @@ Generates a TOTP secret, displays a QR code for authenticator apps, and writes t
 **Verification:**
 `auth.authenticate_totp(telegram_user_id, code)` verifies the 6-digit code via pyotp with a valid_window of 1 (+-30 seconds). On success, creates a session with `auth_method: "totp"` (no IP pinning for TOTP sessions).
 
-A commit (`112997f`) added inline TOTP interception: when `AUTH_REQUIRED` was enabled and the user was unauthenticated, a plain 6-digit numeric message was treated as a TOTP code rather than triggering the auth-link flow.
+A late refinement added inline TOTP interception: when `AUTH_REQUIRED` was enabled and the user was unauthenticated, a plain 6-digit numeric message was treated as a TOTP code rather than triggering the auth-link flow.
 
 ### Session Model
 
@@ -165,8 +163,8 @@ All auth events are appended to `auth/auth_log.jsonl`:
 |---|---|
 | `auth.py` | All session state: create, validate, expire, lock, rate limit, TOTP verify, token generation/consumption, audit logging, notification dispatch |
 | `auth_server.py` | FastAPI app with `/login` (serves HTML), `/callback` (Apple OIDC POST handler), `/health`. Generates Apple client secret JWTs. Verifies Apple id_tokens against Apple's public keys. Enforces subject allowlist. |
-| `bridge.py` (removed) | `_check_auth()` guard on message/photo handlers. `_send_auth_link()` token generation + link. `cmd_auth` / `cmd_lock` command handlers. `_auth_notify()` Telegram notification callback. `ALLOWED_USER_IDS` gate on all commands. |
-| `stargate/config.py` (removed) | `ALLOWED_USER_IDS` parsing, `AUTH_REQUIRED` flag, `AUTH_BASE_URL` constant. |
+| `bridge.py` (auth code retired) | `_check_auth()` guard on message/photo handlers. `_send_auth_link()` token generation + link. `cmd_auth` / `cmd_lock` command handlers. `_auth_notify()` Telegram notification callback. `ALLOWED_USER_IDS` gate on all commands. |
+| `stargate/config.py` (auth code retired) | `ALLOWED_USER_IDS` parsing, `AUTH_REQUIRED` flag, `AUTH_BASE_URL` constant. |
 | `setup_totp.py` | CLI tool for TOTP secret generation with QR code display and verification. |
 | `run_auth.sh` | Shell wrapper: starts auth_server.py and Cloudflare Tunnel, traps signals for clean shutdown. |
 | `dev.kj6.auth-bridge.plist` | launchd plist for persistent auth server service. |
@@ -224,7 +222,7 @@ Auth-specific Python packages (already in `pyproject.toml`):
 
 ### Step 1: Restore config values in `stargate/config.py`
 
-Add back the removed constants (see commit `11dcacf` for the exact diff):
+Add back the removed constants (the exact diff is reachable from the `v0-pre-public` tag):
 
 ```python
 # --- User allowlist ---
@@ -251,7 +249,7 @@ AUTH_REQUIRED = os.environ.get("AUTH_REQUIRED", "false").lower() == "true"
 
 ### Step 2: Restore auth guards in `bridge.py`
 
-Add back (see commit `11dcacf` for exact locations):
+Add back (exact locations are reachable from the `v0-pre-public` tag):
 
 1. `import auth` at the top.
 2. Import `ALLOWED_USER_IDS`, `AUTH_BASE_URL`, `AUTH_REQUIRED` from `stargate.config`.
@@ -298,22 +296,17 @@ launchctl load ~/Library/LaunchAgents/dev.kj6.auth-bridge.plist
 4. Confirm subsequent messages are processed normally.
 5. Check `auth/auth_log.jsonl` for the `authenticated` event.
 
-## Existing Tests
+## Tests (also retired)
 
-Three test files cover the auth system and are still in the repo:
+Three test files covered the auth system. They were removed alongside the auth code and are recoverable from the `v0-pre-public` tag:
 
-- `tests/test_auth_comprehensive.py` -- Session management, IP checking, rate limiting, auth tokens, TOTP.
-- `tests/test_auth_server_allowlist.py` -- Subject allowlist enforcement, empty-subject rejection, source failure logging.
-- `tests/test_auth_server_endpoints.py` -- FastAPI endpoint tests for `/login`, `/callback`, `/health`.
-
-Run them with:
-```bash
-uv run pytest tests/test_auth_comprehensive.py tests/test_auth_server_allowlist.py tests/test_auth_server_endpoints.py -v
-```
+- `tests/test_auth_comprehensive.py` — Session management, IP checking, rate limiting, auth tokens, TOTP.
+- `tests/test_auth_server_allowlist.py` — Subject allowlist enforcement, empty-subject rejection, source failure logging.
+- `tests/test_auth_server_endpoints.py` — FastAPI endpoint tests for `/login`, `/callback`, `/health`.
 
 ## Security Considerations
 
-Notable hardening that was applied (commit `b939d3d`, `198bc7c`):
+Notable hardening that was applied to the auth layer:
 
 - **Empty `sub` claim rejection.** Tokens with missing or empty Apple subject get 403 + failed attempt, regardless of allowlist state.
 - **Allowlist source failure logging.** If `pass` or keychain lookup fails, a WARNING is emitted so the operator knows the allowlist isn't loaded.
