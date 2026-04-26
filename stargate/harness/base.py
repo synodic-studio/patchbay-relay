@@ -49,6 +49,7 @@ class HarnessCapabilities:
     supports_interrupt: bool       # cancel() works without SIGKILL
     supports_effort: bool          # honors low/medium/high/max effort
     supports_mcp: bool             # can load MCP servers
+    supports_inflight_push: bool = False  # accepts new user messages mid-turn (channels)
 
 
 @dataclass(frozen=True)
@@ -157,6 +158,69 @@ class Harness(Protocol):
         """Best-effort cancel of the in-flight turn (if any). Idempotent.
         /kill calls this. May SIGKILL on harnesses without graceful
         cancellation (`capabilities.supports_interrupt=False`)."""
+        ...
+
+
+@runtime_checkable
+class ChannelCapableHarness(Protocol):
+    """Optional secondary protocol for harnesses that support channels.
+
+    Bridge calls `isinstance(h, ChannelCapableHarness)` (or, equivalently,
+    checks `h.capabilities.supports_inflight_push`) before invoking
+    `open_channel`. Keeping this off the base Harness Protocol means
+    legacy harnesses don't have to add a no-op stub to satisfy structural
+    typing.
+    """
+
+    capabilities: HarnessCapabilities
+
+    async def open_channel(self, req: TurnRequest) -> "ChannelHandle":
+        """Open a long-lived conversation supporting mid-flight pushes.
+
+        Only callable when `capabilities.supports_inflight_push` is True.
+        """
+        ...
+
+
+@runtime_checkable
+class ChannelHandle(Protocol):
+    """A long-lived agent conversation that accepts mid-flight messages.
+
+    Returned by `Harness.open_channel(req)` for harnesses where
+    `capabilities.supports_inflight_push` is True.
+
+    Lifecycle:
+    - `events()` yields `TurnEvent`s for the entire conversation, across
+      multiple user messages. The stream stays open until `close()`.
+    - Each call to `push(prompt)` enqueues a new user message. The model
+      processes them in order at its next decision point. There is no
+      one-to-one mapping between `push` calls and `TurnFinal` events;
+      the agent may emit a TurnFinal between turns.
+    - `interrupt()` cancels the in-flight turn but leaves the channel
+      open for further pushes.
+    - `close()` is idempotent; events() ends shortly after.
+
+    `session_id` is populated as soon as the underlying agent surfaces
+    one (typically after the first model response). Callers may read it
+    at any time but should expect None until then.
+    """
+
+    session_id: str | None
+
+    async def push(self, prompt: str) -> None:
+        """Enqueue a new user message into the open conversation."""
+        ...
+
+    def events(self) -> AsyncIterator[TurnEvent]:
+        """Async iterator over events for the lifetime of the channel."""
+        ...
+
+    async def interrupt(self) -> None:
+        """Cancel the in-flight turn. Channel stays open."""
+        ...
+
+    async def close(self) -> None:
+        """Close the channel and underlying transport. Idempotent."""
         ...
 
 

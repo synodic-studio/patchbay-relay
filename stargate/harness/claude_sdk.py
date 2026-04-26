@@ -40,6 +40,7 @@ _CAPABILITIES = HarnessCapabilities(
     supports_interrupt=True,        # task cancellation propagates to subprocess
     supports_effort=True,
     supports_mcp=True,
+    supports_inflight_push=True,    # client.query() injects mid-conversation
 )
 
 
@@ -211,6 +212,22 @@ class ClaudeSdkHarness:
             await task
         except (asyncio.CancelledError, Exception):  # noqa: BLE001 — silence everything during cancel
             pass
+
+    async def open_channel(self, req: TurnRequest):
+        """Open a long-lived ClaudeSdkChannel for inflight pushes.
+
+        Returns a `ChannelHandle` that wraps a persistent ClaudeSDKClient.
+        The bridge calls this when `capabilities.supports_inflight_push`
+        is True and no channel is currently held for the session_key.
+        """
+        from claude_agent_sdk import ClaudeAgentOptions
+
+        from .claude_sdk_channel import ClaudeSdkChannel
+
+        options = self._build_options(req, ClaudeAgentOptions)
+        channel = ClaudeSdkChannel(options=options, on_progress=self._on_progress)
+        await channel.open(req.prompt)
+        return channel
 
     # ---- Internals ----
 

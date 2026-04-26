@@ -14,6 +14,7 @@ chat_efforts.json
 activity.jsonl
 .tcc-paths
 .aider*
+aider-history/
 .crash-timestamps
 .bridge-known-good.py
 .bridge.lock

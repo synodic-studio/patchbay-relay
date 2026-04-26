@@ -2,6 +2,11 @@
 
 Telegram bot bridge that routes messages to Claude Code sessions.
 
+## Principles
+
+- **Agnostic.** Stargate is a transport between Telegram and *any* coding agent. New features (channels, tuning presets, memory, etc.) must work across all harnesses (cc-cli, cc-sdk, pi, aider, opencode) when the underlying capability exists, and degrade gracefully where it doesn't. Don't bake claude-only assumptions into the bridge.
+- **Headless.** Every workflow must be scriptable from the phone via Telegram. No GUI, no Mac-side manual steps.
+
 ## Architecture
 
 The bridge is modularized into a `stargate/` package with focused modules. `bridge.py` is the entrypoint that wires everything together and re-exports symbols for backward compatibility.
@@ -18,7 +23,7 @@ The bridge is modularized into a `stargate/` package with focused modules. `brid
 | `stargate/activity.py` | Structured JSON-lines activity logging |
 | `stargate/projects.py` | Chat-to-project directory mapping |
 | `stargate/self_heal.py` | Repair-agent dispatcher — corrupt-session quarantine, stale-poller signal, claude OOM retry. See CTB-die. |
-| `stargate/harness/` | Pluggable agent backends — `base.py` = protocol + TurnEvent types, `claude_cli.py` = CLI subprocess backend, `claude_sdk.py` = Claude Agent SDK backend, `pi.py` = badlogicgames/pi multi-model coding agent, `aider.py` = aider-chat with chat-history-file resume (default `openrouter/deepseek/deepseek-chat`, override via `STARGATE_AIDER_MODEL`), `opencode.py` = sst/opencode JSON event protocol (default `openrouter/deepseek/deepseek-chat-v3.1`, override via `STARGATE_OPENCODE_MODEL`). See `docs/HARNESS-DESIGN.md`. CTB-cyz. |
+| `stargate/harness/` | Pluggable agent backends — `base.py` = protocol + TurnEvent types + `ChannelHandle`/`ChannelCapableHarness`, `claude_cli.py` = CLI subprocess backend, `claude_sdk.py` = Claude Agent SDK backend, `claude_sdk_channel.py` = long-lived `ClaudeSDKClient` wrapper for inflight-push channels (cc-sdk only — see `docs/CHANNELS-DESIGN.md`; primitive shipped, bridge wiring pending), `pi.py` = badlogicgames/pi multi-model coding agent, `aider.py` = aider-chat with chat-history-file resume (default `openrouter/deepseek/deepseek-chat`, override via `STARGATE_AIDER_MODEL`), `opencode.py` = sst/opencode JSON event protocol (default `openrouter/deepseek/deepseek-chat-v3.1`, override via `STARGATE_OPENCODE_MODEL`). See `docs/HARNESS-DESIGN.md`. CTB-cyz. |
 | `validate.py` | Pre-flight validation (syntax, imports, smoke tests for all modules) |
 
 ### Supporting files

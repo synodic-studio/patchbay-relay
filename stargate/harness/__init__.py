@@ -8,6 +8,8 @@ See docs/HARNESS-DESIGN.md for the full design.
 """
 
 from .base import (
+    ChannelCapableHarness,
+    ChannelHandle,
     Harness,
     HarnessCapabilities,
     TextDelta,
@@ -27,6 +29,8 @@ from .pi import PiHarness
 
 __all__ = [
     "AiderHarness",
+    "ChannelCapableHarness",
+    "ChannelHandle",
     "ClaudeCliHarness",
     "ClaudeSdkHarness",
     "OpenCodeHarness",
