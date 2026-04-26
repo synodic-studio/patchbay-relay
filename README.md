@@ -8,23 +8,29 @@ Stargate bridges Telegram to AI coding agents running on your own machine — Cl
 
 ## Why this exists
 
-I run a one-person indie shop from a Mac Mini in a closet. No laptop. The phone in my pocket is the only screen I carry around. Most "AI coding from your phone" tools mean talking to a chatbot with no access to your real code, your real tools, or your real environment — which is fine for asking questions, useless for actual work. I wanted the opposite: my actual machine, my actual repos, my actual `git` and `uv` and `tuist` and `cargo`, driven from anywhere.
+Most "AI coding from your phone" tools mean chatting with an LLM that has no access to your real code, your real tools, or your real environment — fine for asking questions, useless for actual work. Stargate inverts that: the real machine in another room does the real work, the phone just drives.
 
-The trick was realizing Telegram already had the right shape. Forum-mode group topics are just persistent threaded conversations — give each topic its own working directory and its own agent session, and now your phone becomes a multi-project remote control. Topic `#fanta` is an agent session in `~/Developer/Fanta`. Topic `#deskdays` is one in `~/Developer/deskdays`. Switch between them by tapping a topic. Each one has full filesystem access, full tool access, full process control, on the actual machine where your work lives.
+The architecture leverages Telegram's forum-mode group topics — persistent threaded conversations that already provide the routing primitives multi-project work needs. Each topic binds to a project directory and an agent session. Topic `#myproject` is an agent session in `~/Developer/myproject`. Topic `#another` is one in `~/Developer/another`. Switching between them is one tap. Each topic has full filesystem access, full tool access, and full process control on the actual workstation where the code lives.
 
-Stargate is the transport layer that makes this work: a Python service that listens for Telegram messages, routes each to the right project + agent + harness, runs the turn, and streams the response back. It survives its own self-edits, recovers from its own crashes, and does not care which agent you choose to put behind it.
+Stargate is the transport: a Python service that listens for Telegram messages, routes each to the right project, agent, and harness, runs the turn, and streams the response back. It survives its own self-edits, recovers from its own crashes, and is agnostic to which agent runs the turn.
 
-## How I actually use it
+## What it enables
 
-- **Cover letter drafts on a 4-hour flight.** Topic `#lighthouse` is bound to my career-search agent. I dictate the JD into Telegram, the agent reads my work history, drafts a tailored cover letter, and writes it to my Obsidian vault. By the time I land, three letters are ready for review.
-- **Debugging Hugo deploys from a coffee shop.** Topic `#synodic-co` is bound to the website repo. `tail of bridge.log says 503 from CF Pages` — the agent pulls Cloudflare logs, finds the misconfigured redirect, fixes the `_redirects` file, commits, deploys, and replies "fixed, live in 30s."
-- **Triaging email on the bus.** Topic `#buddy` runs my email-triage agent. It batches overnight inbox into priority buckets, flags anything that needs me, drafts responses for the rest. I tap reply, dictate edits, it sends.
-- **Watching a build self-heal at dinner.** Stargate's own bridge crashed with a parser bug while I was eating. Crash-loop detection fired a self-heal session, which read the traceback, found the bug, wrote the fix, validated it, and restarted. I got a Telegram message saying "fixed, recovered, here's the diff."
-- **Setting up new repos in 90 seconds.** `spin up a new repo for X with the standard pre-push hooks` — the agent creates the GitHub repo, configures branch protection via the API, sets up the `develop`/`production` convention, copies in the linting hooks, commits the initial scaffold. I never leave Telegram.
+Concrete examples of work driven from a phone with the workstation in another room:
 
-The unifying property: my phone never has to do real work. The Mac Mini does. My phone is just the keyboard.
+- **Long-form drafting on the move.** A topic bound to a research/writing agent reads work history and drafts long-form documents on demand — cover letters, project briefs, design memos — written to a synced markdown vault, ready to review on landing.
+- **Repo work from anywhere.** A topic bound to a project directory accepts plain-language change requests. The agent pulls logs, finds bugs, fixes code, runs tests, commits, deploys, and replies with the diff. The phone never holds a checkout; the workstation does.
+- **Inbox triage on a commute.** A topic bound to an email-triage agent batches overnight inbox into priority buckets, flags items that need a human, drafts replies for the rest. Tap, dictate edits, send.
+- **Self-healing during downtime.** Crash-loop detection runs autonomously. Three crashes within five minutes triggers a self-heal session that reads the traceback, finds the bug, writes the fix, validates it, and restarts. A Telegram message lands with the diff after the fact.
+- **Repo provisioning by message.** A single message provisions a new GitHub repo — branch protection, default-branch convention, lint hooks, initial scaffold — all via API. Done in seconds without leaving Telegram.
+
+The unifying property: the phone never holds the work. The workstation does. The phone is just the keyboard.
 
 ## Architecture
+
+![Stargate architecture: Telegram forum topic to bridge.py to per-topic session to harness backend to agent subprocess to project directory](docs/img/architecture.svg)
+
+<details><summary>Mermaid source</summary>
 
 ```mermaid
 flowchart LR
@@ -44,6 +50,8 @@ flowchart LR
     Agent --> Harness
     Harness --> Bridge
 ```
+
+</details>
 
 Each Telegram forum topic maps to an independent agent session. Multiple topics run in parallel, each with its own project directory, harness backend, and session state. Sessions persist across messages and auto-expire after configurable inactivity.
 
