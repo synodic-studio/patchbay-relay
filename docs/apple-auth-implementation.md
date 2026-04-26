@@ -85,7 +85,7 @@ payload = {
 # Signed with ES256, kid=APPLE_KEY_ID
 ```
 
-This JWT is used when exchanging the authorization code at Apple's token endpoint (though the current implementation uses the `id_token` from the form_post directly and doesn't call the token endpoint separately).
+This JWT is used when exchanging the authorization code at Apple's token endpoint. The retired implementation actually used the `id_token` from the form_post directly and did not call the token endpoint separately — the JWT generation code was kept against future need.
 
 ### TOTP Flow (Alternative Auth)
 
@@ -182,7 +182,7 @@ All auth events are appended to `auth/auth_log.jsonl`:
 
 ### Environment Variables
 
-All auth-related env vars, as documented in `.env.example`:
+The `.env.example` file no longer documents these (the entries were removed alongside the auth code). When reviving auth, re-add them:
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
@@ -211,12 +211,13 @@ This routes `auth.kj6.dev` to `localhost:8443`. The tunnel is managed by launchd
 
 ### Dependencies
 
-Auth-specific Python packages (already in `pyproject.toml`):
-- `PyJWT` -- JWT creation (client secret) and verification (Apple id_token)
-- `httpx` -- async HTTP client for fetching Apple's public keys
-- `fastapi` + `uvicorn` -- OIDC callback server
-- `pyotp` -- TOTP generation and verification
-- `qrcode` -- QR code display in `setup_totp.py` (optional, setup-time only)
+The auth-specific Python packages were removed from `pyproject.toml` when auth was retired (except `httpx`, which is used elsewhere). Reinstall when reviving auth:
+
+- `PyJWT` — JWT creation (client secret) and verification (Apple id_token)
+- `httpx` — async HTTP client for fetching Apple's public keys (already a dep)
+- `fastapi` + `uvicorn` — OIDC callback server
+- `pyotp` — TOTP generation and verification
+- `qrcode` — QR code display in `setup_totp.py` (optional, setup-time only)
 
 ## How to Bring It Back
 
@@ -273,7 +274,7 @@ Add back (exact locations are reachable from the `v0-pre-public` tag):
 1. Set `AUTH_REQUIRED=true` in `.env`.
 2. Set `ALLOWED_USER_IDS` to your Telegram user ID.
 3. Set the `APPLE_*` variables (or skip Apple and use TOTP only).
-4. Store your Apple subject allowlist in `pass`: `pass insert apple-subject-allowlist`.
+4. Store your Apple subject allowlist somewhere `auth_server.py` can find it. Original setup used [pass](https://www.passwordstore.org/) (`pass insert apple-subject-allowlist`); the env var fallback `APPLE_SUBJECT_ALLOWLIST` works too.
 5. Set up TOTP: `uv run setup_totp.py --user-id <your-telegram-user-id>`.
 
 ### Step 4: Start the auth server
@@ -291,8 +292,8 @@ launchctl load ~/Library/LaunchAgents/dev.kj6.auth-bridge.plist
 ### Step 5: Verify
 
 1. Start the bridge with `AUTH_REQUIRED=true`.
-2. Send any message in Telegram -- should get an auth link.
-3. Click the link, sign in with Apple (or use `/totp <code>` if TOTP-only).
+2. Send any message in Telegram. The bot should reply with an auth link.
+3. Click the link and sign in with Apple. For TOTP, send a plain 6-digit code as a Telegram message — it gets intercepted as a TOTP attempt before triggering the auth-link flow.
 4. Confirm subsequent messages are processed normally.
 5. Check `auth/auth_log.jsonl` for the `authenticated` event.
 
