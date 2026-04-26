@@ -22,6 +22,8 @@ from collections.abc import AsyncIterator, Callable
 from ..config import CLAUDE_PATH, MAX_TIMEOUT, MAX_TURNS, logger
 from ..quota import is_quota_error
 from .base import (
+    CompactResult,
+    ContextUsage,
     Harness,
     HarnessCapabilities,
     TextDelta,
@@ -41,6 +43,8 @@ _CAPABILITIES = HarnessCapabilities(
     supports_effort=True,
     supports_mcp=True,
     supports_inflight_push=True,    # client.query() injects mid-conversation
+    supports_context_query=True,    # client.get_context_usage()
+    supports_compact=True,          # /compact slash command via client.query()
 )
 
 
@@ -229,6 +233,71 @@ class ClaudeSdkHarness:
         await channel.open(req.prompt)
         return channel
 
+    async def get_context(self, req: TurnRequest) -> ContextUsage:
+        """Open a transient client and read its context-window usage.
+
+        For `/context` from the bridge. Cheap-ish — opens a fresh client
+        that resumes the session (if `req.resume_session_id` is set) and
+        immediately calls `get_context_usage()` before disconnecting.
+        Captured totals match what the CLI's `/context` would show.
+        """
+        from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
+
+        options = self._build_options(req, ClaudeAgentOptions)
+        async with ClaudeSDKClient(options=options) as client:
+            usage = await client.get_context_usage()
+        return ContextUsage(
+            used_tokens=int(usage.get("totalTokens", 0)),
+            max_tokens=int(usage.get("rawMaxTokens") or usage.get("maxTokens", 0)),
+            percentage=float(usage.get("percentage", 0)),
+            model=usage.get("model"),
+        )
+
+    async def compact(
+        self, req: TurnRequest, instructions: str | None = None
+    ) -> CompactResult:
+        """Trigger claude's `/compact` slash command on the live session.
+
+        We open a transient client that resumes the session, sample the
+        context size, push `/compact` (with optional steering text) as
+        a user message, drain the response, then re-sample. Returns a
+        CompactResult the bridge can show to Adrien.
+        """
+        from claude_agent_sdk import (
+            ClaudeAgentOptions,
+            ClaudeSDKClient,
+            ResultMessage,
+        )
+
+        options = self._build_options(req, ClaudeAgentOptions)
+        prompt = "/compact" if not instructions else f"/compact {instructions}"
+        try:
+            async with ClaudeSDKClient(options=options) as client:
+                before = await client.get_context_usage()
+                tokens_before = int(before.get("totalTokens", 0))
+                await client.query(prompt)
+                # Drain until ResultMessage to make sure compaction completes
+                # before we re-sample.
+                async for msg in client.receive_response():
+                    if isinstance(msg, ResultMessage):
+                        break
+                after = await client.get_context_usage()
+                tokens_after = int(after.get("totalTokens", 0))
+        except Exception as e:  # noqa: BLE001 — surface as failure, not crash
+            logger.exception("ClaudeSdkHarness.compact failed")
+            return CompactResult(
+                succeeded=False,
+                message=f"Compact failed: {e}",
+            )
+        return CompactResult(
+            succeeded=True,
+            message=(
+                f"Context compacted: {_fmt_k(tokens_before)} → {_fmt_k(tokens_after)}"
+            ),
+            tokens_before=tokens_before,
+            tokens_after=tokens_after,
+        )
+
     # ---- Internals ----
 
     def _build_options(self, req: TurnRequest, options_cls):
@@ -351,6 +420,15 @@ class ClaudeSdkHarness:
             retryable=True,
             metadata={"exit_code": exit_code, "stderr": stderr[:200]},
         )
+
+
+def _fmt_k(n: int) -> str:
+    """Render token counts as '12.3k' / '1.0M' for short messages."""
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n / 1_000:.1f}k"
+    return str(n)
 
 
 def _stringify_tool_output(content) -> str:

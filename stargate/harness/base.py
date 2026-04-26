@@ -49,7 +49,9 @@ class HarnessCapabilities:
     supports_interrupt: bool       # cancel() works without SIGKILL
     supports_effort: bool          # honors low/medium/high/max effort
     supports_mcp: bool             # can load MCP servers
-    supports_inflight_push: bool = False  # accepts new user messages mid-turn (channels)
+    supports_inflight_push: bool = False    # accepts new user messages mid-turn (channels)
+    supports_context_query: bool = False    # can report current token usage
+    supports_compact: bool = False          # can compact / summarize the running context
 
 
 @dataclass(frozen=True)
@@ -178,6 +180,65 @@ class ChannelCapableHarness(Protocol):
         """Open a long-lived conversation supporting mid-flight pushes.
 
         Only callable when `capabilities.supports_inflight_push` is True.
+        """
+        ...
+
+
+@dataclass(frozen=True)
+class ContextUsage:
+    """Snapshot of token usage for one session.
+
+    Returned by `ContextQueryCapableHarness.get_context()`. Only the
+    totals are required; details are optional and omitted by harnesses
+    that can't report them.
+    """
+
+    used_tokens: int
+    max_tokens: int
+    percentage: float           # 0.0 to 100.0
+    model: str | None = None    # model whose context window is being measured
+
+
+@dataclass(frozen=True)
+class CompactResult:
+    """Outcome of a `compact()` call."""
+
+    succeeded: bool
+    message: str                # human-readable status (e.g. "Context compacted")
+    tokens_before: int | None = None
+    tokens_after: int | None = None
+
+
+@runtime_checkable
+class ContextQueryCapableHarness(Protocol):
+    """Optional secondary protocol for harnesses that can report token usage."""
+
+    capabilities: HarnessCapabilities
+
+    async def get_context(self, req: TurnRequest) -> ContextUsage:
+        """Report current context-window usage for this session.
+
+        `req` carries the session/cwd/model needed to resolve which
+        underlying agent state to query. Implementations may open a
+        transient subprocess if no live channel is held.
+        """
+        ...
+
+
+@runtime_checkable
+class CompactCapableHarness(Protocol):
+    """Optional secondary protocol for harnesses that can compact context."""
+
+    capabilities: HarnessCapabilities
+
+    async def compact(
+        self, req: TurnRequest, instructions: str | None = None
+    ) -> CompactResult:
+        """Compact the running context, optionally steered by `instructions`.
+
+        Mirrors the user-facing /compact slash command in claude code:
+        runs the agent's compaction routine on the current session,
+        returning a brief result the bridge can show in Telegram.
         """
         ...
 

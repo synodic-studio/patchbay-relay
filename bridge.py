@@ -109,6 +109,7 @@ from stargate.sessions import (  # noqa: E402
     save_session_id,
 )
 from stargate.harness import (  # noqa: E402
+    CAPABILITIES_BY_NAME,
     ClaudeCliHarness,
     ClaudeSdkHarness,
     ToolUse,  # noqa: F401 — re-exported for tests
@@ -1516,6 +1517,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/health - Disk, queues, uptime, counts\n"
         "/activity [event] [count] - Recent activity.jsonl entries (e.g. /activity self_heal)\n"
         "/soak [since] [session] - Compare harness backends (e.g. /soak 7d)\n"
+        "/context - Show context-window usage for this chat (cc-sdk only)\n"
+        "/compact [steering] - Compact the running context (cc-sdk only)\n"
         "/usage - Show Claude Code quota (tokens + block time remaining)\n\n"
         "Each forum topic runs as an independent Claude session."
     )
@@ -2227,6 +2230,151 @@ async def cmd_activity(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await update.message.reply_text("\n".join(out_lines))
 
 
+def _resolve_harness_for_inquiry(session_key: str):
+    """Build a harness instance + TurnRequest suitable for one-shot inquiry
+    methods (get_context, compact). Mirrors the dispatch in run_claude
+    minus the proc-mirroring and per-turn callbacks. Returns
+    (harness_name, harness, req) or None if the chat's harness doesn't
+    exist or isn't suitable.
+    """
+    chat_cwd = get_chat_working_dir(session_key)
+    session_id = get_session_id(session_key)
+    model = get_chat_model(session_key)
+    effort = resolve_effort(session_key)
+
+    harness_name = get_chat_harness(session_key) or DEFAULT_HARNESS
+    if harness_name not in VALID_HARNESSES:
+        harness_name = DEFAULT_HARNESS
+
+    if harness_name == "cc-sdk":
+        harness = ClaudeSdkHarness(
+            cli_path=CLAUDE_PATH, max_timeout_seconds=MAX_TIMEOUT
+        )
+    elif harness_name == "cc-cli":
+        harness = ClaudeCliHarness(
+            claude_path=CLAUDE_PATH, max_timeout_seconds=MAX_TIMEOUT
+        )
+    elif harness_name == "pi":
+        from stargate.harness import PiHarness
+        harness = PiHarness(max_timeout_seconds=MAX_TIMEOUT)
+    elif harness_name == "aider":
+        from stargate.harness import AiderHarness
+        harness = AiderHarness(max_timeout_seconds=MAX_TIMEOUT)
+    elif harness_name == "opencode":
+        from stargate.harness import OpenCodeHarness
+        harness = OpenCodeHarness(max_timeout_seconds=MAX_TIMEOUT)
+    else:
+        return None
+
+    req = TurnRequest(
+        prompt="",  # /context and /compact set their own prompt
+        session_key=session_key,
+        project_dir=Path(chat_cwd),
+        system_prompt="",
+        resume_session_id=session_id,
+        model=model,
+        effort=effort,
+        allowed_tools=None,
+        disallowed_tools=None,
+        max_turns=None,
+        plugin_dir=None,
+    )
+    return harness_name, harness, req
+
+
+def _fmt_tokens(n: int) -> str:
+    """Render token counts as '12.3k' / '1.0M'."""
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n / 1_000:.1f}k"
+    return str(n)
+
+
+async def cmd_context(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show current context-window usage for this chat's session.
+
+    cc-sdk only today (cc-cli/pi/aider/opencode advertise
+    supports_context_query=False). For unsupported harnesses, suggest
+    /harness cc-sdk.
+    """
+    chat_id = update.effective_chat.id
+    thread_id = update.message.message_thread_id
+    key = _session_key(chat_id, thread_id)
+
+    resolved = _resolve_harness_for_inquiry(key)
+    if resolved is None:
+        await update.message.reply_text("No harness configured for this chat.")
+        return
+    harness_name, harness, req = resolved
+
+    caps = CAPABILITIES_BY_NAME.get(harness_name)
+    if caps is None or not caps.supports_context_query:
+        await update.message.reply_text(
+            f"/context isn't supported on {harness_name} yet. "
+            f"Try /harness cc-sdk for this chat."
+        )
+        return
+
+    try:
+        usage = await harness.get_context(req)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("/context failed for %s", key)
+        await update.message.reply_text(f"Couldn't read context: {exc}")
+        return
+
+    used = _fmt_tokens(usage.used_tokens)
+    cap = _fmt_tokens(usage.max_tokens)
+    pct = f"{usage.percentage:.0f}%"
+    await update.message.reply_text(f"Context: {used} / {cap} ({pct})")
+
+
+async def cmd_compact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Compact the running context. Optional steering text after the command.
+
+    cc-sdk only today. Sends `/compact [instructions]` into a transient
+    SDK client connected to the current session and reports before/after
+    token counts.
+    """
+    chat_id = update.effective_chat.id
+    thread_id = update.message.message_thread_id
+    key = _session_key(chat_id, thread_id)
+
+    parts = (update.message.text or "").split(maxsplit=1)
+    instructions = parts[1].strip() if len(parts) > 1 else None
+
+    resolved = _resolve_harness_for_inquiry(key)
+    if resolved is None:
+        await update.message.reply_text("No harness configured for this chat.")
+        return
+    harness_name, harness, req = resolved
+
+    caps = CAPABILITIES_BY_NAME.get(harness_name)
+    if caps is None or not caps.supports_compact:
+        await update.message.reply_text(
+            f"/compact isn't supported on {harness_name} yet. "
+            f"Try /harness cc-sdk for this chat."
+        )
+        return
+
+    if not req.resume_session_id:
+        await update.message.reply_text(
+            "Nothing to compact — no active session in this chat. "
+            "Send a message first to start one."
+        )
+        return
+
+    await update.message.reply_text("Compacting context…")
+    try:
+        result = await harness.compact(req, instructions=instructions)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("/compact failed for %s", key)
+        await update.message.reply_text(f"Compact failed: {exc}")
+        return
+
+    await update.message.reply_text(result.message)
+
+
 async def cmd_soak(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Run the harness soak comparison and post the table.
 
@@ -2609,6 +2757,8 @@ def main() -> None:
     app.add_handler(CommandHandler("health", cmd_health))
     app.add_handler(CommandHandler("activity", cmd_activity))
     app.add_handler(CommandHandler("soak", cmd_soak))
+    app.add_handler(CommandHandler("context", cmd_context))
+    app.add_handler(CommandHandler("compact", cmd_compact))
     app.add_handler(CommandHandler("usage", cmd_usage))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
