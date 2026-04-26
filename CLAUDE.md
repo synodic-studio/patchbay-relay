@@ -105,5 +105,3 @@ Managed with `uv`. Run `uv sync` to install dependencies. Scripts use `uv run` â
 ## Authentication
 
 There is none. The bridge gates messages on `ALLOWED_USER_IDS` only.
-
-A Sign in with Apple + TOTP layer was built and removed (commit `11dcacf`, 2026-03-19; remaining files purged 2026-04-24). See `docs/apple-auth-implementation.md` for the design and how to reconstitute it from git history if needed.

@@ -28,31 +28,6 @@ The unifying property: the phone never holds the work. The workstation does. The
 
 ## Architecture
 
-![Stargate architecture: Telegram forum topic to bridge.py to per-topic session to harness backend to agent subprocess to project directory](docs/img/architecture.svg)
-
-<details><summary>Mermaid source</summary>
-
-```mermaid
-flowchart LR
-    Phone["📱 Telegram<br/>forum topic"]
-    Bridge["bridge.py<br/>poller and router"]
-    Session["per-topic<br/>session state"]
-    Harness{"harness<br/>backend"}
-    Agent["agent subprocess<br/>claude / aider /<br/>opencode / pi"]
-    Project[("~/Developer/<br/>yourproject")]
-
-    Phone <-->|"message + topic id"| Bridge
-    Bridge --> Session
-    Session --> Harness
-    Harness --> Agent
-    Agent --> Project
-    Project --> Agent
-    Agent --> Harness
-    Harness --> Bridge
-```
-
-</details>
-
 Each Telegram forum topic maps to an independent agent session. Multiple topics run in parallel, each with its own project directory, harness backend, and session state. Sessions persist across messages and auto-expire after configurable inactivity.
 
 ### Module map
@@ -62,7 +37,7 @@ bridge.py                 Entrypoint -- Telegram handlers, commands, lifecycle
 stargate/                 Core package
   config.py               Environment variables, paths, constants, logging
   sessions.py             Session persistence, sanitization, pending messages
-  parser.py               Claude CLI output parsing (JSON array, NDJSON, single-object)
+  parser.py               Agent CLI output parsing (JSON array, NDJSON, single-object)
   quota.py                Quota/rate-limit detection and queue handoff
   activity.py             Structured JSON-lines activity logging
   projects.py             Chat-to-project directory mapping
@@ -76,8 +51,6 @@ stargate/                 Core package
     aider.py              Aider with chat-history-file resume
     opencode.py           sst/opencode JSON event protocol
     pi.py                 badlogicgames/pi multi-model agent
-auth.py                   Authentication state management (Apple Sign In + TOTP)
-auth_server.py            FastAPI server for Sign in with Apple OIDC flow
 validate.py               Pre-flight validation (syntax, imports, parser smoke tests)
 run.sh                    Entry point with crash-loop detection and self-healing
 ```
@@ -106,15 +79,13 @@ Two bridge processes polling Telegram's `getUpdates` simultaneously will trigger
 
 ### 708 tests, all in plain pytest
 
-Test suite is 708 tests across 47 test files covering the bridge, the parser, every harness, all command handlers, the auth flow, the self-heal path, the singleton lock, and chaos cases (partial JSON, slow drip, hangs, OOM-style exits). Pre-push hook runs the full suite. No CI on the remote — quality gates are local.
+Test suite is 708 tests across 47 test files covering the bridge, the parser, every harness, all command handlers, the self-heal path, the singleton lock, and chaos cases (partial JSON, slow drip, hangs, OOM-style exits). Pre-push hook runs the full suite. No CI on the remote — quality gates are local.
 
 ## Features
 
 - **Multi-harness** — Claude Code CLI, Claude Agent SDK, Aider, OpenCode, badlogicgames/pi. Switch per topic via `/harness <name>`.
 - **Multi-project routing** — Each Telegram topic binds to a project directory via `chat_projects.json`. Each topic can target a different codebase.
 - **Per-topic agent identity** — Topics can load identity files (e.g. `SOUL.md`, `IDENTITY.md`, `AGENTS.md`) into the agent's system prompt to specialize behavior per persona.
-- **Sign in with Apple** — Optional OIDC authentication via Apple's identity service with IP pinning, absolute expiry, and inactivity timeout.
-- **TOTP authentication** — Alternative auth method using standard authenticator apps (Google Authenticator, Authy, 1Password).
 - **Crash recovery** — Self-healing crash-loop detection: 3+ crashes in 5 minutes triggers an autonomous repair session.
 - **Pre-flight validation** — `validate.py` checks syntax, imports, and parser behavior before every bridge start. On failure, rolls back to a known-good snapshot.
 - **Quota handoff** — When the agent hits a rate limit, the task is written to a queue file for background processing.
@@ -184,31 +155,19 @@ launchctl load ~/Library/LaunchAgents/com.synodic.stargate.plist
 
 The plist sets `KeepAlive: SuccessfulExit=false` so the bridge auto-restarts on crash, with a 30-second `ThrottleInterval` backstop to prevent rapid-fire restart storms. `run.sh` does pre-flight validation; if `validate.py` fails, it rolls back to a known-good snapshot.
 
-### 7. Optional: Sign in with Apple
-
-For multi-user or stronger auth, set `AUTH_REQUIRED=true` in `.env`, configure the `APPLE_*` variables (Services ID, key, redirect URL), and run `run_auth.sh` as a second launchd service. Without auth, all messages from `ALLOWED_USER_IDS` pass through.
-
-**TOTP** can be set up per user as an alternative:
-
-```bash
-uv run setup_totp.py --user-id <telegram-user-id>
-```
-
 ## Telegram commands
 
-| Command | Auth | Description |
-|---|---|---|
-| `/start` | No | Show command list and your Telegram user ID |
-| `/auth` | No | Send auth link or show current session info |
-| `/lock` | Yes | Lock your session (`/lock all` locks all sessions) |
-| `/clearnew` | No | Start a fresh session (conversation history lost) |
-| `/setproject` | No | Bind topic to a project directory |
-| `/project` | No | Show current project and agent for this topic |
-| `/harness <name>` | No | Switch the agent backend for this topic |
-| `/kill` | Yes | Kill the active agent subprocess (session preserved) |
-| `/restart` | Yes | Restart the bridge process |
-| `/remote_control` | Yes | Start/stop a `claude remote-control` session |
-| `/ping` | No | Liveness check with active session status |
+| Command | Description |
+|---|---|
+| `/start` | Show command list and your Telegram user ID |
+| `/clearnew` | Start a fresh session (conversation history lost) |
+| `/setproject` | Bind topic to a project directory |
+| `/project` | Show current project and agent for this topic |
+| `/harness <name>` | Switch the agent backend for this topic |
+| `/kill` | Kill the active agent subprocess (session preserved) |
+| `/restart` | Restart the bridge process |
+| `/remote_control` | Start or stop a `claude remote-control` session |
+| `/ping` | Liveness check with active session status |
 
 ## Self-edit safety
 
