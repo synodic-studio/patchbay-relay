@@ -2329,12 +2329,107 @@ async def cmd_context(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await update.message.reply_text(f"Context: {used} / {cap} ({pct})")
 
 
+_SUMMARIZE_PROMPT = (
+    "STARGATE COMPACT — produce a handoff summary of our conversation so "
+    "far. Output ONLY the summary text, no preamble, no closing remark, "
+    "no markdown wrapping. Cover: (1) the original goal and any sub-goals, "
+    "(2) decisions made and why, (3) work in progress / what's next, "
+    "(4) key file paths, commands, and gotchas, (5) anything I asked you "
+    "to remember. Be thorough — this summary is the only memory carried "
+    "into the next session. Override any standing 'be brief' instruction "
+    "for THIS message only; handoff summaries must be complete."
+)
+
+
+def _build_handoff_prompt(summary: str) -> str:
+    return (
+        "[Carrying context forward from a compacted prior session.]\n\n"
+        f"{summary.strip()}\n\n"
+        "[End of carried-forward summary. Acknowledge briefly so we can "
+        "continue from here.]"
+    )
+
+
+async def _fallback_compact(
+    *,
+    update: Update,
+    session_key: str,
+    instructions: str | None,
+) -> None:
+    """Generic /compact for harnesses that don't have a native one.
+
+    Two-turn flow on the existing run_claude path:
+      1. Run a synthesizer turn against the current session asking for a
+         handoff summary.
+      2. Clear the chat's session id (same as /clearnew).
+      3. Run a handoff turn whose prompt IS the summary, in the new
+         (now empty) session. The agent acknowledges; the new session
+         carries the compacted context forward.
+
+    Works on every harness because it only uses run_claude. Costs two
+    turns instead of one in-place compaction, but doesn't require any
+    per-harness implementation work.
+    """
+    loop = asyncio.get_running_loop()
+    summarize_prompt = _SUMMARIZE_PROMPT
+    if instructions:
+        summarize_prompt += f"\n\nADDITIONAL FOCUS FROM USER: {instructions}"
+
+    await update.message.reply_text("Compacting (fallback): summarizing prior session…")
+    try:
+        summary = await loop.run_in_executor(
+            _executor, run_claude, summarize_prompt, session_key
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("/compact fallback summarize failed for %s", session_key)
+        await update.message.reply_text(f"Compact failed during summarize: {exc}")
+        return
+
+    if not summary or summary.startswith(QUOTA_HIT_PREFIX):
+        await update.message.reply_text(
+            "Compact aborted — couldn't get a summary. Try again later."
+        )
+        return
+
+    summary = summary.strip()
+    summary_words = len(summary.split())
+
+    clear_session(session_key)
+    logger.info(
+        "Compact fallback for %s: cleared session, summary=%d words",
+        session_key, summary_words,
+    )
+
+    handoff_prompt = _build_handoff_prompt(summary)
+    await update.message.reply_text(
+        f"Started fresh session. Handing forward summary ({summary_words} words)…"
+    )
+    try:
+        ack = await loop.run_in_executor(
+            _executor, run_claude, handoff_prompt, session_key
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("/compact fallback handoff failed for %s", session_key)
+        await update.message.reply_text(
+            f"Summary captured but handoff failed: {exc}\n\n"
+            "Your next message will start a fresh session without context."
+        )
+        return
+
+    await update.message.reply_text(
+        f"Compact done. Agent ack:\n\n{ack[:1500]}"
+    )
+
+
 async def cmd_compact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Compact the running context. Optional steering text after the command.
 
-    cc-sdk only today. Sends `/compact [instructions]` into a transient
-    SDK client connected to the current session and reports before/after
-    token counts.
+    Two paths:
+    - Native (cc-sdk): pushes claude's `/compact` slash command into a
+      transient SDK client and reports before/after token counts.
+    - Fallback (every other harness): runs a summarizer turn, clears the
+      session, then runs a handoff turn whose prompt IS the summary.
+      Same semantics as `/clearnew` with the first message pre-loaded.
     """
     chat_id = update.effective_chat.id
     thread_id = update.message.message_thread_id
@@ -2349,14 +2444,6 @@ async def cmd_compact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
     harness_name, harness, req = resolved
 
-    caps = CAPABILITIES_BY_NAME.get(harness_name)
-    if caps is None or not caps.supports_compact:
-        await update.message.reply_text(
-            f"/compact isn't supported on {harness_name} yet. "
-            f"Try /harness cc-sdk for this chat."
-        )
-        return
-
     if not req.resume_session_id:
         await update.message.reply_text(
             "Nothing to compact — no active session in this chat. "
@@ -2364,15 +2451,21 @@ async def cmd_compact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         )
         return
 
-    await update.message.reply_text("Compacting context…")
-    try:
-        result = await harness.compact(req, instructions=instructions)
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("/compact failed for %s", key)
-        await update.message.reply_text(f"Compact failed: {exc}")
+    caps = CAPABILITIES_BY_NAME.get(harness_name)
+    if caps is not None and caps.supports_compact:
+        # Native path.
+        await update.message.reply_text("Compacting context…")
+        try:
+            result = await harness.compact(req, instructions=instructions)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("/compact native failed for %s", key)
+            await update.message.reply_text(f"Compact failed: {exc}")
+            return
+        await update.message.reply_text(result.message)
         return
 
-    await update.message.reply_text(result.message)
+    # Fallback path: works on every harness via run_claude.
+    await _fallback_compact(update=update, session_key=key, instructions=instructions)
 
 
 async def cmd_soak(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

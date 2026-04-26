@@ -240,6 +240,29 @@ def test_compact_passes_instructions_through(fake_sdk, tmp_path):
     assert captured["client"].queries == ["/compact focus on the API design"]
 
 
+def test_fallback_compact_handoff_prompt_contains_summary():
+    """The handoff prompt that becomes the new session's first message
+    must include the summary text and a brief framing."""
+    import bridge as br
+
+    out = br._build_handoff_prompt("Summary line 1\nSummary line 2")
+    assert "Summary line 1" in out
+    assert "Summary line 2" in out
+    assert "carrying" in out.lower() or "carried" in out.lower()
+
+
+def test_summarize_prompt_is_focused_and_steerable():
+    """The synthesizer prompt should ask for ONLY the summary text and
+    clearly define what to cover."""
+    import bridge as br
+
+    # Steering text must be appended verbatim so the summarizer respects it.
+    base = br._SUMMARIZE_PROMPT
+    assert "ONLY the summary" in base
+    assert "decisions made" in base.lower() or "decisions" in base.lower()
+    assert "work in progress" in base.lower() or "next" in base.lower()
+
+
 def test_compact_surfaces_failure_as_compact_result(monkeypatch, tmp_path):
     """If the SDK call raises, compact() returns a failed CompactResult — never raises."""
     module = types.ModuleType("claude_agent_sdk")
