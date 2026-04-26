@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.synodic.stargate</string>
+    <key>ProgramArguments</key>
+    <array>
+        <!-- UPDATE: Replace with the absolute path to your stargate checkout -->
+        <string>/Users/YOURUSER/Developer/stargate/run.sh</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>StandardOutPath</key>
+    <!-- UPDATE: Replace with your stargate path -->
+    <string>/Users/YOURUSER/Developer/stargate/logs/bridge.log</string>
+    <key>StandardErrorPath</key>
+    <!-- UPDATE: Replace with your stargate path -->
+    <string>/Users/YOURUSER/Developer/stargate/logs/bridge.err</string>
+    <key>WorkingDirectory</key>
+    <!-- UPDATE: Replace with your stargate path -->
+    <string>/Users/YOURUSER/Developer/stargate</string>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <!-- UPDATE: path to picurious' claude-pi-shim if you want pi-backed topics.
+             Leave unset (or commented out) to route every topic to real claude. -->
+        <key>CLAUDE_PATH</key>
+        <string>/Users/YOURUSER/Developer/picurious/bin/claude-pi-shim</string>
+    </dict>
+</dict>
+</plist>

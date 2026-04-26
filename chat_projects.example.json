@@ -1,0 +1,17 @@
+{
+  "_comment": "Map Telegram chat-and-thread IDs to project directories. Copy this file to chat_projects.json and fill in your own IDs. The real chat_projects.json is gitignored.",
+  "_format": "Two value forms supported. (1) Plain string: directory name relative to CLAUDE_WORKING_DIR. (2) Object: {path: <dir>, agent: <agent-name>} when you want a per-topic agent persona loaded from <dir>/agents/.../<agent-name>/.",
+  "_example_keys": "Keys are <chat_id>_<thread_id> for forum-topic groups, or <chat_id> for plain chats. Find them by sending a message and inspecting bridge.log.",
+
+  "-100123456789_2": "my-project",
+  "-100123456789_4": "another-project",
+
+  "-100987654321_10": {
+    "path": "Fanta",
+    "agent": "iron-temple"
+  },
+  "-100987654321_20": {
+    "path": "Fanta",
+    "agent": "buddy"
+  }
+}

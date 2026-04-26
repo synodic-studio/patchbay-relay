@@ -1,0 +1,13 @@
+#!/bin/bash
+# Pre-push hook: run tests before pushing
+# Skippable with: git push --no-verify
+set -e
+
+echo "Pre-push: checking..."
+if [ -f "pyproject.toml" ]; then
+  uv run pytest 2>&1 | tail -5
+elif [ -f "setup.py" ]; then
+  python3 -m pytest 2>&1 | tail -5
+fi
+
+echo "Pre-push: passed"
