@@ -181,3 +181,104 @@ class TestCmdPingUnknownStart:
         reply = update.message.reply_text.call_args[0][0]
         assert "999_1" in reply
         assert "unknown" in reply.lower()
+
+
+# ---------------------------------------------------------------------------
+# _session_display_label resolution
+# ---------------------------------------------------------------------------
+
+
+class TestSessionDisplayLabel:
+    @pytest.fixture(autouse=True)
+    def _isolate(self, tmp_path, monkeypatch):
+        projects_file = tmp_path / "chat_projects.json"
+        monkeypatch.setattr(
+            "stargate.projects.CHAT_PROJECTS_FILE", projects_file
+        )
+        yield
+
+    def test_title_wins_over_project_and_agent(self):
+        from stargate.projects import _save_chat_projects
+
+        _save_chat_projects(
+            {"k": {"path": "Fanta", "agent": "ernest", "title": "Ernest 🟢"}}
+        )
+        assert bridge._session_display_label("k") == "Ernest 🟢"
+
+    def test_project_with_agent_falls_back_to_arrow_form(self):
+        from stargate.projects import _save_chat_projects
+
+        _save_chat_projects({"k": {"path": "Fanta", "agent": "iron-temple"}})
+        assert bridge._session_display_label("k") == "Fanta › iron-temple"
+
+    def test_project_only(self):
+        from stargate.projects import _save_chat_projects
+
+        _save_chat_projects({"k": "stargate"})
+        assert bridge._session_display_label("k") == "stargate"
+
+    def test_agent_only(self):
+        from stargate.projects import _save_chat_projects
+
+        _save_chat_projects({"k": {"agent": "ernest"}})
+        assert bridge._session_display_label("k") == "ernest"
+
+    def test_unknown_key_returns_session_key(self):
+        assert bridge._session_display_label("12345_67") == "12345_67"
+
+
+# ---------------------------------------------------------------------------
+# handle_forum_topic_event caches topic names
+# ---------------------------------------------------------------------------
+
+
+class TestHandleForumTopicEvent:
+    @pytest.fixture(autouse=True)
+    def _isolate(self, tmp_path, monkeypatch):
+        projects_file = tmp_path / "chat_projects.json"
+        monkeypatch.setattr(
+            "stargate.projects.CHAT_PROJECTS_FILE", projects_file
+        )
+        yield
+
+    def _make_update(self, chat_id, thread_id, *, created=None, edited=None):
+        msg = MagicMock()
+        msg.message_thread_id = thread_id
+        msg.forum_topic_created = created
+        msg.forum_topic_edited = edited
+        update = MagicMock()
+        update.effective_message = msg
+        update.effective_chat = MagicMock()
+        update.effective_chat.id = chat_id
+        return update
+
+    @pytest.mark.asyncio
+    async def test_cache_on_create(self):
+        from stargate.projects import get_chat_title
+
+        created = MagicMock()
+        created.name = "stargate"
+        update = self._make_update(-100, 30, created=created)
+        await bridge.handle_forum_topic_event(update, MagicMock())
+        assert get_chat_title("-100_30") == "stargate"
+
+    @pytest.mark.asyncio
+    async def test_cache_on_edit_overwrites(self):
+        from stargate.projects import get_chat_title, set_chat_title
+
+        set_chat_title("-100_30", "old name")
+        edited = MagicMock()
+        edited.name = "new name"
+        update = self._make_update(-100, 30, edited=edited)
+        await bridge.handle_forum_topic_event(update, MagicMock())
+        assert get_chat_title("-100_30") == "new name"
+
+    @pytest.mark.asyncio
+    async def test_no_thread_id_is_skipped(self):
+        from stargate.projects import _load_chat_projects
+
+        created = MagicMock()
+        created.name = "irrelevant"
+        update = self._make_update(-100, None, created=created)
+        await bridge.handle_forum_topic_event(update, MagicMock())
+        assert _load_chat_projects() == {}

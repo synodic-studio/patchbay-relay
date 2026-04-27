@@ -234,3 +234,89 @@ class TestChatHarness:
         stargate.projects.set_chat_harness("chat_1", None)
         loaded = stargate.projects._load_chat_projects()
         assert "chat_1" not in loaded
+
+
+# ---------------------------------------------------------------------------
+# get_chat_title / set_chat_title
+# ---------------------------------------------------------------------------
+
+
+class TestChatTitle:
+    def test_get_returns_none_when_unset(self):
+        assert stargate.projects.get_chat_title("chat_1") is None
+
+    def test_get_returns_none_for_legacy_string_entry(self):
+        stargate.projects._save_chat_projects({"chat_1": "Fanta"})
+        assert stargate.projects.get_chat_title("chat_1") is None
+
+    def test_set_then_get_roundtrip(self):
+        stargate.projects.set_chat_title("chat_1", "Stargate Bridge")
+        assert stargate.projects.get_chat_title("chat_1") == "Stargate Bridge"
+
+    def test_set_promotes_string_entry_to_dict_preserving_path(self):
+        stargate.projects._save_chat_projects({"chat_1": "Fanta"})
+        stargate.projects.set_chat_title("chat_1", "Iron Temple")
+        loaded = stargate.projects._load_chat_projects()
+        assert loaded["chat_1"] == {"path": "Fanta", "title": "Iron Temple"}
+
+    def test_set_lands_alongside_path_agent_harness(self):
+        stargate.projects._save_chat_projects(
+            {"chat_1": {"path": "Fanta", "agent": "ernest", "harness": "cc-sdk"}}
+        )
+        stargate.projects.set_chat_title("chat_1", "Ernest")
+        loaded = stargate.projects._load_chat_projects()
+        assert loaded["chat_1"] == {
+            "path": "Fanta",
+            "agent": "ernest",
+            "harness": "cc-sdk",
+            "title": "Ernest",
+        }
+
+    def test_set_none_clears_only_title_key(self):
+        stargate.projects._save_chat_projects(
+            {"chat_1": {"path": "Fanta", "title": "Old"}}
+        )
+        stargate.projects.set_chat_title("chat_1", None)
+        loaded = stargate.projects._load_chat_projects()
+        assert loaded["chat_1"] == {"path": "Fanta"}
+
+    def test_clearing_title_on_title_only_entry_drops_entry(self):
+        stargate.projects._save_chat_projects({"chat_1": {"title": "Orphan"}})
+        stargate.projects.set_chat_title("chat_1", None)
+        loaded = stargate.projects._load_chat_projects()
+        assert "chat_1" not in loaded
+
+
+# ---------------------------------------------------------------------------
+# set_chat_project preserves dict-form sibling keys
+# ---------------------------------------------------------------------------
+
+
+class TestSetChatProjectPreservesSiblings:
+    def test_changing_path_keeps_agent_harness_title(self):
+        stargate.projects._save_chat_projects(
+            {
+                "chat_1": {
+                    "path": "Fanta",
+                    "agent": "ernest",
+                    "harness": "cc-sdk",
+                    "title": "Ernest",
+                }
+            }
+        )
+        stargate.projects.set_chat_project("chat_1", "stargate")
+        loaded = stargate.projects._load_chat_projects()
+        assert loaded["chat_1"] == {
+            "path": "stargate",
+            "agent": "ernest",
+            "harness": "cc-sdk",
+            "title": "Ernest",
+        }
+
+    def test_clearing_path_removes_entire_entry(self):
+        stargate.projects._save_chat_projects(
+            {"chat_1": {"path": "Fanta", "title": "Iron Temple"}}
+        )
+        stargate.projects.set_chat_project("chat_1", None)
+        loaded = stargate.projects._load_chat_projects()
+        assert "chat_1" not in loaded

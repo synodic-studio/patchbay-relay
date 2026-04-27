@@ -147,9 +147,11 @@ from stargate.projects import (  # noqa: E402
     get_all_projects as _get_all_projects,
     get_chat_agent,
     get_chat_harness,
+    get_chat_title,
     get_chat_working_dir,
     set_chat_harness,
     set_chat_project,
+    set_chat_title,
 )
 
 # Backward-compatible names for functions that were renamed
@@ -2517,6 +2519,27 @@ async def cmd_soak(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(f"<pre>{escaped}</pre>", parse_mode="HTML")
 
 
+def _session_display_label(session_key: str) -> str:
+    """Resolve a human-friendly label for a session key.
+
+    Preference order:
+      1. Cached chat/topic title (populated by forum_topic_created/edited).
+      2. Project directory, with agent suffix when set (e.g. "Fanta › ernest").
+      3. Raw session key as last resort.
+    """
+    title = get_chat_title(session_key)
+    if title:
+        return title
+    rel_path, agent = _parse_project_entry(_load_chat_projects().get(session_key))
+    if rel_path and agent:
+        return f"{rel_path} › {agent}"
+    if rel_path:
+        return rel_path
+    if agent:
+        return agent
+    return session_key
+
+
 async def cmd_ping(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not any(s.processing for s in _sessions.values()):
         await update.message.reply_text("pong — no active sessions")
@@ -2525,13 +2548,46 @@ async def cmd_ping(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     lines = ["pong — active sessions:"]
     for key in sorted(k for k, s in _sessions.items() if s.processing):
         started = _sessions[key].started_at if key in _sessions else None
+        label = _session_display_label(key)
         if started:
             elapsed = int(now - started)
             mins, secs = divmod(elapsed, 60)
-            lines.append(f"  {key}: running {mins}m{secs:02d}s")
+            lines.append(f"  {label}: running {mins}m{secs:02d}s")
         else:
-            lines.append(f"  {key}: running (start time unknown)")
+            lines.append(f"  {label}: running (start time unknown)")
     await update.message.reply_text("\n".join(lines))
+
+
+async def handle_forum_topic_event(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Cache forum topic names from create/edit service messages.
+
+    Telegram only exposes topic names through these events — regular
+    messages in a topic carry the thread id but not the name. We cache
+    them under chat_projects.json so /ping (and other future commands)
+    can show the topic title instead of a numeric session key.
+    """
+    msg = update.effective_message
+    if msg is None:
+        return
+    chat_id = update.effective_chat.id if update.effective_chat else None
+    thread_id = msg.message_thread_id
+    if chat_id is None or thread_id is None:
+        return
+    name = None
+    if msg.forum_topic_created and msg.forum_topic_created.name:
+        name = msg.forum_topic_created.name
+    elif msg.forum_topic_edited and msg.forum_topic_edited.name:
+        name = msg.forum_topic_edited.name
+    if not name:
+        return
+    key = _session_key(chat_id, thread_id)
+    try:
+        set_chat_title(key, name)
+        logger.info("Cached forum topic title for %s: %r", key, name)
+    except Exception as e:  # pragma: no cover - storage best-effort
+        logger.warning("Failed to cache forum topic title for %s: %s", key, e)
 
 
 # ---------------------------------------------------------------------------
@@ -2861,6 +2917,13 @@ def main() -> None:
     app.add_handler(CommandHandler("context", cmd_context))
     app.add_handler(CommandHandler("compact", cmd_compact))
     app.add_handler(CommandHandler("usage", cmd_usage))
+    app.add_handler(
+        MessageHandler(
+            filters.StatusUpdate.FORUM_TOPIC_CREATED
+            | filters.StatusUpdate.FORUM_TOPIC_EDITED,
+            handle_forum_topic_event,
+        )
+    )
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))

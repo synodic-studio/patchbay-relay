@@ -113,14 +113,53 @@ def set_chat_harness(session_key: str, harness: str | None) -> None:
         _save_chat_projects(projects)
 
 
+def get_chat_title(session_key: str) -> str | None:
+    """Return the cached display title for this chat (forum topic name, etc.)."""
+    projects = _load_chat_projects()
+    entry = projects.get(session_key)
+    if isinstance(entry, dict):
+        return entry.get("title")
+    return None
+
+
+def set_chat_title(session_key: str, title: str | None) -> None:
+    """Cache a display title (forum topic name) for this chat. Uses file locking."""
+    with _projects_lock():
+        projects = _load_chat_projects()
+        entry = projects.get(session_key)
+        if isinstance(entry, str):
+            entry = {"path": entry}
+        elif not isinstance(entry, dict):
+            entry = {}
+        if title is None:
+            entry.pop("title", None)
+        else:
+            entry["title"] = title
+        if entry:
+            projects[session_key] = entry
+        else:
+            projects.pop(session_key, None)
+        _save_chat_projects(projects)
+
+
 def set_chat_project(session_key: str, rel_path: str | None) -> None:
-    """Set or clear the project directory for a chat. Uses file locking."""
+    """Set or clear the project directory for a chat. Uses file locking.
+
+    Preserves other dict-form fields (agent, harness, title) when the
+    entry is already a dict — only the path is updated. Clearing removes
+    the entry entirely.
+    """
     with _projects_lock():
         projects = _load_chat_projects()
         if rel_path is None:
             projects.pop(session_key, None)
         else:
-            projects[session_key] = rel_path
+            entry = projects.get(session_key)
+            if isinstance(entry, dict):
+                entry["path"] = rel_path
+                projects[session_key] = entry
+            else:
+                projects[session_key] = rel_path
         _save_chat_projects(projects)
 
 
