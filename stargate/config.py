@@ -196,7 +196,11 @@ USAGE_WEEKLY_TOKEN_CAP = _env_int("USAGE_WEEKLY_TOKEN_CAP", "3000000000", min_va
 
 # --- Telegram constants ---
 TELEGRAM_MSG_LIMIT = 4096
-TYPING_INTERVAL = 4  # seconds between typing indicators
+# Telegram clears the typing indicator ~5s after the last sendChatAction.
+# A 2s refresh keeps it continuously visible during normal operation and
+# gives ~3-5s as a "deadman's switch" when the bridge dies mid-turn —
+# the indicator fades quickly enough to signal that no reply is coming.
+TYPING_INTERVAL = 2  # seconds between typing indicators
 SEND_RETRY_ATTEMPTS = 3
 SEND_RETRY_BASE_DELAY = 1.0  # seconds; doubles each retry
 MAX_QUEUED_MESSAGES = 20  # max pending messages per session before dropping

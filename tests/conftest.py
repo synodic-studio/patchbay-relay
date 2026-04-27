@@ -5,6 +5,121 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 
+# Production filesystem paths the bridge writes to at runtime. Tests must
+# never touch these directly, otherwise a pytest run while the launchd
+# bridge is live can wipe a real user's pending replies, pollute the real
+# activity.jsonl, or signal/kill the real bridge process.
+#
+# Each entry is (logical_name, kind, [(module, attr), ...]) — every binding
+# in the list is patched to the SAME tmp path so a value saved through one
+# alias is visible through the others (bridge.save_pending writes via
+# stargate.sessions.PENDING_DIR; the test then reads via bridge.PENDING_DIR
+# — both must resolve to the same dir).
+#
+# kind ∈ {"dir", "file"}: dir paths are pre-created; file paths are not.
+_PRODUCTION_PATH_GROUPS = [
+    (
+        "session_dir",
+        "dir",
+        [
+            ("stargate.config", "SESSION_DIR"),
+            ("stargate.sessions", "SESSION_DIR"),
+            ("bridge", "SESSION_DIR"),
+        ],
+    ),
+    (
+        "pending_dir",
+        "dir",
+        [
+            ("stargate.config", "PENDING_DIR"),
+            ("stargate.sessions", "PENDING_DIR"),
+            ("bridge", "PENDING_DIR"),
+        ],
+    ),
+    (
+        "aider_history_dir",
+        "dir",
+        [("stargate.config", "AIDER_HISTORY_DIR")],
+    ),
+    (
+        "photo_dir",
+        "dir",
+        [
+            ("stargate.config", "PHOTO_DIR"),
+            ("bridge", "PHOTO_DIR"),
+        ],
+    ),
+    (
+        "doc_dir",
+        "dir",
+        [
+            ("stargate.config", "DOC_DIR"),
+            ("bridge", "DOC_DIR"),
+        ],
+    ),
+    (
+        "quarantine_dir",
+        "dir",
+        [("stargate.config", "QUARANTINE_DIR")],
+    ),
+    (
+        "activity_log",
+        "file",
+        [
+            ("stargate.config", "ACTIVITY_LOG"),
+            ("stargate.activity", "ACTIVITY_LOG"),
+            ("bridge", "ACTIVITY_LOG"),
+        ],
+    ),
+    (
+        "chat_projects_file",
+        "file",
+        [
+            ("stargate.config", "CHAT_PROJECTS_FILE"),
+            ("bridge", "CHAT_PROJECTS_FILE"),
+        ],
+    ),
+    (
+        "restart_notify_file",
+        "file",
+        [
+            ("stargate.config", "RESTART_NOTIFY_FILE"),
+            ("bridge", "RESTART_NOTIFY_FILE"),
+        ],
+    ),
+    (
+        "lock_file",
+        "file",
+        [("stargate.singleton", "LOCK_FILE")],
+    ),
+]
+
+
+@pytest.fixture(autouse=True)
+def _isolate_production_paths(tmp_path, monkeypatch):
+    """Redirect every production filesystem path to a tmp dir for this test.
+
+    Without this, a test that wipes PENDING_DIR for cleanliness, writes to
+    ACTIVITY_LOG via _log_activity, or invokes signal_other_bridge against
+    LOCK_FILE will affect the real running bridge — including deleting a
+    real user's queued reply or sending SIGTERM to the live process.
+    """
+    import importlib
+
+    for name, kind, bindings in _PRODUCTION_PATH_GROUPS:
+        target = tmp_path / name
+        if kind == "dir":
+            target.mkdir(parents=True, exist_ok=True)
+        for module_path, attr in bindings:
+            try:
+                module = importlib.import_module(module_path)
+            except ImportError:
+                continue
+            if not hasattr(module, attr):
+                continue
+            monkeypatch.setattr(module, attr, target, raising=False)
+
+
 @pytest.fixture
 def mock_bot():
     """Return a mock Telegram Application with a pre-wired bot.
