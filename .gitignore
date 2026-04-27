@@ -27,4 +27,10 @@ aider-history/
 .DS_Store
 .opencode/
 .claude/
-.beads/
+# Beads: ignore the dir EXCEPT the JSONL source-of-truth + config
+.beads/*
+!.beads/.gitignore
+!.beads/issues.jsonl
+!.beads/metadata.json
+!.beads/config.yaml
+!.beads/README.md
