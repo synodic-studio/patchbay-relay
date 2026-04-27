@@ -28,34 +28,41 @@ async def test_first_caller_claims():
     assert state.started_at is not None
 
 
+def _q(text: str, pending_id: str = "") -> bridge.QueuedMessage:
+    """Compact constructor for QueuedMessage in tests."""
+    return bridge.QueuedMessage(text=text, pending_id=pending_id)
+
+
 @pytest.mark.asyncio
 async def test_second_caller_queues():
     state = bridge._get_session_state("k")
-    await bridge._claim_or_queue(state, "first")  # claimed
-    status, depth = await bridge._claim_or_queue(state, "second")
+    await bridge._claim_or_queue(state, "first", "pid-first")  # claimed
+    status, depth = await bridge._claim_or_queue(state, "second", "pid-second")
     assert status == "queued"
     assert depth == 1
-    assert state.queue == ["second"]
+    assert state.queue == [_q("second", "pid-second")]
 
 
 @pytest.mark.asyncio
 async def test_queue_full_returns_full(monkeypatch):
     monkeypatch.setattr(bridge, "MAX_QUEUED_MESSAGES", 2)
     state = bridge._get_session_state("k")
-    await bridge._claim_or_queue(state, "first")  # claimed
-    await bridge._claim_or_queue(state, "queued1")
-    await bridge._claim_or_queue(state, "queued2")
-    status, depth = await bridge._claim_or_queue(state, "overflow")
+    await bridge._claim_or_queue(state, "first", "p0")  # claimed
+    await bridge._claim_or_queue(state, "queued1", "p1")
+    await bridge._claim_or_queue(state, "queued2", "p2")
+    status, depth = await bridge._claim_or_queue(state, "overflow", "p3")
     assert status == "full"
     assert depth is None
-    assert state.queue == ["queued1", "queued2"]
+    assert state.queue == [_q("queued1", "p1"), _q("queued2", "p2")]
 
 
 @pytest.mark.asyncio
 async def test_concurrent_claims_serialize():
     """The race fix: gather many _claim_or_queue calls; only one wins."""
     state = bridge._get_session_state("k")
-    results = await asyncio.gather(*[bridge._claim_or_queue(state, f"m{i}") for i in range(10)])
+    results = await asyncio.gather(
+        *[bridge._claim_or_queue(state, f"m{i}", f"p{i}") for i in range(10)]
+    )
     statuses = [r[0] for r in results]
     assert statuses.count("claimed") == 1
     assert statuses.count("queued") == 9
@@ -67,9 +74,9 @@ async def test_concurrent_claims_serialize():
 async def test_drain_next_returns_batch_and_clears_queue():
     state = bridge._get_session_state("k")
     state.processing = True
-    state.queue = ["a", "b", "c"]
+    state.queue = [_q("a", "pa"), _q("b", "pb"), _q("c", "pc")]
     batch = await bridge._drain_next(state)
-    assert batch == ["a", "b", "c"]
+    assert batch == [_q("a", "pa"), _q("b", "pb"), _q("c", "pc")]
     assert state.queue == []
     # Still processing — drain only releases when queue is empty AT call time
     assert state.processing is True
@@ -91,8 +98,8 @@ async def test_release_processing_clears_flag():
     state = bridge._get_session_state("k")
     state.processing = True
     state.started_at = 2000.0
-    state.queue = ["x"]  # queue is preserved; only the flag is cleared
+    state.queue = [_q("x", "px")]  # queue is preserved; only the flag is cleared
     await bridge._release_processing(state)
     assert state.processing is False
     assert state.started_at is None
-    assert state.queue == ["x"]
+    assert state.queue == [_q("x", "px")]

@@ -27,6 +27,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import NamedTuple
 
 from dotenv import load_dotenv
 
@@ -176,6 +177,19 @@ _executor = ThreadPoolExecutor(max_workers=MAX_WORKERS)
 # ---------------------------------------------------------------------------
 
 
+class QueuedMessage(NamedTuple):
+    """A debounced queued message awaiting processing.
+
+    Carries `pending_id` so the corresponding pending file (saved at queue
+    time) can be cleared after the queued batch delivers, and so that
+    SIGTERM-tearing-the-loop-down before drain leaves the file in place
+    for replay_pending() on the next bridge start.
+    """
+
+    text: str
+    pending_id: str
+
+
 @dataclass
 class SessionState:
     """All per-session runtime state, keyed by session_key in `_sessions`."""
@@ -185,7 +199,7 @@ class SessionState:
     worker_loop: asyncio.AbstractEventLoop | None = None  # loop owned by _drive_harness_sync; needed for cross-loop cancel of cc-sdk
     started_at: float | None = None  # time.time() when processing began
     last_event_at: float | None = None  # last time stall-detector saw activity
-    queue: list[str] = field(default_factory=list)  # debounced messages awaiting processing
+    queue: list[QueuedMessage] = field(default_factory=list)  # debounced messages awaiting processing
     processing: bool = False  # True while a claude run is in flight for this key
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
@@ -266,7 +280,7 @@ async def _cancel_session_async(state: "SessionState") -> None:
         pass
 
 
-async def _claim_or_queue(state: SessionState, text: str) -> tuple[str, int | None]:
+async def _claim_or_queue(state: SessionState, text: str, pending_id: str = "") -> tuple[str, int | None]:
     """Atomically claim the processing lane or enqueue the message.
 
     Returns one of:
@@ -277,6 +291,10 @@ async def _claim_or_queue(state: SessionState, text: str) -> tuple[str, int | No
     Holding state.lock around the check+claim+enqueue closes a debounce
     race where two messages arriving in the same event-loop tick could
     both pass the `if state.processing` check and stomp on each other.
+
+    `pending_id` is the on-disk pending-file id for this message, threaded
+    in so queued messages survive a SIGTERM-mid-drain — replay_pending()
+    on the next bridge start re-runs anything still on disk.
     """
     async with state.lock:
         if not state.processing:
@@ -285,11 +303,11 @@ async def _claim_or_queue(state: SessionState, text: str) -> tuple[str, int | No
             return ("claimed", None)
         if len(state.queue) >= MAX_QUEUED_MESSAGES:
             return ("full", None)
-        state.queue.append(text)
+        state.queue.append(QueuedMessage(text=text, pending_id=pending_id))
         return ("queued", len(state.queue))
 
 
-async def _drain_next(state: SessionState) -> list[str] | None:
+async def _drain_next(state: SessionState) -> list[QueuedMessage] | None:
     """Pop the next batch of queued messages, or release processing.
 
     Returns the batch if there are queued messages. Otherwise atomically
@@ -1298,9 +1316,17 @@ async def _process_with_claude_turn(
     `prompt` and runs it.
     """
     state = _get_session_state(session_key)
-    status, depth = await _claim_or_queue(state, prompt)
+    # Save pending FIRST so even queued messages (which sit in an in-memory
+    # queue until drain) survive a SIGTERM-mid-debounce — replay_pending()
+    # picks up anything still on disk on the next bridge start.
+    pending_id = save_pending(chat_id, thread_id, prompt, session_key)
+    status, depth = await _claim_or_queue(state, prompt, pending_id)
 
     if status == "full":
+        # Queue full — drop the message AND its pending file (we've told the
+        # user we won't be processing it; replaying after restart would be
+        # confusing).
+        clear_pending(pending_id)
         await update.message.reply_text(drop_message)
         logger.warning("Queue full for %s, dropping %s", session_key, label)
         _log_activity(f"{label}_dropped", session_key=session_key, depth=MAX_QUEUED_MESSAGES)
@@ -1309,13 +1335,15 @@ async def _process_with_claude_turn(
         return
 
     if status == "queued":
+        # Pending file stays on disk; the drain loop in the active turn
+        # will clear it after delivery, or replay_pending() will recover
+        # it if the bridge dies before drain reaches it.
         await update.message.reply_text(queued_message.format(depth=depth))
         logger.info("Queued %s for %s (depth: %d)", label, session_key, depth)
         _log_activity(f"{label}_queued", session_key=session_key, depth=depth)
         return
 
     # status == "claimed" — we own this session's processing lane until _drain_next clears it.
-    pending_id = save_pending(chat_id, thread_id, prompt, session_key)
     stop_typing = asyncio.Event()
     typing_task = asyncio.create_task(keep_typing(chat_id, thread_id, stop_typing, context.bot))
 
@@ -1332,12 +1360,22 @@ async def _process_with_claude_turn(
         if quota_handoff:
             response = _maybe_handoff_quota(response, session_key, chat_id, thread_id)
 
+        # Delivered flag pattern: only clear the pending file after we've
+        # confirmed the send returned without raising. CancelledError (SIGTERM
+        # tearing down the loop mid-await) is a BaseException, not Exception,
+        # so it skips the except block and propagates — but the finally
+        # below still runs with delivered=False, preserving the pending file
+        # for replay_pending() to recover on the next bridge start.
+        delivered = False
         try:
             await _send_response(context.bot, chat_id, thread_id, response)
-            clear_pending(pending_id)
+            delivered = True
         except Exception as e:
             logger.error("Failed to send %s response for %s: %s", label, session_key, e)
             await _notify_delivery_failure(context.bot, chat_id, thread_id, session_key)
+        finally:
+            if delivered:
+                clear_pending(pending_id)
 
         # Drain queued messages: each pop from _drain_next either yields a
         # batch or atomically clears state.processing and ends the loop.
@@ -1347,10 +1385,10 @@ async def _process_with_claude_turn(
                 break
             logger.info("Processing %d queued message(s) for %s", len(batch), session_key)
             combined = (
-                batch[0]
+                batch[0].text
                 if len(batch) == 1
                 else "\n\n---\n\n".join(
-                    f"[Follow-up {i + 1}]\n{msg}" for i, msg in enumerate(batch)
+                    f"[Follow-up {i + 1}]\n{item.text}" for i, item in enumerate(batch)
                 )
             )
             try:
@@ -1358,11 +1396,17 @@ async def _process_with_claude_turn(
             except Exception as e:
                 logger.error("Error running claude for queued batch %s: %s", session_key, e)
                 response = f"Error: {e}"
+            batch_delivered = False
             try:
                 await _send_response(context.bot, chat_id, thread_id, response)
+                batch_delivered = True
             except Exception as e:
                 logger.error("Failed to send queued response for %s: %s", session_key, e)
                 await _notify_delivery_failure(context.bot, chat_id, thread_id, session_key)
+            finally:
+                if batch_delivered:
+                    for item in batch:
+                        clear_pending(item.pending_id)
     except Exception:
         # Defensive: ensure processing flag is cleared on any uncaught
         # exception escaping the drain loop.

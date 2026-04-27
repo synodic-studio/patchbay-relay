@@ -56,7 +56,7 @@ async def test_message_queued_when_session_processing():
     await bridge.handle_message(update, ctx)
 
     assert key in bridge._sessions and bool(bridge._sessions[key].queue)
-    assert bridge._sessions[key].queue == ["follow-up"]
+    assert [item.text for item in bridge._sessions[key].queue] == ["follow-up"]
     update.message.reply_text.assert_called_once()
     reply_text = update.message.reply_text.call_args[0][0]
     assert "Queued (1)" in reply_text
@@ -75,7 +75,7 @@ async def test_multiple_messages_queue_incrementally():
         await bridge.handle_message(update, ctx)
 
     assert len(bridge._sessions[key].queue) == 3
-    assert bridge._sessions[key].queue == ["msg-0", "msg-1", "msg-2"]
+    assert [item.text for item in bridge._sessions[key].queue] == ["msg-0", "msg-1", "msg-2"]
 
 
 @pytest.mark.asyncio
@@ -135,7 +135,9 @@ async def test_queued_messages_drained_after_processing():
             await asyncio.sleep(0.01)
 
         # Queue a follow-up while the first is blocked in the executor.
-        bridge._get_session_state(key).queue.append("follow-up 1")
+        bridge._get_session_state(key).queue.append(
+            bridge.QueuedMessage(text="follow-up 1", pending_id="pid-followup-1")
+        )
 
         # Release the first invocation; drain loop should now pick up the queued message.
         release_first.set()
@@ -178,7 +180,12 @@ async def test_multiple_queued_messages_combined_with_separator():
         while not first_entered.is_set():
             await asyncio.sleep(0.01)
 
-        bridge._get_session_state(key).queue.extend(["second msg", "third msg"])
+        bridge._get_session_state(key).queue.extend(
+            [
+                bridge.QueuedMessage(text="second msg", pending_id="pid-second"),
+                bridge.QueuedMessage(text="third msg", pending_id="pid-third"),
+            ]
+        )
         release_first.set()
 
         await task
@@ -223,7 +230,9 @@ async def test_single_queued_message_sent_without_follow_up_format():
         while not first_entered.is_set():
             await asyncio.sleep(0.01)
 
-        bridge._get_session_state(key).queue.append("just one follow-up")
+        bridge._get_session_state(key).queue.append(
+            bridge.QueuedMessage(text="just one follow-up", pending_id="pid-just-one")
+        )
         release_first.set()
 
         await task
