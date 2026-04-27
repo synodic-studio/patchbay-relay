@@ -1,0 +1,13 @@
+{
+  "name": "patchbay-url-wrapper",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Cloudflare Worker that wraps custom URL schemes in https:// links so Telegram recognizes them as tappable.",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev"
+  },
+  "devDependencies": {
+    "wrangler": "^3.0.0"
+  }
+}
