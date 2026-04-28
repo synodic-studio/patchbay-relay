@@ -1,4 +1,4 @@
-"""Tests for stargate.harness.claude_sdk_channel.ClaudeSdkChannel.
+"""Tests for patchbay.harness.claude_sdk_channel.ClaudeSdkChannel.
 
 These tests stub the SDK client so they don't burn API credits. The
 channel is a thin wrapper — its job is to drive the SDK client's
@@ -17,7 +17,7 @@ from typing import Any
 
 import pytest
 
-from stargate.harness import (
+from patchbay.harness import (
     ChannelHandle,
     TextDelta,
     ToolResult,
@@ -25,7 +25,7 @@ from stargate.harness import (
     TurnError,
     TurnFinal,
 )
-from stargate.harness.claude_sdk_channel import (
+from patchbay.harness.claude_sdk_channel import (
     ClaudeSdkChannel,
     _stringify_tool_output,
     _terminator_from_result,

@@ -5,13 +5,13 @@ import time
 
 from unittest.mock import patch
 
-from stargate.activity import log_activity
+from patchbay.activity import log_activity
 
 
 def test_log_activity_writes_valid_json_line(tmp_path):
     log_file = tmp_path / "activity.jsonl"
 
-    with patch("stargate.activity.ACTIVITY_LOG", log_file):
+    with patch("patchbay.activity.ACTIVITY_LOG", log_file):
         log_activity("test_event", user="alice", chat_id=42)
 
     lines = log_file.read_text().splitlines()
@@ -27,7 +27,7 @@ def test_log_activity_writes_valid_json_line(tmp_path):
 def test_log_activity_appends_multiple_lines(tmp_path):
     log_file = tmp_path / "activity.jsonl"
 
-    with patch("stargate.activity.ACTIVITY_LOG", log_file):
+    with patch("patchbay.activity.ACTIVITY_LOG", log_file):
         log_activity("first")
         log_activity("second", extra="data")
 
@@ -44,7 +44,7 @@ def test_log_activity_appends_multiple_lines(tmp_path):
 def test_log_activity_each_line_is_valid_json(tmp_path):
     log_file = tmp_path / "activity.jsonl"
 
-    with patch("stargate.activity.ACTIVITY_LOG", log_file):
+    with patch("patchbay.activity.ACTIVITY_LOG", log_file):
         for i in range(5):
             log_activity("batch", index=i)
 
@@ -61,7 +61,7 @@ def test_log_activity_ts_is_recent(tmp_path):
     log_file = tmp_path / "activity.jsonl"
     before = time.time()
 
-    with patch("stargate.activity.ACTIVITY_LOG", log_file):
+    with patch("patchbay.activity.ACTIVITY_LOG", log_file):
         log_activity("timing")
 
     after = time.time()
@@ -73,5 +73,5 @@ def test_log_activity_handles_os_error(tmp_path):
     """OSError during write should not raise — just log debug."""
     bad_path = tmp_path / "no-such-dir" / "activity.jsonl"
 
-    with patch("stargate.activity.ACTIVITY_LOG", bad_path):
+    with patch("patchbay.activity.ACTIVITY_LOG", bad_path):
         log_activity("should_not_crash")  # No exception raised

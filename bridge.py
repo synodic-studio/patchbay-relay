@@ -62,7 +62,7 @@ _tgmd_sym.link = ""
 # Re-export at module level for backward compatibility with existing tests
 # and validate.py.
 # ---------------------------------------------------------------------------
-from stargate.config import (  # noqa: E402
+from patchbay.config import (  # noqa: E402
     ACTIVITY_LOG,  # noqa: F401 — used by tests via bridge.ACTIVITY_LOG
     ANSI_RE,
     BOT_TOKEN,
@@ -95,7 +95,7 @@ from stargate.config import (  # noqa: E402
     WORKING_DIR,
     logger,
 )
-from stargate.sessions import (  # noqa: E402
+from patchbay.sessions import (  # noqa: E402
     PENDING_MAX_ATTEMPTS,
     _sanitize_session_key,  # noqa: F401 — used by tests via bridge._sanitize_session_key
     _session_key,
@@ -109,7 +109,7 @@ from stargate.sessions import (  # noqa: E402
     save_pending,
     save_session_id,
 )
-from stargate.harness import (  # noqa: E402
+from patchbay.harness import (  # noqa: E402
     CAPABILITIES_BY_NAME,
     ClaudeCliHarness,
     ClaudeSdkHarness,
@@ -118,31 +118,31 @@ from stargate.harness import (  # noqa: E402
     TurnFinal,
     TurnRequest,
 )
-from stargate.parser import (  # noqa: E402
+from patchbay.parser import (  # noqa: E402
     _parse_events,  # noqa: F401 — re-exported for validate.py smoke tests
     is_empty_success_response,
     parse_claude_response,
 )
-from stargate.quota import (  # noqa: E402
+from patchbay.quota import (  # noqa: E402
     handoff_to_forge as _handoff_to_forge_impl,
     is_quota_error as _is_quota_error_impl,
 )
-from stargate.activity import log_activity  # noqa: E402
-from stargate.outbound import get_recent_outbound, log_outbound_response  # noqa: E402
-from stargate.models import (  # noqa: E402
+from patchbay.activity import log_activity  # noqa: E402
+from patchbay.outbound import get_recent_outbound, log_outbound_response  # noqa: E402
+from patchbay.models import (  # noqa: E402
     VALID_MODELS,
     extract_model_prefix,
     get_chat_model,
     set_chat_model,
 )
-from stargate.efforts import (  # noqa: E402
+from patchbay.efforts import (  # noqa: E402
     DEFAULT_EFFORT,
     VALID_EFFORTS,
     get_chat_effort,
     resolve_effort,
     set_chat_effort,
 )
-from stargate.projects import (  # noqa: E402
+from patchbay.projects import (  # noqa: E402
     _load_chat_projects,
     _parse_project_entry,
     get_all_projects as _get_all_projects,
@@ -434,7 +434,7 @@ def run_claude(
     """Invoke claude via ClaudeCliHarness, translate the event stream to a string.
 
     max_turns_override: when set, replaces MAX_TURNS for this invocation
-    only. Used by the OOM self-heal path (see stargate/self_heal.py) to
+    only. Used by the OOM self-heal path (see patchbay/self_heal.py) to
     retry with a tighter turn budget after a kill.
     """
     session_id = get_session_id(session_key)
@@ -610,7 +610,7 @@ def run_claude(
         # Pi (badlogicgames/pi) — multi-model coding agent. Uses its own
         # session storage (~/.pi/agent/sessions). Subprocess like cc-cli
         # so proc_setter mirrors into state.proc for /kill / stall.
-        from stargate.harness import PiHarness
+        from patchbay.harness import PiHarness
 
         harness = PiHarness(
             max_timeout_seconds=MAX_TIMEOUT,
@@ -621,8 +621,8 @@ def run_claude(
         # Aider — model-agnostic coding CLI. session_id is a chat-history
         # file path (we own ./aider-history/<session-key>.md). Default
         # model openrouter/deepseek/deepseek-chat (override via
-        # STARGATE_AIDER_MODEL env or per-chat /model).
-        from stargate.harness import AiderHarness
+        # PATCHBAY_AIDER_MODEL env (or legacy STARGATE_AIDER_MODEL) or per-chat /model).
+        from patchbay.harness import AiderHarness
 
         harness = AiderHarness(
             max_timeout_seconds=MAX_TIMEOUT,
@@ -632,8 +632,8 @@ def run_claude(
     elif effective_harness == "opencode":
         # sst/opencode — JSON event protocol via `opencode run --format json`.
         # Default model `openrouter/deepseek/deepseek-chat-v3.1` (override via
-        # STARGATE_OPENCODE_MODEL env or per-chat /model).
-        from stargate.harness import OpenCodeHarness
+        # PATCHBAY_OPENCODE_MODEL env (or legacy STARGATE_OPENCODE_MODEL) or per-chat /model).
+        from patchbay.harness import OpenCodeHarness
 
         harness = OpenCodeHarness(
             max_timeout_seconds=MAX_TIMEOUT,
@@ -707,7 +707,7 @@ def run_claude(
             return run_claude(message, session_key, _retry=True)
 
         if final.kind == "oom" and not _retry:
-            from stargate.self_heal import (
+            from patchbay.self_heal import (
                 OOM_RETRY_MAX_TURNS,
                 OOM_RETRY_PROMPT_TRIM,
                 dispatch_repair,
@@ -1554,7 +1554,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     uid = update.effective_user.id
     await update.message.reply_text(
-        f"Stargate active.\nYour Telegram user ID: {uid}\n\n"
+        f"Patchbay active.\nYour Telegram user ID: {uid}\n\n"
         "Commands:\n"
         "/clearnew - Start a fresh conversation (in current topic)\n"
         "/setproject <path> - Set project dir (relative to ~/Developer)\n"
@@ -2177,7 +2177,7 @@ def _safe_count(path: Path, pattern: str) -> int:
 
 async def cmd_health(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Report bridge liveness: uptime, queues, disk free, last error."""
-    from stargate.config import BASE_DIR
+    from patchbay.config import BASE_DIR
 
     now = time.time()
     uptime = _format_uptime(now - _BRIDGE_STARTED_AT)
@@ -2309,13 +2309,13 @@ def _resolve_harness_for_inquiry(session_key: str):
             claude_path=CLAUDE_PATH, max_timeout_seconds=MAX_TIMEOUT
         )
     elif harness_name == "pi":
-        from stargate.harness import PiHarness
+        from patchbay.harness import PiHarness
         harness = PiHarness(max_timeout_seconds=MAX_TIMEOUT)
     elif harness_name == "aider":
-        from stargate.harness import AiderHarness
+        from patchbay.harness import AiderHarness
         harness = AiderHarness(max_timeout_seconds=MAX_TIMEOUT)
     elif harness_name == "opencode":
-        from stargate.harness import OpenCodeHarness
+        from patchbay.harness import OpenCodeHarness
         harness = OpenCodeHarness(max_timeout_seconds=MAX_TIMEOUT)
     else:
         return None
@@ -2384,7 +2384,7 @@ async def cmd_context(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 _SUMMARIZE_PROMPT = (
-    "STARGATE COMPACT — produce a handoff summary of our conversation so "
+    "PATCHBAY COMPACT — produce a handoff summary of our conversation so "
     "far. Output ONLY the summary text, no preamble, no closing remark, "
     "no markdown wrapping. Cover: (1) the original goal and any sub-goals, "
     "(2) decisions made and why, (3) work in progress / what's next, "
@@ -2660,7 +2660,7 @@ async def _conflict_storm_watcher() -> None:
     seconds before considering another storm to give the previous repair
     time to settle.
     """
-    from stargate.self_heal import dispatch_repair
+    from patchbay.self_heal import dispatch_repair
 
     last_fired = 0.0
     while True:
@@ -2923,10 +2923,10 @@ def _graceful_shutdown(signum: int, frame) -> None:
 def main() -> None:
     # Single-instance guard FIRST — before any Telegram polling starts.
     # Prevents two bridges racing on getUpdates (409 storm).
-    from stargate.config import BASE_DIR
-    from stargate.log_filters import install_filters
-    from stargate.logrotate import rotate_startup_logs
-    from stargate.singleton import acquire_singleton
+    from patchbay.config import BASE_DIR
+    from patchbay.log_filters import install_filters
+    from patchbay.logrotate import rotate_startup_logs
+    from patchbay.singleton import acquire_singleton
 
     acquire_singleton()
     global _conflict_aggregator

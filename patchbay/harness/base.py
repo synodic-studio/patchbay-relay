@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Literal, Protocol, Union, runtime_checkable
 
 # Failure classes the bridge knows how to act on. Strings match
-# stargate.self_heal repair-handler keys where possible so dispatch is
+# patchbay.self_heal repair-handler keys where possible so dispatch is
 # uniform across CLI and SDK harnesses.
 TurnErrorKind = Literal[
     "rate_limit",       # quota or rate limit; bridge does Forge handoff
@@ -58,13 +58,13 @@ class HarnessCapabilities:
 class TurnRequest:
     """One turn's worth of input.
 
-    Stargate builds this in the bridge per message and hands it to the
+    Patchbay builds this in the bridge per message and hands it to the
     selected harness. Fields the harness doesn't support are silently
     ignored (e.g. a codex harness ignores `plugin_dir`).
     """
 
     prompt: str
-    session_key: str               # stargate's chat:thread key (for logging only)
+    session_key: str               # patchbay's chat:thread key (for logging only)
     project_dir: Path
     system_prompt: str
     resume_session_id: str | None  # None → fresh session

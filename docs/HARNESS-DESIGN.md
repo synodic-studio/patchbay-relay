@@ -1,6 +1,6 @@
-# Harness Design — Stargate
+# Harness Design — Patchbay
 
-The seam that lets stargate run multiple coding-agent backends (Claude
+The seam that lets patchbay run multiple coding-agent backends (Claude
 Code CLI, Claude Agent SDK, codex/pi, cursor, …) behind one interface.
 
 ## Status
@@ -8,8 +8,8 @@ Code CLI, Claude Agent SDK, codex/pi, cursor, …) behind one interface.
 | Phase | Status | What landed |
 |---|---|---|
 | 0 — Design | ✅ | This doc + 4 open questions resolved |
-| 1a — Protocol + CLI harness | ✅ | `stargate/harness/{base,claude_cli}.py`, 16 tests. Dormant — bridge unchanged. |
-| 2 — SDK harness | ✅ | `stargate/harness/claude_sdk.py`, 24 tests. Dormant. Validated the protocol from a 2nd angle without any changes. |
+| 1a — Protocol + CLI harness | ✅ | `patchbay/harness/{base,claude_cli}.py`, 16 tests. Dormant — bridge unchanged. |
+| 2 — SDK harness | ✅ | `patchbay/harness/claude_sdk.py`, 24 tests. Dormant. Validated the protocol from a 2nd angle without any changes. |
 | 1b — Rewire bridge (core) | ✅ | `bridge.run_claude` now drives `ClaudeCliHarness` via `_drive_harness_sync`. Popen/drain/parse moved out of the bridge. `proc_setter` callback mirrors the running proc into `SessionState.proc` so `/kill`, the stall detector, and graceful shutdown still work. `on_progress` keeps `state.last_event_at` fresh. 559 tests pass. |
 | 1c — Per-chat selection + activity field | ✅ | `chat_projects.json.harness` field + `STARGATE_DEFAULT_HARNESS` env + `/harness` command. Every `activity.jsonl` entry that touches a turn carries `harness=<effective>` and `harness_requested=<requested>`. 573 tests. |
 | 3a — Backend-agnostic cancel | ✅ | `SessionState.harness` + `worker_loop` fields. `_cancel_session_async` dispatches `proc.kill()` for cc-cli or `run_coroutine_threadsafe(harness.cancel(), worker_loop)` for cc-sdk. `_iter_active_sessions` is the new backend-agnostic snapshot used by /ping, the stall detector, /restart, shutdown. 582 tests. |
@@ -17,9 +17,9 @@ Code CLI, Claude Agent SDK, codex/pi, cursor, …) behind one interface.
 | 3c — Soak tooling | ✅ | `scripts/harness_soak.py` + `/soak [since] [session]` Telegram command. Buckets `activity.jsonl` rows by `harness=` field, reports turn counts, outcome rates, p50/p95 duration, OOM/quota/stall counts. 18 tests. |
 | 3 — Live soak | running | cc-sdk active in synodic-kit topic; `/soak` for live readout. |
 | 4 — Flip default | future | `STARGATE_DEFAULT_HARNESS=cc-sdk`. Keep `cc-cli` as fallback. |
-| 5a — Pi harness | ✅ | `stargate/harness/pi.py` — wraps `pi -p --mode json`. Resume via `--session <id>`, multi-model via `--model PROVIDER/ID`, classified errors from `stopReason==error`. 29 tests + smoke-tested end-to-end with deepseek (cost, session resume, BANANA recall). |
-| 5b — Aider harness | ✅ | `stargate/harness/aider.py` — wraps `aider --message` with banner stripping. session_id is the chat-history file path under `aider-history/`. Default model `openrouter/deepseek/deepseek-chat`, override via `STARGATE_AIDER_MODEL` env or per-chat `/model`. 24 tests + smoke-tested with deepseek (banner strip + cost parse). |
-| 5c — OpenCode harness | ✅ | `stargate/harness/opencode.py` — wraps `opencode run --format json --pure --dangerously-skip-permissions`. Sessions are first-class `ses_*` UUIDs, resumed via `--session`. Effort maps to `--variant`. 21 tests + smoke-tested with deepseek (resume across two turns). |
+| 5a — Pi harness | ✅ | `patchbay/harness/pi.py` — wraps `pi -p --mode json`. Resume via `--session <id>`, multi-model via `--model PROVIDER/ID`, classified errors from `stopReason==error`. 29 tests + smoke-tested end-to-end with deepseek (cost, session resume, BANANA recall). |
+| 5b — Aider harness | ✅ | `patchbay/harness/aider.py` — wraps `aider --message` with banner stripping. session_id is the chat-history file path under `aider-history/`. Default model `openrouter/deepseek/deepseek-chat`, override via `STARGATE_AIDER_MODEL` env or per-chat `/model`. 24 tests + smoke-tested with deepseek (banner strip + cost parse). |
+| 5c — OpenCode harness | ✅ | `patchbay/harness/opencode.py` — wraps `opencode run --format json --pure --dangerously-skip-permissions`. Sessions are first-class `ses_*` UUIDs, resumed via `--session`. Effort maps to `--variant`. 21 tests + smoke-tested with deepseek (resume across two turns). |
 | 5z — codex/cursor/gemini | future | Lower priority. |
 
 ## What 1b core delivered
@@ -43,7 +43,7 @@ Code CLI, Claude Agent SDK, codex/pi, cursor, …) behind one interface.
   - `max_turns` → save session_id + return harness-built notice text
   - `unknown` / `process_died` → surface message verbatim
 - Test fixtures updated to patch
-  `stargate.harness.claude_cli.ClaudeCliHarness._drain_streams` instead
+  `patchbay.harness.claude_cli.ClaudeCliHarness._drain_streams` instead
   of the removed `bridge._read_proc_streaming`. The
   `proc.communicate(timeout=...)` mocking pattern still works.
 
@@ -79,7 +79,7 @@ Code CLI, Claude Agent SDK, codex/pi, cursor, …) behind one interface.
 
 - `STARGATE_DEFAULT_HARNESS` env (defaults to `cc-cli`); validated at
   startup against `VALID_HARNESSES = ("cc-cli", "cc-sdk")`.
-- `stargate.projects.get_chat_harness` / `set_chat_harness` —
+- `patchbay.projects.get_chat_harness` / `set_chat_harness` —
   per-chat override stored as the optional `"harness"` key on the
   dict-form `chat_projects.json` entry. Setter promotes legacy string
   entries to dict-form so `path` and `agent` siblings survive.
@@ -138,7 +138,7 @@ The stream **always ends with exactly one `TurnFinal` or `TurnError`**.
 Any number of `TextDelta` / `ToolUse` / `ToolResult` events may precede
 the terminator.
 
-Source of truth: `stargate/harness/base.py`. Both harnesses verify the
+Source of truth: `patchbay/harness/base.py`. Both harnesses verify the
 contract via the test suites in `tests/test_harness_contract.py` and
 `tests/test_harness_sdk.py`.
 
@@ -161,7 +161,7 @@ non-Claude harnesses to learn from.
 
 ## Reference: TurnError.kind → self-heal mapping
 
-Implemented in `stargate/self_heal.py`. Phase 1b adds the new kinds.
+Implemented in `patchbay/self_heal.py`. Phase 1b adds the new kinds.
 
 | `TurnError.kind` | Existing handler | Notes |
 |---|---|---|

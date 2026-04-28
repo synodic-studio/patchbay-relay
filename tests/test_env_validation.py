@@ -1,4 +1,4 @@
-"""Tests for env-var validation helpers in stargate.config.
+"""Tests for env-var validation helpers in patchbay.config.
 
 These guard the startup path: a bad .env entry should exit with a clear
 error on stderr, not an unhelpful ValueError traceback.
@@ -8,7 +8,7 @@ import os
 
 import pytest
 
-from stargate import config
+from patchbay import config
 
 
 class TestEnvInt:

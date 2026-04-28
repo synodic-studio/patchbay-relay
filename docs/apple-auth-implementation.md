@@ -1,6 +1,6 @@
 # Apple Auth Implementation Reference
 
-This document describes the Sign in with Apple (SIWA) and TOTP authentication system that was built for Stargate, how it worked, why it was separated from the bridge's message-handling path, and how to bring it back.
+This document describes the Sign in with Apple (SIWA) and TOTP authentication system that was built for Patchbay, how it worked, why it was separated from the bridge's message-handling path, and how to bring it back.
 
 > **Status note.** The repo's git history was squashed to a single Initial commit when the project went public. The pre-squash state is preserved on the remote at the `v0-pre-public` tag. To browse the historical implementation: `git fetch origin v0-pre-public && git checkout v0-pre-public`. Any commit SHAs referenced below resolve only from that tag.
 
@@ -164,7 +164,7 @@ All auth events are appended to `auth/auth_log.jsonl`:
 | `auth.py` | All session state: create, validate, expire, lock, rate limit, TOTP verify, token generation/consumption, audit logging, notification dispatch |
 | `auth_server.py` | FastAPI app with `/login` (serves HTML), `/callback` (Apple OIDC POST handler), `/health`. Generates Apple client secret JWTs. Verifies Apple id_tokens against Apple's public keys. Enforces subject allowlist. |
 | `bridge.py` (auth code retired) | `_check_auth()` guard on message/photo handlers. `_send_auth_link()` token generation + link. `cmd_auth` / `cmd_lock` command handlers. `_auth_notify()` Telegram notification callback. `ALLOWED_USER_IDS` gate on all commands. |
-| `stargate/config.py` (auth code retired) | `ALLOWED_USER_IDS` parsing, `AUTH_REQUIRED` flag, `AUTH_BASE_URL` constant. |
+| `patchbay/config.py` (auth code retired) | `ALLOWED_USER_IDS` parsing, `AUTH_REQUIRED` flag, `AUTH_BASE_URL` constant. |
 | `setup_totp.py` | CLI tool for TOTP secret generation with QR code display and verification. |
 | `run_auth.sh` | Shell wrapper: starts auth_server.py and Cloudflare Tunnel, traps signals for clean shutdown. |
 | `dev.kj6.auth-bridge.plist` | launchd plist for persistent auth server service. |
@@ -221,7 +221,7 @@ The auth-specific Python packages were removed from `pyproject.toml` when auth w
 
 ## How to Bring It Back
 
-### Step 1: Restore config values in `stargate/config.py`
+### Step 1: Restore config values in `patchbay/config.py`
 
 Add back the removed constants (the exact diff is reachable from the `v0-pre-public` tag):
 
@@ -253,7 +253,7 @@ AUTH_REQUIRED = os.environ.get("AUTH_REQUIRED", "false").lower() == "true"
 Add back (exact locations are reachable from the `v0-pre-public` tag):
 
 1. `import auth` at the top.
-2. Import `ALLOWED_USER_IDS`, `AUTH_BASE_URL`, `AUTH_REQUIRED` from `stargate.config`.
+2. Import `ALLOWED_USER_IDS`, `AUTH_BASE_URL`, `AUTH_REQUIRED` from `patchbay.config`.
 3. The `_check_auth()` and `_send_auth_link()` helper functions.
 4. Auth checks at the top of `handle_message()` and `handle_photo()`:
    ```python

@@ -230,19 +230,19 @@ def check_helpers(mod) -> bool:
 
 
 def check_package_modules() -> bool:
-    """Verify all stargate package modules can be imported."""
+    """Verify all patchbay package modules can be imported."""
     import logging
 
     logging.disable(logging.CRITICAL)
     ok = True
     modules = [
-        "stargate",
-        "stargate.config",
-        "stargate.sessions",
-        "stargate.parser",
-        "stargate.quota",
-        "stargate.activity",
-        "stargate.projects",
+        "patchbay",
+        "patchbay.config",
+        "patchbay.sessions",
+        "patchbay.parser",
+        "patchbay.quota",
+        "patchbay.activity",
+        "patchbay.projects",
     ]
     for name in modules:
         try:
@@ -256,7 +256,7 @@ def check_package_modules() -> bool:
     if ok:
         # Cross-module integration: verify parser can call save_session_id
         try:
-            from stargate.parser import _parse_events
+            from patchbay.parser import _parse_events
 
             events = _parse_events('{"type":"result","result":"ok","session_id":"v","is_error":false}')
             if len(events) != 1:

@@ -1,9 +1,9 @@
-"""Tests for stargate.projects — chat-to-project directory mapping."""
+"""Tests for patchbay.projects — chat-to-project directory mapping."""
 
 
 import pytest
 
-import stargate.projects
+import patchbay.projects
 
 
 @pytest.fixture(autouse=True)
@@ -13,8 +13,8 @@ def _isolate_projects(tmp_path, monkeypatch):
     working_dir = str(tmp_path / "Developer")
     (tmp_path / "Developer").mkdir()
 
-    monkeypatch.setattr(stargate.projects, "CHAT_PROJECTS_FILE", projects_file)
-    monkeypatch.setattr(stargate.projects, "WORKING_DIR", working_dir)
+    monkeypatch.setattr(patchbay.projects, "CHAT_PROJECTS_FILE", projects_file)
+    monkeypatch.setattr(patchbay.projects, "WORKING_DIR", working_dir)
 
 
 # ---------------------------------------------------------------------------
@@ -24,34 +24,34 @@ def _isolate_projects(tmp_path, monkeypatch):
 
 class TestParseProjectEntry:
     def test_string_entry(self):
-        assert stargate.projects._parse_project_entry("Fanta") == ("Fanta", None)
+        assert patchbay.projects._parse_project_entry("Fanta") == ("Fanta", None)
 
     def test_dict_with_path_and_agent(self):
         entry = {"path": "Fanta", "agent": "iron-temple"}
-        assert stargate.projects._parse_project_entry(entry) == ("Fanta", "iron-temple")
+        assert patchbay.projects._parse_project_entry(entry) == ("Fanta", "iron-temple")
 
     def test_dict_with_only_path(self):
         entry = {"path": "Fanta"}
-        assert stargate.projects._parse_project_entry(entry) == ("Fanta", None)
+        assert patchbay.projects._parse_project_entry(entry) == ("Fanta", None)
 
     def test_dict_with_only_agent(self):
         entry = {"agent": "iron-temple"}
-        assert stargate.projects._parse_project_entry(entry) == (None, "iron-temple")
+        assert patchbay.projects._parse_project_entry(entry) == (None, "iron-temple")
 
     def test_none_entry(self):
-        assert stargate.projects._parse_project_entry(None) == (None, None)
+        assert patchbay.projects._parse_project_entry(None) == (None, None)
 
     def test_integer_entry(self):
-        assert stargate.projects._parse_project_entry(42) == (None, None)
+        assert patchbay.projects._parse_project_entry(42) == (None, None)
 
     def test_empty_string(self):
-        assert stargate.projects._parse_project_entry("") == ("", None)
+        assert patchbay.projects._parse_project_entry("") == ("", None)
 
     def test_empty_dict(self):
-        assert stargate.projects._parse_project_entry({}) == (None, None)
+        assert patchbay.projects._parse_project_entry({}) == (None, None)
 
     def test_list_entry(self):
-        assert stargate.projects._parse_project_entry(["a", "b"]) == (None, None)
+        assert patchbay.projects._parse_project_entry(["a", "b"]) == (None, None)
 
 
 # ---------------------------------------------------------------------------
@@ -61,27 +61,27 @@ class TestParseProjectEntry:
 
 class TestLoadSaveChatProjects:
     def test_load_missing_file_returns_empty(self):
-        result = stargate.projects._load_chat_projects()
+        result = patchbay.projects._load_chat_projects()
         assert result == {}
 
     def test_load_corrupt_json_returns_empty(self):
-        stargate.projects.CHAT_PROJECTS_FILE.write_text("not valid json{{{")
-        result = stargate.projects._load_chat_projects()
+        patchbay.projects.CHAT_PROJECTS_FILE.write_text("not valid json{{{")
+        result = patchbay.projects._load_chat_projects()
         assert result == {}
 
     def test_save_and_load_round_trip(self):
-        data = {"chat_1": "Fanta", "chat_2": "stargate"}
-        stargate.projects._save_chat_projects(data)
-        loaded = stargate.projects._load_chat_projects()
+        data = {"chat_1": "Fanta", "chat_2": "patchbay-relay"}
+        patchbay.projects._save_chat_projects(data)
+        loaded = patchbay.projects._load_chat_projects()
         assert loaded == data
 
     def test_multiple_entry_types(self):
         data = {
             "chat_str": "Fanta",
-            "chat_dict": {"path": "stargate", "agent": "magpie"},
+            "chat_dict": {"path": "patchbay-relay", "agent": "magpie"},
         }
-        stargate.projects._save_chat_projects(data)
-        loaded = stargate.projects._load_chat_projects()
+        patchbay.projects._save_chat_projects(data)
+        loaded = patchbay.projects._load_chat_projects()
         assert loaded == data
 
 
@@ -92,23 +92,23 @@ class TestLoadSaveChatProjects:
 
 class TestGetChatWorkingDir:
     def test_with_project_set(self):
-        stargate.projects._save_chat_projects({"chat_1": "Fanta"})
-        result = stargate.projects.get_chat_working_dir("chat_1")
-        working = stargate.projects.WORKING_DIR
+        patchbay.projects._save_chat_projects({"chat_1": "Fanta"})
+        result = patchbay.projects.get_chat_working_dir("chat_1")
+        working = patchbay.projects.WORKING_DIR
         assert result == f"{working}/Fanta"
 
     def test_without_project_returns_default(self):
-        stargate.projects._save_chat_projects({})
-        result = stargate.projects.get_chat_working_dir("unknown_chat")
-        assert result == stargate.projects.WORKING_DIR
+        patchbay.projects._save_chat_projects({})
+        result = patchbay.projects.get_chat_working_dir("unknown_chat")
+        assert result == patchbay.projects.WORKING_DIR
 
     def test_with_dict_entry(self):
-        stargate.projects._save_chat_projects(
-            {"chat_1": {"path": "stargate", "agent": "plotter"}}
+        patchbay.projects._save_chat_projects(
+            {"chat_1": {"path": "patchbay-relay", "agent": "plotter"}}
         )
-        result = stargate.projects.get_chat_working_dir("chat_1")
-        working = stargate.projects.WORKING_DIR
-        assert result == f"{working}/stargate"
+        result = patchbay.projects.get_chat_working_dir("chat_1")
+        working = patchbay.projects.WORKING_DIR
+        assert result == f"{working}/patchbay-relay"
 
 
 # ---------------------------------------------------------------------------
@@ -118,20 +118,20 @@ class TestGetChatWorkingDir:
 
 class TestGetChatAgent:
     def test_with_agent(self):
-        stargate.projects._save_chat_projects(
+        patchbay.projects._save_chat_projects(
             {"chat_1": {"path": "Fanta", "agent": "iron-temple"}}
         )
-        assert stargate.projects.get_chat_agent("chat_1") == "iron-temple"
+        assert patchbay.projects.get_chat_agent("chat_1") == "iron-temple"
 
     def test_without_agent_returns_none(self):
-        stargate.projects._save_chat_projects(
+        patchbay.projects._save_chat_projects(
             {"chat_1": {"path": "Fanta"}}
         )
-        assert stargate.projects.get_chat_agent("chat_1") is None
+        assert patchbay.projects.get_chat_agent("chat_1") is None
 
     def test_string_entry_returns_none(self):
-        stargate.projects._save_chat_projects({"chat_1": "Fanta"})
-        assert stargate.projects.get_chat_agent("chat_1") is None
+        patchbay.projects._save_chat_projects({"chat_1": "Fanta"})
+        assert patchbay.projects.get_chat_agent("chat_1") is None
 
 
 # ---------------------------------------------------------------------------
@@ -141,21 +141,21 @@ class TestGetChatAgent:
 
 class TestSetChatProject:
     def test_set_and_verify(self):
-        stargate.projects.set_chat_project("chat_1", "Fanta")
-        loaded = stargate.projects._load_chat_projects()
+        patchbay.projects.set_chat_project("chat_1", "Fanta")
+        loaded = patchbay.projects._load_chat_projects()
         assert loaded["chat_1"] == "Fanta"
 
     def test_clear_project(self):
-        stargate.projects.set_chat_project("chat_1", "Fanta")
-        stargate.projects.set_chat_project("chat_1", None)
-        loaded = stargate.projects._load_chat_projects()
+        patchbay.projects.set_chat_project("chat_1", "Fanta")
+        patchbay.projects.set_chat_project("chat_1", None)
+        loaded = patchbay.projects._load_chat_projects()
         assert "chat_1" not in loaded
 
     def test_overwrite_existing(self):
-        stargate.projects.set_chat_project("chat_1", "Fanta")
-        stargate.projects.set_chat_project("chat_1", "stargate")
-        loaded = stargate.projects._load_chat_projects()
-        assert loaded["chat_1"] == "stargate"
+        patchbay.projects.set_chat_project("chat_1", "Fanta")
+        patchbay.projects.set_chat_project("chat_1", "patchbay-relay")
+        loaded = patchbay.projects._load_chat_projects()
+        assert loaded["chat_1"] == "patchbay-relay"
 
 
 # ---------------------------------------------------------------------------
@@ -169,7 +169,7 @@ class TestGetAllProjects:
         (dev / "Charlie").mkdir()
         (dev / "Alpha").mkdir()
         (dev / "Bravo").mkdir()
-        result = stargate.projects.get_all_projects()
+        result = patchbay.projects.get_all_projects()
         assert result == ["Alpha", "Bravo", "Charlie"]
 
     def test_excludes_dotfiles_and_underscored(self, tmp_path):
@@ -177,12 +177,12 @@ class TestGetAllProjects:
         (dev / ".hidden").mkdir()
         (dev / "_private").mkdir()
         (dev / "Visible").mkdir()
-        result = stargate.projects.get_all_projects()
+        result = patchbay.projects.get_all_projects()
         assert result == ["Visible"]
 
     def test_empty_directory(self, tmp_path):
         # Developer dir exists but is empty (created by autouse fixture)
-        result = stargate.projects.get_all_projects()
+        result = patchbay.projects.get_all_projects()
         assert result == []
 
 
@@ -193,28 +193,28 @@ class TestGetAllProjects:
 
 class TestChatHarness:
     def test_get_returns_none_when_unset(self):
-        assert stargate.projects.get_chat_harness("chat_1") is None
+        assert patchbay.projects.get_chat_harness("chat_1") is None
 
     def test_get_returns_none_for_legacy_string_entry(self):
-        stargate.projects._save_chat_projects({"chat_1": "Fanta"})
-        assert stargate.projects.get_chat_harness("chat_1") is None
+        patchbay.projects._save_chat_projects({"chat_1": "Fanta"})
+        assert patchbay.projects.get_chat_harness("chat_1") is None
 
     def test_set_then_get_roundtrip(self):
-        stargate.projects.set_chat_harness("chat_1", "cc-sdk")
-        assert stargate.projects.get_chat_harness("chat_1") == "cc-sdk"
+        patchbay.projects.set_chat_harness("chat_1", "cc-sdk")
+        assert patchbay.projects.get_chat_harness("chat_1") == "cc-sdk"
 
     def test_set_promotes_string_entry_to_dict_preserving_path(self):
-        stargate.projects._save_chat_projects({"chat_1": "Fanta"})
-        stargate.projects.set_chat_harness("chat_1", "cc-sdk")
-        loaded = stargate.projects._load_chat_projects()
+        patchbay.projects._save_chat_projects({"chat_1": "Fanta"})
+        patchbay.projects.set_chat_harness("chat_1", "cc-sdk")
+        loaded = patchbay.projects._load_chat_projects()
         assert loaded["chat_1"] == {"path": "Fanta", "harness": "cc-sdk"}
 
     def test_set_lands_alongside_path_and_agent(self):
-        stargate.projects._save_chat_projects(
+        patchbay.projects._save_chat_projects(
             {"chat_1": {"path": "Fanta", "agent": "iron-temple"}}
         )
-        stargate.projects.set_chat_harness("chat_1", "cc-cli")
-        loaded = stargate.projects._load_chat_projects()
+        patchbay.projects.set_chat_harness("chat_1", "cc-cli")
+        loaded = patchbay.projects._load_chat_projects()
         assert loaded["chat_1"] == {
             "path": "Fanta",
             "agent": "iron-temple",
@@ -222,17 +222,17 @@ class TestChatHarness:
         }
 
     def test_set_none_clears_only_harness_key(self):
-        stargate.projects._save_chat_projects(
+        patchbay.projects._save_chat_projects(
             {"chat_1": {"path": "Fanta", "harness": "cc-sdk"}}
         )
-        stargate.projects.set_chat_harness("chat_1", None)
-        loaded = stargate.projects._load_chat_projects()
+        patchbay.projects.set_chat_harness("chat_1", None)
+        loaded = patchbay.projects._load_chat_projects()
         assert loaded["chat_1"] == {"path": "Fanta"}
 
     def test_clearing_harness_on_harness_only_entry_drops_entry(self):
-        stargate.projects._save_chat_projects({"chat_1": {"harness": "cc-sdk"}})
-        stargate.projects.set_chat_harness("chat_1", None)
-        loaded = stargate.projects._load_chat_projects()
+        patchbay.projects._save_chat_projects({"chat_1": {"harness": "cc-sdk"}})
+        patchbay.projects.set_chat_harness("chat_1", None)
+        loaded = patchbay.projects._load_chat_projects()
         assert "chat_1" not in loaded
 
 
@@ -243,28 +243,28 @@ class TestChatHarness:
 
 class TestChatTitle:
     def test_get_returns_none_when_unset(self):
-        assert stargate.projects.get_chat_title("chat_1") is None
+        assert patchbay.projects.get_chat_title("chat_1") is None
 
     def test_get_returns_none_for_legacy_string_entry(self):
-        stargate.projects._save_chat_projects({"chat_1": "Fanta"})
-        assert stargate.projects.get_chat_title("chat_1") is None
+        patchbay.projects._save_chat_projects({"chat_1": "Fanta"})
+        assert patchbay.projects.get_chat_title("chat_1") is None
 
     def test_set_then_get_roundtrip(self):
-        stargate.projects.set_chat_title("chat_1", "Stargate Bridge")
-        assert stargate.projects.get_chat_title("chat_1") == "Stargate Bridge"
+        patchbay.projects.set_chat_title("chat_1", "Patchbay Bridge")
+        assert patchbay.projects.get_chat_title("chat_1") == "Patchbay Bridge"
 
     def test_set_promotes_string_entry_to_dict_preserving_path(self):
-        stargate.projects._save_chat_projects({"chat_1": "Fanta"})
-        stargate.projects.set_chat_title("chat_1", "Iron Temple")
-        loaded = stargate.projects._load_chat_projects()
+        patchbay.projects._save_chat_projects({"chat_1": "Fanta"})
+        patchbay.projects.set_chat_title("chat_1", "Iron Temple")
+        loaded = patchbay.projects._load_chat_projects()
         assert loaded["chat_1"] == {"path": "Fanta", "title": "Iron Temple"}
 
     def test_set_lands_alongside_path_agent_harness(self):
-        stargate.projects._save_chat_projects(
+        patchbay.projects._save_chat_projects(
             {"chat_1": {"path": "Fanta", "agent": "ernest", "harness": "cc-sdk"}}
         )
-        stargate.projects.set_chat_title("chat_1", "Ernest")
-        loaded = stargate.projects._load_chat_projects()
+        patchbay.projects.set_chat_title("chat_1", "Ernest")
+        loaded = patchbay.projects._load_chat_projects()
         assert loaded["chat_1"] == {
             "path": "Fanta",
             "agent": "ernest",
@@ -273,17 +273,17 @@ class TestChatTitle:
         }
 
     def test_set_none_clears_only_title_key(self):
-        stargate.projects._save_chat_projects(
+        patchbay.projects._save_chat_projects(
             {"chat_1": {"path": "Fanta", "title": "Old"}}
         )
-        stargate.projects.set_chat_title("chat_1", None)
-        loaded = stargate.projects._load_chat_projects()
+        patchbay.projects.set_chat_title("chat_1", None)
+        loaded = patchbay.projects._load_chat_projects()
         assert loaded["chat_1"] == {"path": "Fanta"}
 
     def test_clearing_title_on_title_only_entry_drops_entry(self):
-        stargate.projects._save_chat_projects({"chat_1": {"title": "Orphan"}})
-        stargate.projects.set_chat_title("chat_1", None)
-        loaded = stargate.projects._load_chat_projects()
+        patchbay.projects._save_chat_projects({"chat_1": {"title": "Orphan"}})
+        patchbay.projects.set_chat_title("chat_1", None)
+        loaded = patchbay.projects._load_chat_projects()
         assert "chat_1" not in loaded
 
 
@@ -294,7 +294,7 @@ class TestChatTitle:
 
 class TestSetChatProjectPreservesSiblings:
     def test_changing_path_keeps_agent_harness_title(self):
-        stargate.projects._save_chat_projects(
+        patchbay.projects._save_chat_projects(
             {
                 "chat_1": {
                     "path": "Fanta",
@@ -304,19 +304,19 @@ class TestSetChatProjectPreservesSiblings:
                 }
             }
         )
-        stargate.projects.set_chat_project("chat_1", "stargate")
-        loaded = stargate.projects._load_chat_projects()
+        patchbay.projects.set_chat_project("chat_1", "patchbay-relay")
+        loaded = patchbay.projects._load_chat_projects()
         assert loaded["chat_1"] == {
-            "path": "stargate",
+            "path": "patchbay-relay",
             "agent": "ernest",
             "harness": "cc-sdk",
             "title": "Ernest",
         }
 
     def test_clearing_path_removes_entire_entry(self):
-        stargate.projects._save_chat_projects(
+        patchbay.projects._save_chat_projects(
             {"chat_1": {"path": "Fanta", "title": "Iron Temple"}}
         )
-        stargate.projects.set_chat_project("chat_1", None)
-        loaded = stargate.projects._load_chat_projects()
+        patchbay.projects.set_chat_project("chat_1", None)
+        loaded = patchbay.projects._load_chat_projects()
         assert "chat_1" not in loaded

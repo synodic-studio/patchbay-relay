@@ -84,7 +84,7 @@ class TestParseClaudeResponse:
         session_key = "test_session"
 
         # Mock save_session_id to verify it's called
-        with patch("stargate.parser.save_session_id") as mock_save:
+        with patch("patchbay.parser.save_session_id") as mock_save:
             result = bridge.parse_claude_response(stdout, session_key)
 
             # Verify save_session_id was called with correct arguments

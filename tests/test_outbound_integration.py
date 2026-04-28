@@ -49,7 +49,7 @@ def _patch_deps():
         patch("bridge._parse_project_entry", return_value=(None, None)),
         patch("bridge._log_activity"),
         patch(
-            "stargate.harness.claude_cli.ClaudeCliHarness._drain_streams",
+            "patchbay.harness.claude_cli.ClaudeCliHarness._drain_streams",
             _fake_drain_streams,
         ),
     ):
@@ -60,8 +60,8 @@ class TestOutboundInjection:
     def test_recent_outbound_appears_in_system_prompt(self, tmp_path, monkeypatch):
         """When outbound log has entries, they appear in --append-system-prompt."""
         # Write a fake outbound entry
-        monkeypatch.setattr("stargate.outbound.OUTBOUND_DIR", tmp_path)
-        from stargate.outbound import log_outbound
+        monkeypatch.setattr("patchbay.outbound.OUTBOUND_DIR", tmp_path)
+        from patchbay.outbound import log_outbound
 
         log_outbound(SESSION_KEY, "Your daily digest is ready. 3 new items.", "buddy")
 
@@ -85,7 +85,7 @@ class TestOutboundInjection:
 
     def test_no_outbound_no_section(self, tmp_path, monkeypatch):
         """When outbound log is empty, no RECENT NOTIFICATIONS section."""
-        monkeypatch.setattr("stargate.outbound.OUTBOUND_DIR", tmp_path)
+        monkeypatch.setattr("patchbay.outbound.OUTBOUND_DIR", tmp_path)
 
         proc = _make_proc(stdout=_valid_stdout())
         captured_cmd = []
@@ -103,8 +103,8 @@ class TestOutboundInjection:
 
     def test_limits_to_3_messages(self, tmp_path, monkeypatch):
         """Only the last 3 outbound messages are included."""
-        monkeypatch.setattr("stargate.outbound.OUTBOUND_DIR", tmp_path)
-        from stargate.outbound import log_outbound
+        monkeypatch.setattr("patchbay.outbound.OUTBOUND_DIR", tmp_path)
+        from patchbay.outbound import log_outbound
 
         for i in range(5):
             log_outbound(SESSION_KEY, f"notification {i}", "buddy")

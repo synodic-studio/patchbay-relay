@@ -17,14 +17,14 @@ from pathlib import Path
 
 import pytest
 
-from stargate.harness import (
+from patchbay.harness import (
     CAPABILITIES_BY_NAME,
     ClaudeSdkHarness,
     CompactResult,
     ContextUsage,
     TurnRequest,
 )
-from stargate.harness.claude_sdk import _fmt_k
+from patchbay.harness.claude_sdk import _fmt_k
 
 
 def _req(tmp_path: Path, **kw) -> TurnRequest:

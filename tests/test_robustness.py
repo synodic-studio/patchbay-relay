@@ -18,9 +18,9 @@ class TestSendRetry:
     @pytest.fixture(autouse=True)
     def _isolate(self, tmp_path, monkeypatch):
         import bridge
-        import stargate.sessions
+        import patchbay.sessions
 
-        monkeypatch.setattr(stargate.sessions, "SESSION_DIR", tmp_path / "sessions")
+        monkeypatch.setattr(patchbay.sessions, "SESSION_DIR", tmp_path / "sessions")
         (tmp_path / "sessions").mkdir()
         # Speed up retries for tests
         monkeypatch.setattr(bridge, "SEND_RETRY_BASE_DELAY", 0.01)
@@ -85,9 +85,9 @@ class TestGracefulShutdown:
     @pytest.fixture(autouse=True)
     def _isolate(self, tmp_path, monkeypatch):
         import bridge
-        import stargate.sessions
+        import patchbay.sessions
 
-        monkeypatch.setattr(stargate.sessions, "SESSION_DIR", tmp_path / "sessions")
+        monkeypatch.setattr(patchbay.sessions, "SESSION_DIR", tmp_path / "sessions")
         (tmp_path / "sessions").mkdir()
         monkeypatch.setattr(bridge, "PHOTO_DIR", tmp_path / "photos")
         (tmp_path / "photos").mkdir()
@@ -172,9 +172,9 @@ class TestSessionKeySanitization:
 
     @pytest.fixture(autouse=True)
     def _isolate(self, tmp_path, monkeypatch):
-        import stargate.sessions
+        import patchbay.sessions
 
-        monkeypatch.setattr(stargate.sessions, "SESSION_DIR", tmp_path / "sessions")
+        monkeypatch.setattr(patchbay.sessions, "SESSION_DIR", tmp_path / "sessions")
         (tmp_path / "sessions").mkdir()
 
     def test_normal_key_passes(self):

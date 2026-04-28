@@ -1,4 +1,4 @@
-"""Tests for stargate.self_heal — repair dispatcher + built-in handlers."""
+"""Tests for patchbay.self_heal — repair dispatcher + built-in handlers."""
 
 from __future__ import annotations
 
@@ -9,8 +9,8 @@ from unittest.mock import patch
 
 import pytest
 
-import stargate.self_heal as sh
-from stargate.self_heal import (
+import patchbay.self_heal as sh
+from patchbay.self_heal import (
     OOM_RETRY_MAX_TURNS,
     OOM_RETRY_PROMPT_TRIM,
     RepairResult,
@@ -34,7 +34,7 @@ def isolated_handlers():
 def activity_log_to_tmp(tmp_path, monkeypatch):
     """Redirect activity.jsonl writes into tmp_path so we can assert on them."""
     log_path = tmp_path / "activity.jsonl"
-    monkeypatch.setattr("stargate.activity.ACTIVITY_LOG", log_path)
+    monkeypatch.setattr("patchbay.activity.ACTIVITY_LOG", log_path)
     return log_path
 
 
@@ -156,20 +156,20 @@ class TestCorruptSessionHandler:
 
 class TestStaleTelegramPollerHandler:
     def test_no_other_bridge_returns_unfixed(self, activity_log_to_tmp):
-        with patch("stargate.singleton.signal_other_bridge", return_value=None):
+        with patch("patchbay.singleton.signal_other_bridge", return_value=None):
             result = dispatch_repair("stale_telegram_poller", {})
         assert result.fixed is False
         assert "no other bridge PID" in result.actions[0]
 
     def test_signals_other_bridge_when_pid_found(self, activity_log_to_tmp):
-        with patch("stargate.singleton.signal_other_bridge", return_value=12345) as m:
+        with patch("patchbay.singleton.signal_other_bridge", return_value=12345) as m:
             result = dispatch_repair("stale_telegram_poller", {})
         assert result.fixed is True
         assert "12345" in result.actions[0]
         m.assert_called_once_with(signal.SIGTERM)
 
     def test_custom_signal_passed_through(self, activity_log_to_tmp):
-        with patch("stargate.singleton.signal_other_bridge", return_value=99) as m:
+        with patch("patchbay.singleton.signal_other_bridge", return_value=99) as m:
             dispatch_repair("stale_telegram_poller", {"signal": signal.SIGKILL})
         m.assert_called_once_with(signal.SIGKILL)
 

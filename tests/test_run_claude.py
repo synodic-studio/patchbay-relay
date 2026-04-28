@@ -87,7 +87,7 @@ def _patch_dependencies():
         patch("bridge._parse_project_entry", return_value=(None, None)) as mock_parse_entry,
         patch("bridge._log_activity") as mock_log_activity,
         patch(
-            "stargate.harness.claude_cli.ClaudeCliHarness._drain_streams",
+            "patchbay.harness.claude_cli.ClaudeCliHarness._drain_streams",
             _fake_drain_streams,
         ),
     ):

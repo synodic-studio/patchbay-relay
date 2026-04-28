@@ -1,11 +1,11 @@
-"""Tests for stargate.quota — quota detection and Forge handoff."""
+"""Tests for patchbay.quota — quota detection and Forge handoff."""
 
 import datetime
 from unittest.mock import patch
 
 
-import stargate.quota
-from stargate.quota import handoff_to_forge, is_quota_error
+import patchbay.quota
+from patchbay.quota import handoff_to_forge, is_quota_error
 
 
 # ---------------------------------------------------------------------------
@@ -145,9 +145,9 @@ class TestHandoffToForgeFence:
         fake_today = datetime.date(2026, 1, 1)
 
         with (
-            patch.object(stargate.quota, "FORGE_QUEUE_DIR", queue_dir),
-            patch("stargate.quota.datetime") as mock_dt,
-            patch("stargate.quota.log_activity"),
+            patch.object(patchbay.quota, "FORGE_QUEUE_DIR", queue_dir),
+            patch("patchbay.quota.datetime") as mock_dt,
+            patch("patchbay.quota.log_activity"),
         ):
             mock_dt.datetime.now.return_value = fake_now
             mock_dt.date.today.return_value = fake_today
@@ -210,9 +210,9 @@ class TestHandoffToForgeSessionKey:
         fake_today = datetime.date(2026, 1, 1)
 
         with (
-            patch.object(stargate.quota, "FORGE_QUEUE_DIR", queue_dir),
-            patch("stargate.quota.datetime") as mock_dt,
-            patch("stargate.quota.log_activity"),
+            patch.object(patchbay.quota, "FORGE_QUEUE_DIR", queue_dir),
+            patch("patchbay.quota.datetime") as mock_dt,
+            patch("patchbay.quota.log_activity"),
         ):
             mock_dt.datetime.now.return_value = fake_now
             mock_dt.date.today.return_value = fake_today
@@ -250,9 +250,9 @@ class TestHandoffToForgeFileSystem:
         fake_today = datetime.date(2026, 1, 1)
 
         with (
-            patch.object(stargate.quota, "FORGE_QUEUE_DIR", queue_dir),
-            patch("stargate.quota.datetime") as mock_dt,
-            patch("stargate.quota.log_activity"),
+            patch.object(patchbay.quota, "FORGE_QUEUE_DIR", queue_dir),
+            patch("patchbay.quota.datetime") as mock_dt,
+            patch("patchbay.quota.log_activity"),
         ):
             mock_dt.datetime.now.return_value = fake_now
             mock_dt.date.today.return_value = fake_today
@@ -281,9 +281,9 @@ class TestHandoffToForgeFileSystem:
         fake_today = datetime.date(2026, 1, 1)
 
         with (
-            patch.object(stargate.quota, "FORGE_QUEUE_DIR", queue_dir),
-            patch("stargate.quota.datetime") as mock_dt,
-            patch("stargate.quota.log_activity"),
+            patch.object(patchbay.quota, "FORGE_QUEUE_DIR", queue_dir),
+            patch("patchbay.quota.datetime") as mock_dt,
+            patch("patchbay.quota.log_activity"),
         ):
             mock_dt.datetime.now.return_value = fake_now
             mock_dt.date.today.return_value = fake_today

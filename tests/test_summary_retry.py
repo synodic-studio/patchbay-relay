@@ -13,7 +13,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import bridge
-from stargate import parser
+from patchbay import parser
 
 
 SESSION_KEY = "100_5"
@@ -79,7 +79,7 @@ def _patch_run_claude_deps():
         patch("bridge._parse_project_entry", return_value=(None, None)),
         patch("bridge._log_activity"),
         patch(
-            "stargate.harness.claude_cli.ClaudeCliHarness._drain_streams",
+            "patchbay.harness.claude_cli.ClaudeCliHarness._drain_streams",
             _fake_drain_streams,
         ),
     ):

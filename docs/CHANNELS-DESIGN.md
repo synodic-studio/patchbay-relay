@@ -1,4 +1,4 @@
-# Stargate Channels — Design
+# Patchbay Channels — Design
 
 In-flight bidirectional comms between the user's Telegram and an active
 agent turn. Built on the agent's native streaming-input primitive
@@ -46,7 +46,7 @@ one-shot. Channels are cc-sdk only initially.
 
 ## Agnostic seam
 
-Per the stargate principle: the bridge cannot bake cc-sdk specifics
+Per the patchbay principle: the bridge cannot bake cc-sdk specifics
 into channel logic. We expose the capability through the harness
 protocol so other backends can opt in later (pi via `--mode rpc`,
 cc-cli via `--input-format stream-json`, future codex/cursor).
@@ -166,7 +166,7 @@ option, so re-pushing with the new preset is enough.
 | Step | What | Status |
 |---|---|---|
 | 1 | Add `supports_inflight_push` to `HarnessCapabilities`, `ChannelHandle` and `ChannelCapableHarness` protocols. cc-sdk advertises True. | ✅ |
-| 2 | Implement `ClaudeSdkChannel` (`stargate/harness/claude_sdk_channel.py`). Wraps a long-lived `ClaudeSDKClient`. push/events/interrupt/close. 17 unit tests + smoke-tested with real SDK including a true mid-flight push (mid-turn redirect arrives, model finishes current turn, picks up redirect cleanly). | ✅ |
+| 2 | Implement `ClaudeSdkChannel` (`patchbay/harness/claude_sdk_channel.py`). Wraps a long-lived `ClaudeSDKClient`. push/events/interrupt/close. 17 unit tests + smoke-tested with real SDK including a true mid-flight push (mid-turn redirect arrives, model finishes current turn, picks up redirect cleanly). | ✅ |
 | 3 | Bridge integration. **Pending — needs design discussion before landing.** See "Bridge integration plan" below. | ⏳ |
 | 4 | Activity events (`channel_open` / `channel_push` / `channel_close`). Update `/soak` to recognize them. | Blocked on (3) |
 | 5 | Bridge-dispatch tests. | Blocked on (3) |
@@ -198,4 +198,4 @@ This is one focused PR after the design discussion lands. **Don't merge piecemea
 - **Idle timeout** — 5 min default, but should it match the typing-debounce window? Adjacent question: do we close the channel when the user stops typing or when the model goes idle? Different semantics.
 - **Channel during /clearnew** — close the channel cleanly, or interrupt + close? I'm leaning interrupt + close so /clearnew is reliably "kill all state."
 - **Telemetry on inflight pushes** — count per session as a soak metric. Is `/soak` the right surface or do we need a dedicated `/channels` command?
-- **Reconnect across bridge restart** — if stargate restarts, all open channels die. The next message reopens via `--resume` (existing behavior). Is that good enough, or do we want to persist channel state? My take: good enough.
+- **Reconnect across bridge restart** — if patchbay restarts, all open channels die. The next message reopens via `--resume` (existing behavior). Is that good enough, or do we want to persist channel state? My take: good enough.

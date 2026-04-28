@@ -18,7 +18,7 @@ import sys
 import textwrap
 from pathlib import Path
 
-from stargate.harness import (
+from patchbay.harness import (
     ClaudeCliHarness,
     Harness,
     TextDelta,

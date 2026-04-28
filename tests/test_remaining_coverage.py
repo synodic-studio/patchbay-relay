@@ -10,8 +10,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 import bridge
-import stargate.projects
-import stargate.sessions
+import patchbay.projects
+import patchbay.sessions
 
 
 # ---------------------------------------------------------------------------
@@ -22,9 +22,9 @@ import stargate.sessions
 class TestPostInitPerChatCommands:
     @pytest.fixture(autouse=True)
     def _isolate(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(stargate.sessions, "SESSION_DIR", tmp_path / "sessions")
+        monkeypatch.setattr(patchbay.sessions, "SESSION_DIR", tmp_path / "sessions")
         (tmp_path / "sessions").mkdir()
-        monkeypatch.setattr(stargate.sessions, "PENDING_DIR", tmp_path / "pending")
+        monkeypatch.setattr(patchbay.sessions, "PENDING_DIR", tmp_path / "pending")
         (tmp_path / "pending").mkdir()
         monkeypatch.setattr(bridge, "PENDING_DIR", tmp_path / "pending")
         monkeypatch.setattr(bridge, "RESTART_NOTIFY_FILE", tmp_path / "restart.json")
@@ -39,7 +39,7 @@ class TestPostInitPerChatCommands:
         to delete commands per chat and handle failures gracefully."""
         cp_file = self._tmp / "cp.json"
         cp_file.write_text(json.dumps({"100_200": "project-a", "300_400": "project-b"}))
-        monkeypatch.setattr(stargate.projects, "CHAT_PROJECTS_FILE", cp_file)
+        monkeypatch.setattr(patchbay.projects, "CHAT_PROJECTS_FILE", cp_file)
 
         bot = MagicMock()
         bot.send_message = AsyncMock()
@@ -70,7 +70,7 @@ class TestPostInitPerChatCommands:
 class TestGracefulShutdownRemoteTimeout:
     @pytest.fixture(autouse=True)
     def _isolate(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(stargate.sessions, "SESSION_DIR", tmp_path / "sessions")
+        monkeypatch.setattr(patchbay.sessions, "SESSION_DIR", tmp_path / "sessions")
         (tmp_path / "sessions").mkdir()
         monkeypatch.setattr(bridge, "PHOTO_DIR", tmp_path / "photos")
         (tmp_path / "photos").mkdir()

@@ -16,12 +16,12 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-import stargate.efforts
-import stargate.outbound
-import stargate.projects
-import stargate.sessions
+import patchbay.efforts
+import patchbay.outbound
+import patchbay.projects
+import patchbay.sessions
 
-# A "session key" matches stargate.config.SESSION_KEY_RE: alphanumeric,
+# A "session key" matches patchbay.config.SESSION_KEY_RE: alphanumeric,
 # underscore, hyphen. Use a narrow alphabet so generated keys are valid
 # both as map keys and (for sessions.py) as filename components.
 # Lowercase-ASCII only. macOS HFS+/APFS filesystems are case-insensitive
@@ -39,7 +39,7 @@ session_keys = st.text(
     max_size=24,
 ).filter(lambda s: ".." not in s)
 
-efforts_values = st.sampled_from(stargate.efforts.VALID_EFFORTS)
+efforts_values = st.sampled_from(patchbay.efforts.VALID_EFFORTS)
 
 # Project paths are arbitrary strings; the layer doesn't validate them.
 project_paths = st.text(min_size=1, max_size=40).filter(
@@ -67,10 +67,10 @@ _FAST = settings(
 @pytest.fixture
 def isolated_efforts(tmp_path, monkeypatch):
     monkeypatch.setattr(
-        stargate.efforts, "CHAT_EFFORTS_FILE", tmp_path / "chat_efforts.json"
+        patchbay.efforts, "CHAT_EFFORTS_FILE", tmp_path / "chat_efforts.json"
     )
     monkeypatch.setattr(
-        stargate.efforts, "_EFFORTS_LOCK_FILE", tmp_path / ".chat_efforts.lock"
+        patchbay.efforts, "_EFFORTS_LOCK_FILE", tmp_path / ".chat_efforts.lock"
     )
     return tmp_path
 
@@ -78,25 +78,25 @@ def isolated_efforts(tmp_path, monkeypatch):
 @pytest.fixture
 def isolated_projects(tmp_path, monkeypatch):
     projects_file = tmp_path / "chat_projects.json"
-    monkeypatch.setattr(stargate.projects, "CHAT_PROJECTS_FILE", projects_file)
+    monkeypatch.setattr(patchbay.projects, "CHAT_PROJECTS_FILE", projects_file)
     monkeypatch.setattr(
-        stargate.projects, "_PROJECTS_LOCK_FILE", tmp_path / ".chat_projects.lock"
+        patchbay.projects, "_PROJECTS_LOCK_FILE", tmp_path / ".chat_projects.lock"
     )
-    monkeypatch.setattr(stargate.projects, "WORKING_DIR", str(tmp_path))
+    monkeypatch.setattr(patchbay.projects, "WORKING_DIR", str(tmp_path))
     return tmp_path
 
 
 @pytest.fixture
 def isolated_sessions(tmp_path, monkeypatch):
-    monkeypatch.setattr(stargate.sessions, "SESSION_DIR", tmp_path)
-    monkeypatch.setattr(stargate.sessions, "PENDING_DIR", tmp_path / "pending")
+    monkeypatch.setattr(patchbay.sessions, "SESSION_DIR", tmp_path)
+    monkeypatch.setattr(patchbay.sessions, "PENDING_DIR", tmp_path / "pending")
     (tmp_path / "pending").mkdir(exist_ok=True)
     return tmp_path
 
 
 @pytest.fixture
 def isolated_outbound(tmp_path, monkeypatch):
-    monkeypatch.setattr(stargate.outbound, "OUTBOUND_DIR", tmp_path)
+    monkeypatch.setattr(patchbay.outbound, "OUTBOUND_DIR", tmp_path)
     return tmp_path
 
 
@@ -118,23 +118,23 @@ class TestEffortsProperty:
         """For any sequence of set ops, get returns the last value set per key."""
         expected: dict[str, str | None] = {}
         for key, val in ops:
-            stargate.efforts.set_chat_effort(key, val)
+            patchbay.efforts.set_chat_effort(key, val)
             expected[key] = val
 
         for key, val in expected.items():
-            assert stargate.efforts.get_chat_effort(key) == val
+            assert patchbay.efforts.get_chat_effort(key) == val
 
     @_FAST
     @given(keys=st.lists(session_keys, min_size=2, max_size=10, unique=True))
     def test_setting_one_does_not_disturb_others(self, isolated_efforts, keys):
         for key in keys:
-            stargate.efforts.set_chat_effort(key, "high")
+            patchbay.efforts.set_chat_effort(key, "high")
         # Now flip one
         target = keys[0]
-        stargate.efforts.set_chat_effort(target, "low")
-        assert stargate.efforts.get_chat_effort(target) == "low"
+        patchbay.efforts.set_chat_effort(target, "low")
+        assert patchbay.efforts.get_chat_effort(target) == "low"
         for k in keys[1:]:
-            assert stargate.efforts.get_chat_effort(k) == "high"
+            assert patchbay.efforts.get_chat_effort(k) == "high"
 
 
 # ---------------------------------------------------------------------------
@@ -154,17 +154,17 @@ class TestProjectsProperty:
     def test_set_get_roundtrip(self, isolated_projects, ops):
         expected: dict[str, str | None] = {}
         for key, path in ops:
-            stargate.projects.set_chat_project(key, path)
+            patchbay.projects.set_chat_project(key, path)
             expected[key] = path
 
         for key, path in expected.items():
             if path is None:
                 # set_chat_project(None) clears the key
-                cwd = stargate.projects.get_chat_working_dir(key)
+                cwd = patchbay.projects.get_chat_working_dir(key)
                 # Cleared keys fall back to WORKING_DIR
                 assert cwd == str(isolated_projects)
             else:
-                cwd = stargate.projects.get_chat_working_dir(key)
+                cwd = patchbay.projects.get_chat_working_dir(key)
                 assert cwd == f"{isolated_projects}/{path}"
 
 
@@ -185,11 +185,11 @@ class TestSessionsProperty:
     def test_save_load_roundtrip(self, isolated_sessions, ops):
         expected: dict[str, str] = {}
         for key, sid in ops:
-            stargate.sessions.save_session_id(key, sid)
+            patchbay.sessions.save_session_id(key, sid)
             expected[key] = sid
 
         for key, sid in expected.items():
-            assert stargate.sessions.get_session_id(key) == sid
+            assert patchbay.sessions.get_session_id(key) == sid
 
     @_FAST
     @given(
@@ -202,7 +202,7 @@ class TestSessionsProperty:
     ):
         """A corrupt file should NOT poison the chat: get returns None, file is moved aside."""
         # Plant a session, then overwrite with garbage.
-        stargate.sessions.save_session_id(key, sid)
+        patchbay.sessions.save_session_id(key, sid)
         session_file = isolated_sessions / f"{key}.json"
         session_file.write_text(garbage)
         try:
@@ -211,7 +211,7 @@ class TestSessionsProperty:
         except (json.JSONDecodeError, ValueError):
             valid = False
 
-        result = stargate.sessions.get_session_id(key)
+        result = patchbay.sessions.get_session_id(key)
         if not valid:
             # Corrupt → quarantined → returns None
             assert result is None
@@ -234,9 +234,9 @@ class TestOutboundPruneProperty:
         """Notifications and responses are pruned independently with their own caps."""
         key = "session_test"
         for text in notifications:
-            stargate.outbound.log_outbound(key, text, "buddy")
+            patchbay.outbound.log_outbound(key, text, "buddy")
         for i, text in enumerate(responses):
-            stargate.outbound.log_outbound_response(
+            patchbay.outbound.log_outbound_response(
                 session_key=key,
                 chunk_index=i,
                 chunk_total=len(responses),
@@ -258,8 +258,8 @@ class TestOutboundPruneProperty:
         r_count = sum(
             1 for line in lines if json.loads(line).get("source") == "claude-response"
         )
-        assert n_count <= stargate.outbound.MAX_ENTRIES
-        assert r_count <= stargate.outbound.MAX_RESPONSE_ENTRIES
+        assert n_count <= patchbay.outbound.MAX_ENTRIES
+        assert r_count <= patchbay.outbound.MAX_RESPONSE_ENTRIES
         # And every line round-trips through json.loads
         for line in lines:
             json.loads(line)  # raises if corrupt
@@ -270,10 +270,10 @@ class TestOutboundPruneProperty:
         """The list returned by get_recent_outbound is chronological (newest last)."""
         key = "chrono_test"
         for text in texts:
-            stargate.outbound.log_outbound(key, text, "feathers")
+            patchbay.outbound.log_outbound(key, text, "feathers")
             time.sleep(0.0005)  # ensure ts ordering
 
-        recent = stargate.outbound.get_recent_outbound(key)
+        recent = patchbay.outbound.get_recent_outbound(key)
         timestamps = [entry["ts"] for entry in recent]
         assert timestamps == sorted(timestamps)
 
@@ -292,7 +292,7 @@ class TestConcurrentWriters:
 
         def writer(my_keys):
             for k in my_keys:
-                stargate.efforts.set_chat_effort(k, "high")
+                patchbay.efforts.set_chat_effort(k, "high")
 
         # Split keys across threads
         threads = [
@@ -305,14 +305,14 @@ class TestConcurrentWriters:
 
         # File parses, every key landed
         for k in keys:
-            assert stargate.efforts.get_chat_effort(k) == "high"
+            assert patchbay.efforts.get_chat_effort(k) == "high"
 
     def test_projects_concurrent_writes_no_corruption(self, isolated_projects):
         keys = [f"key_{i}" for i in range(20)]
 
         def writer(my_keys):
             for k in my_keys:
-                stargate.projects.set_chat_project(k, f"path_{k}")
+                patchbay.projects.set_chat_project(k, f"path_{k}")
 
         threads = [
             threading.Thread(target=writer, args=(keys[i::4],)) for i in range(4)
@@ -334,7 +334,7 @@ class TestConcurrentWriters:
 
         def writer(thread_id):
             for i in range(per_thread):
-                stargate.outbound.log_outbound(key, f"t{thread_id}_msg{i}", "buddy")
+                patchbay.outbound.log_outbound(key, f"t{thread_id}_msg{i}", "buddy")
 
         threads = [threading.Thread(target=writer, args=(i,)) for i in range(4)]
         for t in threads:
@@ -342,7 +342,7 @@ class TestConcurrentWriters:
         for t in threads:
             t.join()
 
-        recent = stargate.outbound.get_recent_outbound(key)
+        recent = patchbay.outbound.get_recent_outbound(key)
         # All 8 messages survived
         assert len(recent) == 4 * per_thread
         texts = {e["text"] for e in recent}

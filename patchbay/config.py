@@ -48,6 +48,27 @@ def _env_int(name: str, default: str, min_value: int | None = None) -> int:
     return value
 
 
+def _env_with_legacy(new_key: str, legacy_key: str, default: str) -> str:
+    """Read an env var, falling back to a legacy name with a one-time warning.
+
+    Compat shim during the stargate -> patchbay rename. New code reads via
+    PATCHBAY_*; older shells / launchd plists may still set STARGATE_*.
+    Drop after one or two release cycles of clean operation.
+    """
+    if new_key in os.environ:
+        return os.environ[new_key]
+    if legacy_key in os.environ:
+        # stderr-only one-line warning; bridge logging may not be wired yet
+        # at config import time.
+        print(
+            f"WARNING: {legacy_key} is set; rename to {new_key}. "
+            "Legacy name still works for now.",
+            file=sys.stderr,
+        )
+        return os.environ[legacy_key]
+    return default
+
+
 def _env_existing_path(name: str, default: str, description: str) -> str:
     """Read an env var holding a directory path and fatal-exit if missing.
     User-expansion ('~') is applied."""
@@ -181,10 +202,12 @@ MAX_WORKERS = _env_int("MAX_WORKERS", "4", min_value=1)
 # in chat_projects.json under the "harness" key; this value is the fallback
 # when a topic has no override.
 VALID_HARNESSES = ("cc-cli", "cc-sdk", "pi", "aider", "opencode")
-DEFAULT_HARNESS = os.environ.get("STARGATE_DEFAULT_HARNESS", "cc-cli")
+DEFAULT_HARNESS = _env_with_legacy(
+    "PATCHBAY_DEFAULT_HARNESS", "STARGATE_DEFAULT_HARNESS", "cc-cli"
+)
 if DEFAULT_HARNESS not in VALID_HARNESSES:
     raise SystemExit(
-        f"STARGATE_DEFAULT_HARNESS={DEFAULT_HARNESS!r} is not one of {VALID_HARNESSES}"
+        f"PATCHBAY_DEFAULT_HARNESS={DEFAULT_HARNESS!r} is not one of {VALID_HARNESSES}"
     )
 
 # /usage weekly-cap estimate. Anthropic does not publish a weekly token cap

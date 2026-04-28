@@ -1,4 +1,4 @@
-"""Tests for stargate.harness.pi.PiHarness.
+"""Tests for patchbay.harness.pi.PiHarness.
 
 Uses fake-pi binaries (Python scripts) so we exercise the full
 Popen → drain → parse → emit pipeline without touching a real
@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from stargate.harness import (
+from patchbay.harness import (
     Harness,
     PiHarness,
     TextDelta,
@@ -27,7 +27,7 @@ from stargate.harness import (
     TurnFinal,
     TurnRequest,
 )
-from stargate.harness.pi import (
+from patchbay.harness.pi import (
     _extract_text,
     _extract_total_cost,
     _find_assistant_error,

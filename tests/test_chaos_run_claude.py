@@ -1,7 +1,7 @@
 """Chaos test for run_claude.
 
 Invokes run_claude against a real fake `claude` binary that emits each of
-the failure modes Stargate has historically had to recover from:
+the failure modes Patchbay has historically had to recover from:
 partial JSON, slow drip, stderr-only, hang, exit 0 with empty stdout, and
 exit 137 (OOM-style). Asserts that every case produces a user-visible
 response (never silence) and that no subprocess leaks.
@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 
 import bridge
-import stargate.sessions
+import patchbay.sessions
 
 SESSION_KEY = "chaos_555"
 MESSAGE = "trigger chaos"
@@ -72,7 +72,7 @@ def _isolate_state(monkeypatch, tmp_path):
     monkeypatch.setattr(bridge, "PA_PLUGIN_DIR", str(tmp_path))
     monkeypatch.setattr(bridge, "MAX_TURNS", 5)
     # Sessions dir for parse_claude_response side-effects.
-    monkeypatch.setattr(stargate.sessions, "SESSION_DIR", tmp_path)
+    monkeypatch.setattr(patchbay.sessions, "SESSION_DIR", tmp_path)
     yield
 
 
@@ -204,7 +204,7 @@ class TestChaosRunClaude:
         Asserts: claude was invoked twice; the second invocation used
         --max-turns 50 (the OOM-retry budget); the user gets the second
         run's response, not silence."""
-        from stargate.self_heal import OOM_RETRY_MAX_TURNS
+        from patchbay.self_heal import OOM_RETRY_MAX_TURNS
 
         invocations_dir = tmp_path / "invocations"
         invocations_dir.mkdir()
@@ -252,7 +252,7 @@ class TestChaosRunClaude:
         import subprocess as _sp
         import time as _time
 
-        from stargate.harness.claude_cli import ClaudeCliHarness
+        from patchbay.harness.claude_cli import ClaudeCliHarness
 
         fake = _write_fake(
             tmp_path,

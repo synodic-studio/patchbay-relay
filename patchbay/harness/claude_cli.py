@@ -12,7 +12,7 @@ Design constraints:
 - All knobs come in via `TurnRequest`. Per-call overrides (model, effort,
   resume) are TurnRequest fields; per-process config (CLAUDE_PATH,
   MAX_TIMEOUT) is constructor args with sensible defaults from
-  `stargate.config`.
+  `patchbay.config`.
 """
 
 from __future__ import annotations

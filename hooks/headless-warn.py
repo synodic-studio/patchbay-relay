@@ -40,7 +40,7 @@ PATTERNS: list[tuple[str, str]] = [
     (r"\bscreencapture\b", "`screencapture` triggers the Screen Recording TCC dialog."),
     (
         # Only match when the find root is the BARE home dir (no subpath).
-        # `find ~/Developer/stargate` is safe; `find ~` cascades into TCC dirs.
+        # `find ~/Developer/patchbay-relay` is safe; `find ~` cascades into TCC dirs.
         r"\bfind\s+(~|\$HOME|/Users/[\w.-]+)(?=\s|$)",
         "`find ~` / `find $HOME` (bare, no subpath) cascades into macOS "
         "TCC-protected dirs (Photos, Mail, Messages, etc.) and hangs 20+ min "

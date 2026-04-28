@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 import bridge
-import stargate.projects
+import patchbay.projects
 
 
 SESSION_KEY = "11_22"
@@ -41,7 +41,7 @@ def _make_update(text: str | None, chat_id: int = 11, thread_id: int = 22):
 @pytest.fixture(autouse=True)
 def _isolate_projects(tmp_path, monkeypatch):
     projects_file = tmp_path / "chat_projects.json"
-    monkeypatch.setattr(stargate.projects, "CHAT_PROJECTS_FILE", projects_file)
+    monkeypatch.setattr(patchbay.projects, "CHAT_PROJECTS_FILE", projects_file)
 
 
 # ---------------------------------------------------------------------------
@@ -62,7 +62,7 @@ class TestCmdHarness:
     async def test_set_cc_cli_writes_to_projects(self):
         update, context = _make_update("/harness cc-cli")
         await bridge.cmd_harness(update, context)
-        assert stargate.projects.get_chat_harness(SESSION_KEY) == "cc-cli"
+        assert patchbay.projects.get_chat_harness(SESSION_KEY) == "cc-cli"
         sent = update.message.reply_text.call_args[0][0]
         assert "cc-cli" in sent
 
@@ -70,16 +70,16 @@ class TestCmdHarness:
     async def test_set_cc_sdk_stores_value(self):
         update, context = _make_update("/harness cc-sdk")
         await bridge.cmd_harness(update, context)
-        assert stargate.projects.get_chat_harness(SESSION_KEY) == "cc-sdk"
+        assert patchbay.projects.get_chat_harness(SESSION_KEY) == "cc-sdk"
         sent = update.message.reply_text.call_args[0][0]
         assert "cc-sdk" in sent
 
     @pytest.mark.asyncio
     async def test_default_clears_override(self):
-        stargate.projects.set_chat_harness(SESSION_KEY, "cc-sdk")
+        patchbay.projects.set_chat_harness(SESSION_KEY, "cc-sdk")
         update, context = _make_update("/harness default")
         await bridge.cmd_harness(update, context)
-        assert stargate.projects.get_chat_harness(SESSION_KEY) is None
+        assert patchbay.projects.get_chat_harness(SESSION_KEY) is None
         sent = update.message.reply_text.call_args[0][0]
         assert "default" in sent
 
@@ -87,7 +87,7 @@ class TestCmdHarness:
     async def test_invalid_value_rejected_without_writing(self):
         update, context = _make_update("/harness garbage")
         await bridge.cmd_harness(update, context)
-        assert stargate.projects.get_chat_harness(SESSION_KEY) is None
+        assert patchbay.projects.get_chat_harness(SESSION_KEY) is None
         sent = update.message.reply_text.call_args[0][0]
         assert "Invalid" in sent
 
@@ -131,7 +131,7 @@ def _bridge_run_claude_deps(monkeypatch):
         patch("bridge._load_chat_projects", return_value={}),
         patch("bridge._parse_project_entry", return_value=(None, None)),
         patch(
-            "stargate.harness.claude_cli.ClaudeCliHarness._drain_streams",
+            "patchbay.harness.claude_cli.ClaudeCliHarness._drain_streams",
             _fake_drain_streams,
         ),
     ):
@@ -168,7 +168,7 @@ class TestHarnessActivityField:
         """Phase 3b: when the per-chat selection is cc-sdk, run_claude
         instantiates `ClaudeSdkHarness` (not ClaudeCliHarness) and the
         activity log records `harness=cc-sdk`."""
-        from stargate.harness import TextDelta, TurnFinal
+        from patchbay.harness import TextDelta, TurnFinal
 
         events = []
 

@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import bridge
-import stargate.quota
+import patchbay.quota
 
 
 def test_handoff_writes_correct_content_and_returns_true(tmp_path: Path) -> None:
@@ -16,8 +16,8 @@ def test_handoff_writes_correct_content_and_returns_true(tmp_path: Path) -> None
     fake_today = datetime.date(2026, 3, 10)
 
     with (
-        patch.object(stargate.quota, "FORGE_QUEUE_DIR", queue_dir),
-        patch("stargate.quota.datetime") as mock_dt,
+        patch.object(patchbay.quota, "FORGE_QUEUE_DIR", queue_dir),
+        patch("patchbay.quota.datetime") as mock_dt,
     ):
         mock_dt.datetime.now.return_value = fake_now
         mock_dt.date.today.return_value = fake_today
@@ -76,8 +76,8 @@ def test_handoff_with_no_session_id(tmp_path: Path) -> None:
     queue_dir = tmp_path / "agents" / "dev" / "forge" / "queue"
 
     with (
-        patch.object(stargate.quota, "FORGE_QUEUE_DIR", queue_dir),
-        patch("stargate.quota.datetime") as mock_dt,
+        patch.object(patchbay.quota, "FORGE_QUEUE_DIR", queue_dir),
+        patch("patchbay.quota.datetime") as mock_dt,
     ):
         mock_dt.datetime.now.return_value = datetime.datetime(
             2026, 1, 1, tzinfo=datetime.timezone.utc
@@ -106,8 +106,8 @@ def test_handoff_session_key_sanitized_in_filename(tmp_path: Path) -> None:
     queue_dir = tmp_path / "agents" / "dev" / "forge" / "queue"
 
     with (
-        patch.object(stargate.quota, "FORGE_QUEUE_DIR", queue_dir),
-        patch("stargate.quota.datetime") as mock_dt,
+        patch.object(patchbay.quota, "FORGE_QUEUE_DIR", queue_dir),
+        patch("patchbay.quota.datetime") as mock_dt,
     ):
         mock_dt.datetime.now.return_value = datetime.datetime(
             2026, 1, 1, tzinfo=datetime.timezone.utc

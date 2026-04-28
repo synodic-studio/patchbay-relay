@@ -1,4 +1,4 @@
-"""Single-instance guard for the Stargate bridge.
+"""Single-instance guard for the Patchbay bridge.
 
 Without this, two bridge processes can poll Telegram's getUpdates
 simultaneously during restart overlap. Telegram returns 409 Conflict to the
@@ -11,7 +11,7 @@ process refuses to yield do we exit non-zero — launchd will retry, and by
 then the other side should have released.
 
 Usage:
-    from stargate.singleton import acquire_singleton
+    from patchbay.singleton import acquire_singleton
     acquire_singleton()  # at the very top of main(), before anything else
 """
 

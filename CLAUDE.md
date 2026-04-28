@@ -1,29 +1,29 @@
-# Stargate
+# Patchbay
 
 Telegram bot bridge that routes messages to Claude Code sessions.
 
 ## Principles
 
-- **Agnostic.** Stargate is a transport between Telegram and *any* coding agent. New features (channels, tuning presets, memory, etc.) must work across all harnesses (cc-cli, cc-sdk, pi, aider, opencode) when the underlying capability exists, and degrade gracefully where it doesn't. Don't bake claude-only assumptions into the bridge.
+- **Agnostic.** Patchbay is a transport between Telegram and *any* coding agent. New features (channels, tuning presets, memory, etc.) must work across all harnesses (cc-cli, cc-sdk, pi, aider, opencode) when the underlying capability exists, and degrade gracefully where it doesn't. Don't bake claude-only assumptions into the bridge.
 - **Headless.** Every workflow must be scriptable from the phone via Telegram. No GUI, no Mac-side manual steps.
 
 ## Architecture
 
-The bridge is modularized into a `stargate/` package with focused modules. `bridge.py` is the entrypoint that wires everything together and re-exports symbols for backward compatibility.
+The bridge is modularized into a `patchbay/` package with focused modules. `bridge.py` is the entrypoint that wires everything together and re-exports symbols for backward compatibility.
 
 ### Core modules
 
 | File | Purpose |
 |---|---|
-| `bridge.py` | Entrypoint — Telegram handlers, command handlers, `run_claude()`, lifecycle (imports from `stargate/`) |
-| `stargate/config.py` | All configuration: env vars, paths, constants, logging setup |
-| `stargate/sessions.py` | Session persistence, sanitization, pending message management |
-| `stargate/parser.py` | Claude CLI output parsing (JSON array, NDJSON, single-object) |
-| `stargate/quota.py` | Quota/rate-limit detection and Forge handoff |
-| `stargate/activity.py` | Structured JSON-lines activity logging |
-| `stargate/projects.py` | Chat-to-project directory mapping |
-| `stargate/self_heal.py` | Repair-agent dispatcher — corrupt-session quarantine, stale-poller signal, claude OOM retry. |
-| `stargate/harness/` | Pluggable agent backends — `base.py` = protocol + TurnEvent types + `ChannelHandle`/`ChannelCapableHarness`, `claude_cli.py` = CLI subprocess backend, `claude_sdk.py` = Claude Agent SDK backend, `claude_sdk_channel.py` = long-lived `ClaudeSDKClient` wrapper for inflight-push channels (cc-sdk only — see `docs/CHANNELS-DESIGN.md`; primitive shipped, bridge wiring pending), `pi.py` = badlogicgames/pi multi-model coding agent, `aider.py` = aider-chat with chat-history-file resume (default `openrouter/deepseek/deepseek-chat`, override via `STARGATE_AIDER_MODEL`), `opencode.py` = sst/opencode JSON event protocol (default `openrouter/deepseek/deepseek-chat-v3.1`, override via `STARGATE_OPENCODE_MODEL`). See `docs/HARNESS-DESIGN.md`. |
+| `bridge.py` | Entrypoint — Telegram handlers, command handlers, `run_claude()`, lifecycle (imports from `patchbay/`) |
+| `patchbay/config.py` | All configuration: env vars, paths, constants, logging setup |
+| `patchbay/sessions.py` | Session persistence, sanitization, pending message management |
+| `patchbay/parser.py` | Claude CLI output parsing (JSON array, NDJSON, single-object) |
+| `patchbay/quota.py` | Quota/rate-limit detection and Forge handoff |
+| `patchbay/activity.py` | Structured JSON-lines activity logging |
+| `patchbay/projects.py` | Chat-to-project directory mapping |
+| `patchbay/self_heal.py` | Repair-agent dispatcher — corrupt-session quarantine, stale-poller signal, claude OOM retry. |
+| `patchbay/harness/` | Pluggable agent backends — `base.py` = protocol + TurnEvent types + `ChannelHandle`/`ChannelCapableHarness`, `claude_cli.py` = CLI subprocess backend, `claude_sdk.py` = Claude Agent SDK backend, `claude_sdk_channel.py` = long-lived `ClaudeSDKClient` wrapper for inflight-push channels (cc-sdk only — see `docs/CHANNELS-DESIGN.md`; primitive shipped, bridge wiring pending), `pi.py` = badlogicgames/pi multi-model coding agent, `aider.py` = aider-chat with chat-history-file resume (default `openrouter/deepseek/deepseek-chat`, override via `STARGATE_AIDER_MODEL`), `opencode.py` = sst/opencode JSON event protocol (default `openrouter/deepseek/deepseek-chat-v3.1`, override via `STARGATE_OPENCODE_MODEL`). See `docs/HARNESS-DESIGN.md`. |
 | `validate.py` | Pre-flight validation (syntax, imports, smoke tests for all modules) |
 
 ### Supporting files
@@ -36,9 +36,9 @@ The bridge is modularized into a `stargate/` package with focused modules. `brid
 
 729 tests across the `tests/` dir. Run with `uv run pytest tests/`. The suite includes property tests (`hypothesis`), a `claude` chaos test that materializes a fake binary across 7 failure modes, real drain/debounce integration tests synchronized via `threading.Event`, and self-heal dispatcher tests.
 
-**Test isolation from production paths.** `tests/conftest.py` ships an autouse fixture (`_isolate_production_paths`) that monkeypatches every production filesystem path (`PENDING_DIR`, `SESSION_DIR`, `ACTIVITY_LOG`, `LOCK_FILE`, `PHOTO_DIR`, `CHAT_PROJECTS_FILE`, `RESTART_NOTIFY_FILE`, etc.) to a per-test tmp dir, across **every** module that imports the constant (`stargate.config`, `stargate.sessions`, `stargate.activity`, `stargate.singleton`, `bridge`). Without this, `pytest tests/` while the launchd bridge is live can wipe a real user's queued reply, pollute the real `activity.jsonl`, or send SIGTERM to the live bridge via `signal_other_bridge`. When adding new production-path constants, add them to `_PRODUCTION_PATH_GROUPS` in `tests/conftest.py` so every alias resolves to the same tmp path.
+**Test isolation from production paths.** `tests/conftest.py` ships an autouse fixture (`_isolate_production_paths`) that monkeypatches every production filesystem path (`PENDING_DIR`, `SESSION_DIR`, `ACTIVITY_LOG`, `LOCK_FILE`, `PHOTO_DIR`, `CHAT_PROJECTS_FILE`, `RESTART_NOTIFY_FILE`, etc.) to a per-test tmp dir, across **every** module that imports the constant (`patchbay.config`, `patchbay.sessions`, `patchbay.activity`, `patchbay.singleton`, `bridge`). Without this, `pytest tests/` while the launchd bridge is live can wipe a real user's queued reply, pollute the real `activity.jsonl`, or send SIGTERM to the live bridge via `signal_other_bridge`. When adding new production-path constants, add them to `_PRODUCTION_PATH_GROUPS` in `tests/conftest.py` so every alias resolves to the same tmp path.
 
-When patching in tests, use the actual module path (e.g., `stargate.sessions.SESSION_DIR`, not `bridge.SESSION_DIR`) since functions in `stargate/` reference their own module's imports.
+When patching in tests, use the actual module path (e.g., `patchbay.sessions.SESSION_DIR`, not `bridge.SESSION_DIR`) since functions in `patchbay/` reference their own module's imports.
 
 ```bash
 uv run pytest tests/ -q                    # quick run
@@ -53,7 +53,7 @@ The bridge uses `KeepAlive: { SuccessfulExit: false }` so it auto-restarts on cr
 
 | Plist (source of truth) | Installed to | Label |
 |---|---|---|
-| `com.synodic.claude-telegram-bridge.plist` | `~/Library/LaunchAgents/com.synodic.stargate.plist` | `com.synodic.stargate` |
+| `com.synodic.claude-telegram-bridge.plist` | `~/Library/LaunchAgents/com.synodic.patchbay-relay.plist` | `com.synodic.patchbay-relay` |
 
 After editing the plist here, copy it to `~/Library/LaunchAgents/` and reload:
 ```bash

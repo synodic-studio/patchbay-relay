@@ -1,7 +1,7 @@
-"""Tests for stargate.config._SecretStr and other config edge cases."""
+"""Tests for patchbay.config._SecretStr and other config edge cases."""
 
 
-from stargate.config import _SecretStr
+from patchbay.config import _SecretStr
 
 
 class TestSecretStr:

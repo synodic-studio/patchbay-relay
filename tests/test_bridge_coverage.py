@@ -193,12 +193,12 @@ class TestSessionDisplayLabel:
     def _isolate(self, tmp_path, monkeypatch):
         projects_file = tmp_path / "chat_projects.json"
         monkeypatch.setattr(
-            "stargate.projects.CHAT_PROJECTS_FILE", projects_file
+            "patchbay.projects.CHAT_PROJECTS_FILE", projects_file
         )
         yield
 
     def test_title_wins_over_project_and_agent(self):
-        from stargate.projects import _save_chat_projects
+        from patchbay.projects import _save_chat_projects
 
         _save_chat_projects(
             {"k": {"path": "Fanta", "agent": "ernest", "title": "Ernest 🟢"}}
@@ -206,19 +206,19 @@ class TestSessionDisplayLabel:
         assert bridge._session_display_label("k") == "Ernest 🟢"
 
     def test_project_with_agent_falls_back_to_arrow_form(self):
-        from stargate.projects import _save_chat_projects
+        from patchbay.projects import _save_chat_projects
 
         _save_chat_projects({"k": {"path": "Fanta", "agent": "iron-temple"}})
         assert bridge._session_display_label("k") == "Fanta › iron-temple"
 
     def test_project_only(self):
-        from stargate.projects import _save_chat_projects
+        from patchbay.projects import _save_chat_projects
 
-        _save_chat_projects({"k": "stargate"})
-        assert bridge._session_display_label("k") == "stargate"
+        _save_chat_projects({"k": "patchbay-relay"})
+        assert bridge._session_display_label("k") == "patchbay-relay"
 
     def test_agent_only(self):
-        from stargate.projects import _save_chat_projects
+        from patchbay.projects import _save_chat_projects
 
         _save_chat_projects({"k": {"agent": "ernest"}})
         assert bridge._session_display_label("k") == "ernest"
@@ -237,7 +237,7 @@ class TestHandleForumTopicEvent:
     def _isolate(self, tmp_path, monkeypatch):
         projects_file = tmp_path / "chat_projects.json"
         monkeypatch.setattr(
-            "stargate.projects.CHAT_PROJECTS_FILE", projects_file
+            "patchbay.projects.CHAT_PROJECTS_FILE", projects_file
         )
         yield
 
@@ -254,17 +254,17 @@ class TestHandleForumTopicEvent:
 
     @pytest.mark.asyncio
     async def test_cache_on_create(self):
-        from stargate.projects import get_chat_title
+        from patchbay.projects import get_chat_title
 
         created = MagicMock()
-        created.name = "stargate"
+        created.name = "patchbay-relay"
         update = self._make_update(-100, 30, created=created)
         await bridge.handle_forum_topic_event(update, MagicMock())
-        assert get_chat_title("-100_30") == "stargate"
+        assert get_chat_title("-100_30") == "patchbay-relay"
 
     @pytest.mark.asyncio
     async def test_cache_on_edit_overwrites(self):
-        from stargate.projects import get_chat_title, set_chat_title
+        from patchbay.projects import get_chat_title, set_chat_title
 
         set_chat_title("-100_30", "old name")
         edited = MagicMock()
@@ -275,7 +275,7 @@ class TestHandleForumTopicEvent:
 
     @pytest.mark.asyncio
     async def test_no_thread_id_is_skipped(self):
-        from stargate.projects import _load_chat_projects
+        from patchbay.projects import _load_chat_projects
 
         created = MagicMock()
         created.name = "irrelevant"

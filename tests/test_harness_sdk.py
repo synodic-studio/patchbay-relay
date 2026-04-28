@@ -31,7 +31,7 @@ from claude_agent_sdk import (
     UserMessage,
 )
 
-from stargate.harness import (
+from patchbay.harness import (
     ClaudeSdkHarness,
     Harness,
     TextDelta,

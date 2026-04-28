@@ -7,17 +7,18 @@ assistant response, and a footer ("Tokens: ... Cost: ..."). We
 strip header/footer and surface the body verbatim.
 
 Resume is via `--restore-chat-history --chat-history-file <path>`.
-We own the path: stargate/aider-history/<sanitized-session-key>.md.
+We own the path: patchbay/aider-history/<sanitized-session-key>.md.
 The "session_id" the harness returns to the bridge IS that path; the
 bridge passes it back as `resume_session_id` on the next turn.
 
 Phase 5b of.
 
 Defaults:
-- model: STARGATE_AIDER_MODEL env or "openrouter/deepseek/deepseek-chat"
+- model: PATCHBAY_AIDER_MODEL env (or legacy STARGATE_AIDER_MODEL) or
+         "openrouter/deepseek/deepseek-chat"
 - subprocess: --no-pretty --no-stream --yes-always --no-fancy-input
               --no-check-update --no-show-release-notes --analytics-disable
-- git off by default (--no-git) — stargate manages its own commits
+- git off by default (--no-git) — patchbay manages its own commits
 
 Capabilities:
 - supports_resume=True (chat-history file)
@@ -40,7 +41,7 @@ from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..config import AIDER_HISTORY_DIR, MAX_TIMEOUT, logger
+from ..config import AIDER_HISTORY_DIR, MAX_TIMEOUT, _env_with_legacy, logger
 from .base import (
     Harness,
     HarnessCapabilities,
@@ -56,8 +57,9 @@ AIDER_PATH_DEFAULT = (
     or os.path.expanduser("~/.local/bin/aider")
 )
 
-DEFAULT_AIDER_MODEL = os.environ.get(
-    "STARGATE_AIDER_MODEL", "openrouter/deepseek/deepseek-chat"
+DEFAULT_AIDER_MODEL = _env_with_legacy(
+    "PATCHBAY_AIDER_MODEL", "STARGATE_AIDER_MODEL",
+    "openrouter/deepseek/deepseek-chat",
 )
 
 

@@ -1,11 +1,11 @@
-"""Tests for stargate.outbound — outbound notification logging."""
+"""Tests for patchbay.outbound — outbound notification logging."""
 
 import json
 import time
 
 import pytest
 
-from stargate.outbound import (
+from patchbay.outbound import (
     MAX_ENTRIES,
     get_recent_outbound,
     log_outbound,
@@ -15,7 +15,7 @@ from stargate.outbound import (
 @pytest.fixture(autouse=True)
 def clean_outbound(tmp_path, monkeypatch):
     """Use a temp dir for outbound logs."""
-    monkeypatch.setattr("stargate.outbound.OUTBOUND_DIR", tmp_path)
+    monkeypatch.setattr("patchbay.outbound.OUTBOUND_DIR", tmp_path)
     yield tmp_path
 
 
@@ -100,7 +100,7 @@ class TestGetRecentOutbound:
         """get_recent_outbound must not surface claude-response audit
         entries — they'd pollute Claude's context and blow up the
         consumer that reads entry['text']."""
-        from stargate.outbound import log_outbound_response
+        from patchbay.outbound import log_outbound_response
 
         log_outbound("mixed", "from agent", "buddy")
         log_outbound_response("mixed", 0, 1, "raw", "md", "MarkdownV2", "ok")
@@ -113,7 +113,7 @@ class TestLogOutboundResponse:
     """log_outbound_response audit-log API for Claude→Telegram sends."""
 
     def test_records_success_fields(self, clean_outbound):
-        from stargate.outbound import log_outbound_response
+        from patchbay.outbound import log_outbound_response
 
         log_outbound_response(
             session_key="chat_1",
@@ -138,7 +138,7 @@ class TestLogOutboundResponse:
         assert "ts" in entry
 
     def test_records_failure_with_exception_name(self, clean_outbound):
-        from stargate.outbound import log_outbound_response
+        from patchbay.outbound import log_outbound_response
 
         log_outbound_response(
             session_key="chat_2",
@@ -160,7 +160,7 @@ class TestLogOutboundResponse:
     def test_separate_cap_for_response_entries(self, clean_outbound):
         """Response entries have their own higher cap and don't evict
         agent notifications."""
-        from stargate.outbound import MAX_RESPONSE_ENTRIES, log_outbound_response
+        from patchbay.outbound import MAX_RESPONSE_ENTRIES, log_outbound_response
 
         log_outbound("budget", "agent msg", "buddy")
         for i in range(MAX_RESPONSE_ENTRIES + 5):

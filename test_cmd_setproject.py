@@ -87,7 +87,7 @@ class TestCmdSetprojectKeyboard:
         assert button_texts == ["Alpha", "Bravo", "Charlie", "Clear (use ~/Developer)"]
 
     def test_keyboard_callback_data_matches_project_names(self, bridge_mod):
-        projects = ["Fanta", "stargate"]
+        projects = ["Fanta", "patchbay-relay"]
         update = _make_update()
         ctx = _make_context()
 
@@ -102,7 +102,7 @@ class TestCmdSetprojectKeyboard:
         callback_data = [row[0].callback_data for row in markup.inline_keyboard]
         assert callback_data == [
             "setproject:Fanta",
-            "setproject:stargate",
+            "setproject:patchbay-relay",
             "setproject:__clear__",
         ]
 

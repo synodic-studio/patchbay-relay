@@ -1,18 +1,18 @@
-# Stargate
+# Patchbay
 
 **Run AI coding agents on your computer, from your phone.**
 
-Stargate bridges Telegram to AI coding agents running on your own machine — Claude Code, the Claude Agent SDK, Aider, OpenCode, and more — letting you develop software, manage infrastructure, and run autonomous agents from a mobile messaging app while your real workstation does the actual work.
+Patchbay bridges Telegram to AI coding agents running on your own machine — Claude Code, the Claude Agent SDK, Aider, OpenCode, and more — letting you develop software, manage infrastructure, and run autonomous agents from a mobile messaging app while your real workstation does the actual work.
 
 ---
 
 ## Why this exists
 
-Most "AI coding from your phone" tools mean chatting with an LLM that has no access to your real code, your real tools, or your real environment — fine for asking questions, useless for actual work. Stargate inverts that: the real machine in another room does the real work, the phone just drives.
+Most "AI coding from your phone" tools mean chatting with an LLM that has no access to your real code, your real tools, or your real environment — fine for asking questions, useless for actual work. Patchbay inverts that: the real machine in another room does the real work, the phone just drives.
 
 The architecture leverages Telegram's forum-mode group topics — persistent threaded conversations that already provide the routing primitives multi-project work needs. Each topic binds to a project directory and an agent session. Topic `#myproject` is an agent session in `~/Developer/myproject`. Topic `#another` is one in `~/Developer/another`. Switching between them is one tap. Each topic has full filesystem access, full tool access, and full process control on the actual workstation where the code lives.
 
-Stargate is the transport: a Python service that listens for Telegram messages, routes each to the right project, agent, and harness, runs the turn, and streams the response back. It survives its own self-edits, recovers from its own crashes, and is agnostic to which agent runs the turn.
+Patchbay is the transport: a Python service that listens for Telegram messages, routes each to the right project, agent, and harness, runs the turn, and streams the response back. It survives its own self-edits, recovers from its own crashes, and is agnostic to which agent runs the turn.
 
 ## What it enables
 
@@ -34,7 +34,7 @@ Each Telegram forum topic maps to an independent agent session. Multiple topics 
 
 ```
 bridge.py                 Entrypoint -- Telegram handlers, commands, lifecycle
-stargate/                 Core package
+patchbay/                 Core package
   config.py               Environment variables, paths, constants, logging
   sessions.py             Session persistence, sanitization, pending messages
   parser.py               Agent CLI output parsing (JSON array, NDJSON, single-object)
@@ -63,11 +63,11 @@ A single Telegram chat would force the user to pick "what project am I working o
 
 ### Pluggable harness, single transport
 
-The bridge does not care which agent runs the turn. The `Harness` protocol (`stargate/harness/base.py`) is a streaming-event interface that all backends conform to: Claude Code CLI, Claude Agent SDK, Aider, OpenCode, badlogicgames/pi. New harnesses can be added by implementing one class. Capabilities (resume, mid-turn push, MCP, tool streaming) are advertised via `HarnessCapabilities` so the bridge can degrade gracefully when a backend doesn't support a feature.
+The bridge does not care which agent runs the turn. The `Harness` protocol (`patchbay/harness/base.py`) is a streaming-event interface that all backends conform to: Claude Code CLI, Claude Agent SDK, Aider, OpenCode, badlogicgames/pi. New harnesses can be added by implementing one class. Capabilities (resume, mid-turn push, MCP, tool streaming) are advertised via `HarnessCapabilities` so the bridge can degrade gracefully when a backend doesn't support a feature.
 
 ### Crash-loop self-heal
 
-Stargate is frequently edited by an agent running *through itself*, which means a bad self-edit could brick the bridge. Three or more crashes in five minutes triggers an autonomous Claude Code session that reads the traceback, diagnoses the bug, writes the fix, validates it, and restarts. Self-heal incidents are logged to `activity.jsonl` so they are visible in the soak-test dashboard.
+Patchbay is frequently edited by an agent running *through itself*, which means a bad self-edit could brick the bridge. Three or more crashes in five minutes triggers an autonomous Claude Code session that reads the traceback, diagnoses the bug, writes the fix, validates it, and restarts. Self-heal incidents are logged to `activity.jsonl` so they are visible in the soak-test dashboard.
 
 ### Pre-flight validation as known-good rollback
 
@@ -75,7 +75,7 @@ Before every bridge start, `validate.py` runs syntax checks, import checks, and 
 
 ### Single-instance lock, self-stealing
 
-Two bridge processes polling Telegram's `getUpdates` simultaneously will trigger 409 conflicts, log them 1000 times each, and never exit cleanly. `stargate/singleton.py` holds an exclusive lock on `.bridge.lock`. If a stale PID is holding it (process is dead), the new bridge steals it and continues. If a live PID holds it, the new bridge waits for it to exit, then takes over. No babysitting required during launchd restarts.
+Two bridge processes polling Telegram's `getUpdates` simultaneously will trigger 409 conflicts, log them 1000 times each, and never exit cleanly. `patchbay/singleton.py` holds an exclusive lock on `.bridge.lock`. If a stale PID is holding it (process is dead), the new bridge steals it and continues. If a live PID holds it, the new bridge waits for it to exit, then takes over. No babysitting required during launchd restarts.
 
 ### 708 tests, all in plain pytest
 
@@ -117,13 +117,13 @@ Anyone with a Mac and 30 minutes should be able to follow this end-to-end.
 1. Telegram → New Group → add your bot.
 2. Group settings → "Topics" → enable. (This converts the group into a forum.)
 3. Make the bot an admin with permission to read all messages and post in topics.
-4. Find the chat ID by sending a message and reading `bridge.log` once stargate is running, or by using a tool like [@RawDataBot](https://t.me/RawDataBot).
+4. Find the chat ID by sending a message and reading `bridge.log` once patchbay is running, or by using a tool like [@RawDataBot](https://t.me/RawDataBot).
 
 ### 4. Clone and configure
 
 ```bash
-git clone https://github.com/synodic-studio/stargate.git
-cd stargate
+git clone https://github.com/synodic-studio/patchbay-relay.git
+cd patchbay-relay
 uv sync
 
 # Configure environment
@@ -149,8 +149,8 @@ Send a message in any topic. The bridge logs the chat-and-thread ID; copy it int
 
 ```bash
 # Update paths in com.synodic.claude-telegram-bridge.plist (look for YOURUSER placeholders)
-cp com.synodic.claude-telegram-bridge.plist ~/Library/LaunchAgents/com.synodic.stargate.plist
-launchctl load ~/Library/LaunchAgents/com.synodic.stargate.plist
+cp com.synodic.claude-telegram-bridge.plist ~/Library/LaunchAgents/com.synodic.patchbay-relay.plist
+launchctl load ~/Library/LaunchAgents/com.synodic.patchbay-relay.plist
 ```
 
 The plist sets `KeepAlive: SuccessfulExit=false` so the bridge auto-restarts on crash, with a 30-second `ThrottleInterval` backstop to prevent rapid-fire restart storms. `run.sh` does pre-flight validation; if `validate.py` fails, it rolls back to a known-good snapshot.

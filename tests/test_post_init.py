@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 import bridge
-import stargate.projects
-import stargate.sessions
+import patchbay.projects
+import patchbay.sessions
 
 
 # ---------------------------------------------------------------------------
@@ -36,16 +36,16 @@ def _make_app_mock(bot=None):
 class TestPostInit:
     @pytest.fixture(autouse=True)
     def _isolate(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(stargate.sessions, "SESSION_DIR", tmp_path / "sessions")
+        monkeypatch.setattr(patchbay.sessions, "SESSION_DIR", tmp_path / "sessions")
         (tmp_path / "sessions").mkdir()
-        monkeypatch.setattr(stargate.sessions, "PENDING_DIR", tmp_path / "pending")
+        monkeypatch.setattr(patchbay.sessions, "PENDING_DIR", tmp_path / "pending")
         (tmp_path / "pending").mkdir()
         monkeypatch.setattr(bridge, "PENDING_DIR", tmp_path / "pending")
         monkeypatch.setattr(bridge, "RESTART_NOTIFY_FILE", tmp_path / "restart.json")
         monkeypatch.setattr(bridge, "STALL_POLL_INTERVAL", 999)
         monkeypatch.setattr(bridge, "STALL_TIMEOUT", 999)
         # Prevent real chat_projects loading
-        monkeypatch.setattr(stargate.projects, "CHAT_PROJECTS_FILE", tmp_path / "cp.json")
+        monkeypatch.setattr(patchbay.projects, "CHAT_PROJECTS_FILE", tmp_path / "cp.json")
         bridge._bot_instance = None
         self._tmp = tmp_path
 
@@ -159,11 +159,11 @@ class TestPostInit:
 class TestReplayPendingLive:
     @pytest.fixture(autouse=True)
     def _isolate(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(stargate.sessions, "SESSION_DIR", tmp_path / "sessions")
+        monkeypatch.setattr(patchbay.sessions, "SESSION_DIR", tmp_path / "sessions")
         (tmp_path / "sessions").mkdir()
         pending = tmp_path / "pending"
         pending.mkdir()
-        monkeypatch.setattr(stargate.sessions, "PENDING_DIR", pending)
+        monkeypatch.setattr(patchbay.sessions, "PENDING_DIR", pending)
         monkeypatch.setattr(bridge, "PENDING_DIR", pending)
         self._pending = pending
 

@@ -95,7 +95,7 @@ def handoff_to_forge(
         "**Response routing:** When done, send the response back to Telegram.",
         "Use the bot API:",
         "```bash",
-        "BOT_TOKEN=$(grep TELEGRAM_BOT_TOKEN ~/Developer/stargate/.env | cut -d= -f2-)",
+        "BOT_TOKEN=$(grep TELEGRAM_BOT_TOKEN ~/Developer/patchbay-relay/.env | cut -d= -f2-)",
         'curl -s -X POST "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" \\',
         f"  -d chat_id={chat_id} \\",
         f"  -d message_thread_id={thread_id} \\",

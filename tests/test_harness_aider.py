@@ -1,4 +1,4 @@
-"""Tests for stargate.harness.aider.AiderHarness.
+"""Tests for patchbay.harness.aider.AiderHarness.
 
 Uses fake-aider binaries that mimic aider's stdout shape (header banner
 + body + footer) to exercise the chrome-stripping and the rest of the
@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from stargate.harness import (
+from patchbay.harness import (
     AiderHarness,
     Harness,
     TextDelta,
@@ -24,7 +24,7 @@ from stargate.harness import (
     TurnFinal,
     TurnRequest,
 )
-from stargate.harness.aider import (
+from patchbay.harness.aider import (
     DEFAULT_AIDER_MODEL,
     _parse_cost,
     _strip_aider_chrome,

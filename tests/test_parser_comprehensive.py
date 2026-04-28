@@ -1,4 +1,4 @@
-"""Comprehensive edge-case tests for stargate.parser module.
+"""Comprehensive edge-case tests for patchbay.parser module.
 
 Covers _parse_events, _extract_text_from_events, and parse_claude_response
 with a focus on unusual inputs, boundary conditions, and subtle behaviors.
@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
-from stargate.parser import _extract_text_from_events, _parse_events, parse_claude_response
+from patchbay.parser import _extract_text_from_events, _parse_events, parse_claude_response
 
 
 # ---------------------------------------------------------------------------
@@ -403,7 +403,7 @@ class TestExtractTextFromEventsEdgeCases:
 class TestParseClaudeResponseEdgeCases:
     """Edge cases for parse_claude_response (main entry point)."""
 
-    @patch("stargate.parser.save_session_id")
+    @patch("patchbay.parser.save_session_id")
     def test_result_with_error_and_text_text_wins(self, mock_save):
         """When both assistant text and result error exist, text is returned (not error)."""
         events = [
@@ -415,7 +415,7 @@ class TestParseClaudeResponseEdgeCases:
         # text is found from assistant → returned before error check
         assert result == "good response"
 
-    @patch("stargate.parser.save_session_id")
+    @patch("patchbay.parser.save_session_id")
     def test_result_with_error_no_text_returns_error(self, mock_save):
         """When there's no text but result has error, formatted error is returned."""
         events = [
@@ -425,7 +425,7 @@ class TestParseClaudeResponseEdgeCases:
         result = parse_claude_response(stdout, "test_key")
         assert result == "(Claude error: rate limit)"
 
-    @patch("stargate.parser.save_session_id")
+    @patch("patchbay.parser.save_session_id")
     def test_max_turns_subtype_without_text(self, mock_save):
         """max_turns with no assistant text returns just the notice."""
         events = [
@@ -436,7 +436,7 @@ class TestParseClaudeResponseEdgeCases:
         assert "produced no text response" in result
         assert "Reply to continue" in result
 
-    @patch("stargate.parser.save_session_id")
+    @patch("patchbay.parser.save_session_id")
     def test_max_turns_via_result_subtype_key(self, mock_save):
         """max_turns detected via 'result_subtype' key (alternate field name)."""
         events = [
@@ -448,7 +448,7 @@ class TestParseClaudeResponseEdgeCases:
         assert "working" in result
         assert "turn limit" in result
 
-    @patch("stargate.parser.save_session_id")
+    @patch("patchbay.parser.save_session_id")
     def test_unknown_subtype_logged_but_text_returned(self, mock_save):
         """An unknown subtype is logged, but text is still returned normally."""
         events = [
@@ -459,7 +459,7 @@ class TestParseClaudeResponseEdgeCases:
         result = parse_claude_response(stdout, "test_key")
         assert result == "normal response"
 
-    @patch("stargate.parser.save_session_id")
+    @patch("patchbay.parser.save_session_id")
     def test_multiple_result_events_uses_last(self, mock_save):
         """When multiple result events exist, the last one is used for session_id and subtype."""
         events = [
@@ -473,7 +473,7 @@ class TestParseClaudeResponseEdgeCases:
         # No assistant event, so falls back to result text — last result event's "result"
         assert result == "second"
 
-    @patch("stargate.parser.save_session_id")
+    @patch("patchbay.parser.save_session_id")
     def test_result_without_session_id_logs_error(self, mock_save):
         """A result event missing session_id triggers error log, not a crash."""
         events = [
@@ -486,7 +486,7 @@ class TestParseClaudeResponseEdgeCases:
         mock_save.assert_not_called()
         assert result == "hello"
 
-    @patch("stargate.parser.save_session_id")
+    @patch("patchbay.parser.save_session_id")
     def test_very_long_text_response(self, mock_save):
         """Very long text responses (>100KB) are returned intact."""
         long_text = "A" * 150_000
@@ -499,7 +499,7 @@ class TestParseClaudeResponseEdgeCases:
         assert len(result) == 150_000
         assert result == long_text
 
-    @patch("stargate.parser.save_session_id")
+    @patch("patchbay.parser.save_session_id")
     def test_text_with_newlines_preserved(self, mock_save):
         """Newlines within text content are preserved."""
         text = "line one\nline two\n\nline four"
@@ -511,7 +511,7 @@ class TestParseClaudeResponseEdgeCases:
         result = parse_claude_response(stdout, "test_key")
         assert result == text
 
-    @patch("stargate.parser.save_session_id")
+    @patch("patchbay.parser.save_session_id")
     def test_text_with_unicode_preserved(self, mock_save):
         """Unicode characters (emoji, CJK) in response are preserved."""
         text = "\U0001f680 Launch \u2014 \u4f60\u597d \u2014 caf\u00e9"
@@ -523,7 +523,7 @@ class TestParseClaudeResponseEdgeCases:
         result = parse_claude_response(stdout, "test_key")
         assert result == text
 
-    @patch("stargate.parser.save_session_id")
+    @patch("patchbay.parser.save_session_id")
     def test_text_with_control_characters(self, mock_save):
         """Control characters (tabs, carriage returns) in text are preserved."""
         text = "col1\tcol2\r\nrow2"
@@ -551,7 +551,7 @@ class TestParseClaudeResponseEdgeCases:
         result = parse_claude_response("", "test_key")
         assert result == "(no parseable response)"
 
-    @patch("stargate.parser.save_session_id")
+    @patch("patchbay.parser.save_session_id")
     def test_no_result_event_still_extracts_text(self, mock_save):
         """When there is no result event at all, assistant text is still extracted."""
         events = [
@@ -562,7 +562,7 @@ class TestParseClaudeResponseEdgeCases:
         mock_save.assert_not_called()
         assert result == "orphan text"
 
-    @patch("stargate.parser.save_session_id")
+    @patch("patchbay.parser.save_session_id")
     def test_result_event_with_no_text_and_no_error_returns_fallback(self, mock_save):
         """Result event with empty result and no error returns the fallback."""
         events = [
@@ -572,7 +572,7 @@ class TestParseClaudeResponseEdgeCases:
         result = parse_claude_response(stdout, "test_key")
         assert result == "(no parseable response)"
 
-    @patch("stargate.parser.save_session_id")
+    @patch("patchbay.parser.save_session_id")
     def test_ndjson_format_with_session_save(self, mock_save):
         """NDJSON format triggers session save and text extraction."""
         lines = [
@@ -585,7 +585,7 @@ class TestParseClaudeResponseEdgeCases:
         mock_save.assert_called_once_with("test_key", "ndjson_sess")
         assert result == "ndjson reply"
 
-    @patch("stargate.parser.save_session_id")
+    @patch("patchbay.parser.save_session_id")
     def test_session_id_none_in_result_triggers_error_log(self, mock_save):
         """Result event with session_id=None triggers error log path."""
         events = [
@@ -598,7 +598,7 @@ class TestParseClaudeResponseEdgeCases:
         mock_save.assert_not_called()
         assert result == "ok"
 
-    @patch("stargate.parser.save_session_id")
+    @patch("patchbay.parser.save_session_id")
     def test_max_turns_with_text_appends_notice(self, mock_save):
         """max_turns with existing text appends the notice after the text."""
         events = [
@@ -611,7 +611,7 @@ class TestParseClaudeResponseEdgeCases:
         assert result.endswith("]")
         assert "turn limit" in result
 
-    @patch("stargate.parser.save_session_id")
+    @patch("patchbay.parser.save_session_id")
     def test_only_system_events_returns_fallback(self, mock_save):
         """Events with only system type (no assistant, no result) return fallback."""
         events = [
@@ -622,7 +622,7 @@ class TestParseClaudeResponseEdgeCases:
         result = parse_claude_response(stdout, "test_key")
         assert result == "(no parseable response)"
 
-    @patch("stargate.parser.save_session_id")
+    @patch("patchbay.parser.save_session_id")
     def test_error_field_is_dict_not_string(self, mock_save):
         """Error field that is a dict (not string) is still formatted."""
         events = [
@@ -633,7 +633,7 @@ class TestParseClaudeResponseEdgeCases:
         assert result.startswith("(Claude error:")
         assert "429" in result
 
-    @patch("stargate.parser.save_session_id")
+    @patch("patchbay.parser.save_session_id")
     def test_result_with_both_subtype_and_result_subtype_prefers_subtype(self, mock_save):
         """When both 'subtype' and 'result_subtype' are present, 'subtype' wins (or-short-circuit)."""
         events = [
@@ -651,14 +651,14 @@ class TestParseClaudeResponseEdgeCases:
         # subtype is checked first via `or`, so max_turns notice should appear
         assert "turn limit" in result
 
-    @patch("stargate.parser.save_session_id")
+    @patch("patchbay.parser.save_session_id")
     def test_empty_events_array_returns_fallback(self, mock_save):
         """An empty JSON array '[]' means no events — returns fallback."""
         result = parse_claude_response("[]", "test_key")
         # _parse_events returns [] → fallback to stdout.strip() or "(no parseable response)"
         assert result == "[]"  # stdout.strip() is "[]" which is truthy
 
-    @patch("stargate.parser.save_session_id")
+    @patch("patchbay.parser.save_session_id")
     def test_text_with_json_inside(self, mock_save):
         """Text content that itself contains JSON strings is returned verbatim."""
         text = 'The config is: {"key": "value", "nested": [1,2,3]}'
@@ -670,7 +670,7 @@ class TestParseClaudeResponseEdgeCases:
         result = parse_claude_response(stdout, "test_key")
         assert result == text
 
-    @patch("stargate.parser.save_session_id")
+    @patch("patchbay.parser.save_session_id")
     def test_multiple_text_blocks_joined(self, mock_save):
         """Multiple text blocks in assistant content are joined with newline separators."""
         events = [

@@ -17,8 +17,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import bridge
-from stargate.log_filters import ConflictAggregator
-from stargate.self_heal import RepairResult
+from patchbay.log_filters import ConflictAggregator
+from patchbay.self_heal import RepairResult
 
 
 def _conflict_record() -> logging.LogRecord:
@@ -101,7 +101,7 @@ class TestStormWatcher:
         agg._recent_ts = [time.time()] * 3  # below threshold of 5
         monkeypatch.setattr(bridge, "_conflict_aggregator", agg)
 
-        with patch("stargate.self_heal.dispatch_repair") as mock_dispatch:
+        with patch("patchbay.self_heal.dispatch_repair") as mock_dispatch:
             task = asyncio.create_task(bridge._conflict_storm_watcher())
             await asyncio.sleep(0.05)
             task.cancel()
@@ -121,7 +121,7 @@ class TestStormWatcher:
         mock_dispatch = MagicMock(
             return_value=RepairResult(fixed=True, kind="stale_telegram_poller", actions=["sent SIGTERM"])
         )
-        monkeypatch.setattr("stargate.self_heal.dispatch_repair", mock_dispatch)
+        monkeypatch.setattr("patchbay.self_heal.dispatch_repair", mock_dispatch)
 
         task = asyncio.create_task(bridge._conflict_storm_watcher())
         await asyncio.sleep(0.05)
@@ -149,7 +149,7 @@ class TestStormWatcher:
         mock_dispatch = MagicMock(
             return_value=RepairResult(fixed=False, kind="stale_telegram_poller", actions=[])
         )
-        monkeypatch.setattr("stargate.self_heal.dispatch_repair", mock_dispatch)
+        monkeypatch.setattr("patchbay.self_heal.dispatch_repair", mock_dispatch)
 
         task = asyncio.create_task(bridge._conflict_storm_watcher())
         await asyncio.sleep(0.1)  # multiple poll cycles
@@ -168,7 +168,7 @@ class TestStormWatcher:
         watcher should be a no-op rather than crash."""
         monkeypatch.setattr(bridge, "_conflict_aggregator", None)
 
-        with patch("stargate.self_heal.dispatch_repair") as mock_dispatch:
+        with patch("patchbay.self_heal.dispatch_repair") as mock_dispatch:
             task = asyncio.create_task(bridge._conflict_storm_watcher())
             await asyncio.sleep(0.05)
             task.cancel()

@@ -18,18 +18,18 @@ def _make_update():
 
 @pytest.fixture(autouse=True)
 def _isolate(tmp_path, monkeypatch):
-    import stargate.config
-    import stargate.sessions
+    import patchbay.config
+    import patchbay.sessions
 
     # Redirect all path-backed state into a temp dir so tests don't touch
     # real session/pending files.
-    monkeypatch.setattr(stargate.config, "BASE_DIR", tmp_path)
-    monkeypatch.setattr(stargate.config, "SESSION_DIR", tmp_path / "sessions")
-    monkeypatch.setattr(stargate.config, "PENDING_DIR", tmp_path / "pending")
+    monkeypatch.setattr(patchbay.config, "BASE_DIR", tmp_path)
+    monkeypatch.setattr(patchbay.config, "SESSION_DIR", tmp_path / "sessions")
+    monkeypatch.setattr(patchbay.config, "PENDING_DIR", tmp_path / "pending")
     monkeypatch.setattr(bridge, "SESSION_DIR", tmp_path / "sessions")
     monkeypatch.setattr(bridge, "PENDING_DIR", tmp_path / "pending")
-    monkeypatch.setattr(stargate.sessions, "SESSION_DIR", tmp_path / "sessions")
-    monkeypatch.setattr(stargate.sessions, "PENDING_DIR", tmp_path / "pending")
+    monkeypatch.setattr(patchbay.sessions, "SESSION_DIR", tmp_path / "sessions")
+    monkeypatch.setattr(patchbay.sessions, "PENDING_DIR", tmp_path / "pending")
     (tmp_path / "sessions").mkdir()
     (tmp_path / "pending").mkdir()
     monkeypatch.setattr(bridge, "_sessions", {})

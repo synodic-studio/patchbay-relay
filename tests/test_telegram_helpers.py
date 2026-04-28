@@ -339,7 +339,7 @@ class TestOutboundAudit:
 
     @pytest.fixture
     def outbound_dir(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("stargate.outbound.OUTBOUND_DIR", tmp_path)
+        monkeypatch.setattr("patchbay.outbound.OUTBOUND_DIR", tmp_path)
         return tmp_path
 
     @pytest.mark.asyncio

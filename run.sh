@@ -1,5 +1,5 @@
 #!/bin/bash
-# Launch Stargate with crash-loop detection and self-healing.
+# Launch Patchbay with crash-loop detection and self-healing.
 # On CRASH_THRESHOLD crashes within CRASH_WINDOW seconds, fires a headless
 # Claude Code session to investigate and fix. The loop keeps respawning the
 # bridge regardless; CC fixes land on the next restart.
@@ -65,7 +65,7 @@ while true; do
         error_tail=$(tail -80 "$LOG" 2>/dev/null)
         nohup "$CLAUDE_BIN" \
             --dangerously-skip-permissions \
-            -p "Stargate (Telegram bridge) has crashed ${recent} times in ${CRASH_WINDOW}s. Investigate the crash, fix the root cause, and open a PR to the develop branch. Do NOT restart the bridge — run.sh respawns it automatically. Repo: $SCRIPT_DIR
+            -p "Patchbay (Telegram bridge) has crashed ${recent} times in ${CRASH_WINDOW}s. Investigate the crash, fix the root cause, and open a PR to the develop branch. Do NOT restart the bridge — run.sh respawns it automatically. Repo: $SCRIPT_DIR
 
 Recent bridge.err:
 ${error_tail}" \

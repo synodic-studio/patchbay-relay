@@ -1,4 +1,4 @@
-"""Stargate — Claude Code Telegram Bridge.
+"""Patchbay — Claude Code Telegram Bridge.
 
 Package modules:
 - config: Environment variables, constants, paths

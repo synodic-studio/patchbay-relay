@@ -1,5 +1,5 @@
 [project]
-name = "stargate"
+name = "patchbay"
 version = "0.2.0"
 description = "Claude Code Telegram Bridge — relay Telegram messages to Claude Code sessions"
 requires-python = ">=3.13"
@@ -27,7 +27,7 @@ pythonpath = ["."]
 asyncio_mode = "auto"
 
 [tool.coverage.run]
-source = ["bridge", "stargate"]
+source = ["bridge", "patchbay"]
 omit = ["tests/*", "tcc-approve.py", "validate.py"]
 
 [tool.coverage.report]

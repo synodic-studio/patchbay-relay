@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 import bridge
-import stargate.sessions
+import patchbay.sessions
 
 
 # ── Shared helpers ─────────────────────────────────────────────────────────
@@ -62,7 +62,7 @@ class TestCmdStart:
 class TestCmdClearnew:
     @pytest.fixture(autouse=True)
     def _isolate(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(stargate.sessions, "SESSION_DIR", tmp_path)
+        monkeypatch.setattr(patchbay.sessions, "SESSION_DIR", tmp_path)
 
     @pytest.mark.asyncio
     async def test_clears_session(self):
@@ -87,9 +87,9 @@ class TestCmdClearnew:
 class TestCmdProject:
     @pytest.fixture(autouse=True)
     def _isolate(self, tmp_path, monkeypatch):
-        import stargate.projects
+        import patchbay.projects
 
-        monkeypatch.setattr(stargate.projects, "CHAT_PROJECTS_FILE", tmp_path / "cp.json")
+        monkeypatch.setattr(patchbay.projects, "CHAT_PROJECTS_FILE", tmp_path / "cp.json")
 
     @pytest.mark.asyncio
     async def test_no_project_set(self):
@@ -101,9 +101,9 @@ class TestCmdProject:
 
     @pytest.mark.asyncio
     async def test_project_set(self):
-        import stargate.projects
+        import patchbay.projects
 
-        stargate.projects._save_chat_projects({"999_1": "myproject"})
+        patchbay.projects._save_chat_projects({"999_1": "myproject"})
         update = _make_update(chat_id=999, thread_id=1)
         ctx = _make_context()
         await bridge.cmd_project(update, ctx)
@@ -112,9 +112,9 @@ class TestCmdProject:
 
     @pytest.mark.asyncio
     async def test_project_with_agent(self):
-        import stargate.projects
+        import patchbay.projects
 
-        stargate.projects._save_chat_projects({"999_1": {"path": "Fanta", "agent": "plotter"}})
+        patchbay.projects._save_chat_projects({"999_1": {"path": "Fanta", "agent": "plotter"}})
         update = _make_update(chat_id=999, thread_id=1)
         ctx = _make_context()
         await bridge.cmd_project(update, ctx)
@@ -129,13 +129,13 @@ class TestCmdProject:
 class TestCmdSetproject:
     @pytest.fixture(autouse=True)
     def _isolate(self, tmp_path, monkeypatch):
-        import stargate.projects
+        import patchbay.projects
 
         dev_dir = str(tmp_path / "dev")
-        monkeypatch.setattr(stargate.projects, "CHAT_PROJECTS_FILE", tmp_path / "cp.json")
-        monkeypatch.setattr(stargate.projects, "WORKING_DIR", dev_dir)
+        monkeypatch.setattr(patchbay.projects, "CHAT_PROJECTS_FILE", tmp_path / "cp.json")
+        monkeypatch.setattr(patchbay.projects, "WORKING_DIR", dev_dir)
         monkeypatch.setattr(bridge, "WORKING_DIR", dev_dir)
-        monkeypatch.setattr(stargate.sessions, "SESSION_DIR", tmp_path / "sessions")
+        monkeypatch.setattr(patchbay.sessions, "SESSION_DIR", tmp_path / "sessions")
         (tmp_path / "sessions").mkdir()
         (tmp_path / "dev").mkdir()
         (tmp_path / "dev" / "project-a").mkdir()
@@ -182,13 +182,13 @@ class TestCmdSetproject:
 class TestCallbackSetproject:
     @pytest.fixture(autouse=True)
     def _isolate(self, tmp_path, monkeypatch):
-        import stargate.projects
+        import patchbay.projects
 
         dev_dir = str(tmp_path / "dev")
-        monkeypatch.setattr(stargate.projects, "CHAT_PROJECTS_FILE", tmp_path / "cp.json")
-        monkeypatch.setattr(stargate.projects, "WORKING_DIR", dev_dir)
+        monkeypatch.setattr(patchbay.projects, "CHAT_PROJECTS_FILE", tmp_path / "cp.json")
+        monkeypatch.setattr(patchbay.projects, "WORKING_DIR", dev_dir)
         monkeypatch.setattr(bridge, "WORKING_DIR", dev_dir)
-        monkeypatch.setattr(stargate.sessions, "SESSION_DIR", tmp_path / "sessions")
+        monkeypatch.setattr(patchbay.sessions, "SESSION_DIR", tmp_path / "sessions")
         (tmp_path / "sessions").mkdir()
         (tmp_path / "dev").mkdir()
         (tmp_path / "dev" / "myrepo").mkdir()

@@ -1,13 +1,13 @@
-# Stargate Channels MCP — Plan
+# Patchbay Channels MCP — Plan
 
 ## Summary
 
-Add an MCP channel server to Stargate for live in-flight message delivery. Purely additive — no changes to existing spawn/resume/response flow.
+Add an MCP channel server to Patchbay for live in-flight message delivery. Purely additive — no changes to existing spawn/resume/response flow.
 
 ## Current Behavior
 
 1. Telegram message arrives
-2. Stargate checks if a session is already running for that thread
+2. Patchbay checks if a session is already running for that thread
 3. If running: queue the message, deliver after current session completes
 4. If not: spawn `claude -p --resume <id>` with the message, parse stdout, send reply
 
@@ -29,7 +29,7 @@ Everything else stays the same:
 ```
 Telegram Bot API
        ↓
-Stargate (central dispatcher)
+Patchbay (central dispatcher)
        ↓
        ├── No active session → spawn claude -p (today's path, unchanged)
        │
@@ -39,32 +39,32 @@ Stargate (central dispatcher)
 
 ## MCP Channel Server
 
-A lightweight Python MCP server that Stargate controls:
+A lightweight Python MCP server that Patchbay controls:
 
 - Declares `claude/channel` capability
 - Exposes tools: `reply(chat_id, text)`, `react(chat_id, message_id, emoji)`, `edit_message(chat_id, message_id, text)`
-- Stargate pushes messages in via `notifications/claude/channel`
-- Tools call back to Stargate's Telegram bot to send responses
+- Patchbay pushes messages in via `notifications/claude/channel`
+- Tools call back to Patchbay's Telegram bot to send responses
 
 The MCP server is spawned as part of each `claude -p` invocation:
 ```bash
-claude -p --channels server:stargate-channel --resume <session_id>
+claude -p --channels server:patchbay-channel --resume <session_id>
 ```
 
 ## Implementation Steps
 
-1. **Build MCP channel server** (`stargate/channel_server.py`)
+1. **Build MCP channel server** (`patchbay/channel_server.py`)
    - Declare `claude/channel` capability
-   - Implement reply/react/edit tools that POST back to Stargate's internal API
-   - Accept notifications from Stargate via stdin/IPC
+   - Implement reply/react/edit tools that POST back to Patchbay's internal API
+   - Accept notifications from Patchbay via stdin/IPC
 
-2. **Add internal API to Stargate** for the MCP server to call back
+2. **Add internal API to Patchbay** for the MCP server to call back
    - `POST /internal/reply` → sends Telegram message
    - `POST /internal/react` → adds emoji reaction
    - Bound to localhost only
 
 3. **Update `run_claude()` in bridge.py**
-   - Add `--channels server:stargate-channel` to the spawn command
+   - Add `--channels server:patchbay-channel` to the spawn command
    - Register the MCP server in a session-scoped `.mcp.json`
 
 4. **Update message routing in bridge.py**
@@ -91,4 +91,4 @@ claude -p --channels server:stargate-channel --resume <session_id>
 - Replacing the spawn/parse model (keep it)
 - Persistent long-lived sessions (stay headless)
 - Multiple concurrent sessions per thread
-- Changes to any Stargate commands
+- Changes to any Patchbay commands

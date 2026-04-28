@@ -5,21 +5,21 @@ import time
 
 import pytest
 
-import stargate.sessions
+import patchbay.sessions
 
 
 @pytest.fixture(autouse=True)
 def _isolate_session_dir(tmp_path, monkeypatch):
     """Redirect SESSION_DIR to a temp directory so tests don't touch real sessions."""
-    monkeypatch.setattr(stargate.sessions, "SESSION_DIR", tmp_path)
+    monkeypatch.setattr(patchbay.sessions, "SESSION_DIR", tmp_path)
 
 
 @pytest.fixture
 def session_fns():
     return (
-        stargate.sessions.get_session_id,
-        stargate.sessions.save_session_id,
-        stargate.sessions.clear_session,
+        patchbay.sessions.get_session_id,
+        patchbay.sessions.save_session_id,
+        patchbay.sessions.clear_session,
     )
 
 

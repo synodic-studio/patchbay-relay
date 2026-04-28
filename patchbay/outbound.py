@@ -3,10 +3,10 @@
 Two distinct log sources share one per-session file:
 
 1. Agent notifications (source != "claude-response"): agents send
-   messages to Telegram via Bot API, bypassing Stargate. log_outbound()
+   messages to Telegram via Bot API, bypassing Patchbay. log_outbound()
    records these so a subsequent Claude session can see what was sent.
 2. Claude response audit (source == "claude-response"):
-   log_outbound_response() records what Stargate itself sent in reply to
+   log_outbound_response() records what Patchbay itself sent in reply to
    a Telegram message, for diagnosing client-side render drops.
 
 Log format: one JSON object per line in outbound/{session_key}.jsonl.
@@ -132,7 +132,7 @@ def log_outbound_response(
     """Append an outbound Claude-response chunk to the audit log.
 
     Distinct from log_outbound (agent notifications): records what
-    Stargate itself sent in reply to a Telegram message, so client-side
+    Patchbay itself sent in reply to a Telegram message, so client-side
     render drops can be diagnosed.
 
     Args:

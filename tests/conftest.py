@@ -1,4 +1,4 @@
-"""Shared pytest fixtures for stargate tests."""
+"""Shared pytest fixtures for patchbay tests."""
 
 from unittest.mock import AsyncMock, MagicMock
 
@@ -13,7 +13,7 @@ import pytest
 # Each entry is (logical_name, kind, [(module, attr), ...]) — every binding
 # in the list is patched to the SAME tmp path so a value saved through one
 # alias is visible through the others (bridge.save_pending writes via
-# stargate.sessions.PENDING_DIR; the test then reads via bridge.PENDING_DIR
+# patchbay.sessions.PENDING_DIR; the test then reads via bridge.PENDING_DIR
 # — both must resolve to the same dir).
 #
 # kind ∈ {"dir", "file"}: dir paths are pre-created; file paths are not.
@@ -22,8 +22,8 @@ _PRODUCTION_PATH_GROUPS = [
         "session_dir",
         "dir",
         [
-            ("stargate.config", "SESSION_DIR"),
-            ("stargate.sessions", "SESSION_DIR"),
+            ("patchbay.config", "SESSION_DIR"),
+            ("patchbay.sessions", "SESSION_DIR"),
             ("bridge", "SESSION_DIR"),
         ],
     ),
@@ -31,21 +31,21 @@ _PRODUCTION_PATH_GROUPS = [
         "pending_dir",
         "dir",
         [
-            ("stargate.config", "PENDING_DIR"),
-            ("stargate.sessions", "PENDING_DIR"),
+            ("patchbay.config", "PENDING_DIR"),
+            ("patchbay.sessions", "PENDING_DIR"),
             ("bridge", "PENDING_DIR"),
         ],
     ),
     (
         "aider_history_dir",
         "dir",
-        [("stargate.config", "AIDER_HISTORY_DIR")],
+        [("patchbay.config", "AIDER_HISTORY_DIR")],
     ),
     (
         "photo_dir",
         "dir",
         [
-            ("stargate.config", "PHOTO_DIR"),
+            ("patchbay.config", "PHOTO_DIR"),
             ("bridge", "PHOTO_DIR"),
         ],
     ),
@@ -53,21 +53,21 @@ _PRODUCTION_PATH_GROUPS = [
         "doc_dir",
         "dir",
         [
-            ("stargate.config", "DOC_DIR"),
+            ("patchbay.config", "DOC_DIR"),
             ("bridge", "DOC_DIR"),
         ],
     ),
     (
         "quarantine_dir",
         "dir",
-        [("stargate.config", "QUARANTINE_DIR")],
+        [("patchbay.config", "QUARANTINE_DIR")],
     ),
     (
         "activity_log",
         "file",
         [
-            ("stargate.config", "ACTIVITY_LOG"),
-            ("stargate.activity", "ACTIVITY_LOG"),
+            ("patchbay.config", "ACTIVITY_LOG"),
+            ("patchbay.activity", "ACTIVITY_LOG"),
             ("bridge", "ACTIVITY_LOG"),
         ],
     ),
@@ -75,7 +75,7 @@ _PRODUCTION_PATH_GROUPS = [
         "chat_projects_file",
         "file",
         [
-            ("stargate.config", "CHAT_PROJECTS_FILE"),
+            ("patchbay.config", "CHAT_PROJECTS_FILE"),
             ("bridge", "CHAT_PROJECTS_FILE"),
         ],
     ),
@@ -83,14 +83,14 @@ _PRODUCTION_PATH_GROUPS = [
         "restart_notify_file",
         "file",
         [
-            ("stargate.config", "RESTART_NOTIFY_FILE"),
+            ("patchbay.config", "RESTART_NOTIFY_FILE"),
             ("bridge", "RESTART_NOTIFY_FILE"),
         ],
     ),
     (
         "lock_file",
         "file",
-        [("stargate.singleton", "LOCK_FILE")],
+        [("patchbay.singleton", "LOCK_FILE")],
     ),
 ]
 

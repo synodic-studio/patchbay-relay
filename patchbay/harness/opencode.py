@@ -18,7 +18,8 @@ Session resume: opencode emits `sessionID` on every event; we pull it
 from the first event and feed it back via `--session <id>` next turn.
 
 Defaults:
-- model: STARGATE_OPENCODE_MODEL env or "openrouter/deepseek/deepseek-chat-v3.1"
+- model: PATCHBAY_OPENCODE_MODEL env (or legacy STARGATE_OPENCODE_MODEL) or
+         "openrouter/deepseek/deepseek-chat-v3.1"
 - subprocess: --format json --pure --dangerously-skip-permissions
 
 Capabilities:
@@ -41,7 +42,7 @@ import time
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 
-from ..config import MAX_TIMEOUT, logger
+from ..config import MAX_TIMEOUT, _env_with_legacy, logger
 from .base import (
     Harness,
     HarnessCapabilities,
@@ -57,8 +58,9 @@ from .base import (
 
 OPENCODE_PATH_DEFAULT = shutil.which("opencode") or "/opt/homebrew/bin/opencode"
 
-DEFAULT_OPENCODE_MODEL = os.environ.get(
-    "STARGATE_OPENCODE_MODEL", "openrouter/deepseek/deepseek-chat-v3.1"
+DEFAULT_OPENCODE_MODEL = _env_with_legacy(
+    "PATCHBAY_OPENCODE_MODEL", "STARGATE_OPENCODE_MODEL",
+    "openrouter/deepseek/deepseek-chat-v3.1",
 )
 
 

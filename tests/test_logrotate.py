@@ -1,4 +1,4 @@
-"""Tests for stargate.logrotate — startup rotation of bridge.err / bridge.log.
+"""Tests for patchbay.logrotate — startup rotation of bridge.err / bridge.log.
 
 launchd pipes stderr to bridge.err which grows unbounded; we rotate
 on startup and re-point sys.stderr at a fresh file.
@@ -8,7 +8,7 @@ import gzip
 import os
 
 
-from stargate import logrotate
+from patchbay import logrotate
 
 
 class TestRotateIfOversize:

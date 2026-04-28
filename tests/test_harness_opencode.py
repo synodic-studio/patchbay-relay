@@ -1,4 +1,4 @@
-"""Tests for stargate.harness.opencode.OpenCodeHarness."""
+"""Tests for patchbay.harness.opencode.OpenCodeHarness."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from stargate.harness import (
+from patchbay.harness import (
     Harness,
     OpenCodeHarness,
     TextDelta,
@@ -22,7 +22,7 @@ from stargate.harness import (
     TurnFinal,
     TurnRequest,
 )
-from stargate.harness.opencode import (
+from patchbay.harness.opencode import (
     DEFAULT_OPENCODE_MODEL,
     _find_session_id,
     _parse_opencode_events,

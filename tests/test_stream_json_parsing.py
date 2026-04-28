@@ -16,12 +16,12 @@ from __future__ import annotations
 
 import json
 
-from stargate.parser import (
+from patchbay.parser import (
     _extract_text_from_events,
     _parse_events,
     parse_claude_response,
 )
-from stargate.quota import is_quota_error
+from patchbay.quota import is_quota_error
 
 
 # Captured from a real `claude -p "say hi" --output-format stream-json --verbose --max-turns 1`
@@ -75,7 +75,7 @@ class TestStreamJsonShape:
         assert text == "Hi there friend"
 
     def test_session_id_from_result_event(self, tmp_path, monkeypatch):
-        import stargate.sessions as sessions_mod
+        import patchbay.sessions as sessions_mod
 
         monkeypatch.setattr(sessions_mod, "SESSION_DIR", tmp_path)
         # Use a session_key that satisfies SESSION_KEY_RE (alnum/_/-)

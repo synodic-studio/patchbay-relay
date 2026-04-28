@@ -11,7 +11,7 @@ works because the SDK keeps the connection open across turns and the
 model picks up new user messages at its next decision point.
 
 The other harnesses are one-shot subprocesses: each turn is a fresh
-process. There's no "live connection" to push into. Stargate's existing
+process. There's no "live connection" to push into. Patchbay's existing
 behavior — queue follow-ups, batch them after the current turn ends —
 already exists for these cases. The fallback is about getting closer
 to the cc-sdk feel without rewriting any of the underlying agents.
@@ -25,7 +25,7 @@ case where the capability genuinely differs. The fallback is the
 
 ### A — Inbox file + PostToolUse hook
 
-- Stargate writes incoming messages to a per-chat file: `.agents/inbox/<session_key>.jsonl`.
+- Patchbay writes incoming messages to a per-chat file: `.agents/inbox/<session_key>.jsonl`.
 - A PostToolUse hook (claude / pi / opencode all support hooks) fires after each tool call. The hook reads any new lines from the inbox file and injects them into the agent's context via stdout.
 - The agent sees: "New message from Bryan: <text>" — at its next turn boundary, indistinguishable from a normal user message.
 - Inbox lines are consumed (truncated) as soon as the hook surfaces them.
@@ -38,17 +38,17 @@ case where the capability genuinely differs. The fallback is the
 
 Pi supports first-party extensions (`pi --extension <path>`). An extension can register hooks, slash commands, and tools.
 
-- Build a tiny stargate-inbox extension that polls a file every N tool calls and surfaces new messages.
-- Distribute the extension as part of stargate (check it in under `stargate/extensions/pi-inbox/`).
+- Build a tiny patchbay-inbox extension that polls a file every N tool calls and surfaces new messages.
+- Distribute the extension as part of patchbay (check it in under `patchbay/extensions/pi-inbox/`).
 - Wire pi harness to load the extension automatically when the chat is in channel mode.
 
-**Pros:** clean integration with pi's native lifecycle. Could grow to more than just inbox (e.g. expose stargate's own tools to pi).
+**Pros:** clean integration with pi's native lifecycle. Could grow to more than just inbox (e.g. expose patchbay's own tools to pi).
 
 **Cons:** pi-specific. Doesn't solve the problem for aider or opencode. Effort doesn't generalize.
 
-### C — Stargate-owned MCP server
+### C — Patchbay-owned MCP server
 
-Stargate runs a small MCP server that exposes:
+Patchbay runs a small MCP server that exposes:
 - `check_inbox()` — returns any new messages since the last call.
 - `notify(text)` — sends a message back to telegram (the outbound channel idea, also pinned).
 
@@ -85,12 +85,12 @@ Three pieces, each small.
 
 - Path: `<project_dir>/.agents/inbox/<session_key>.jsonl`.
 - Format: one JSON object per line: `{"ts": <unix>, "text": "<message>"}`.
-- Stargate's bridge writes a line on each Telegram message that arrives during an active turn for that session.
+- Patchbay's bridge writes a line on each Telegram message that arrives during an active turn for that session.
 - The `.agents/inbox/` directory is gitignored.
 
 ### Piece 2 — Hook script
 
-- A single Python script: `stargate/hooks/inbox_check.py`.
+- A single Python script: `patchbay/hooks/inbox_check.py`.
 - Reads `STARGATE_SESSION_KEY` and `STARGATE_PROJECT_DIR` from env (set by the harness when it spawns the agent).
 - Truncate-and-emit: read all lines, atomically truncate the file, emit the messages on stdout in the format the host agent expects (claude: JSON hook output; pi: TBD).
 
@@ -110,5 +110,5 @@ Three pieces, each small.
 
 - Does pi's PostToolUse hook accept a Python script directly, or does it need a wrapper?
 - Does opencode have a hook system at all? (Check `opencode --help` for hook-related flags.)
-- Should the inbox file live in `<project_dir>/.agents/inbox/` (project-local, follows the chat) or in stargate's own data dir (separates user data from project)? Lean project-local — agent already has access; less env-passing.
+- Should the inbox file live in `<project_dir>/.agents/inbox/` (project-local, follows the chat) or in patchbay's own data dir (separates user data from project)? Lean project-local — agent already has access; less env-passing.
 - How does this interact with the existing queue+batch fallback? Probably: channel-mode on → inbox path; channel-mode off → queue+batch. Per-chat opt-in via `/channels on`.

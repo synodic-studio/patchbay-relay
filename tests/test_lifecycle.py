@@ -15,9 +15,9 @@ import bridge
 class TestGracefulShutdown:
     @pytest.fixture(autouse=True)
     def _isolate(self, tmp_path, monkeypatch):
-        import stargate.sessions
+        import patchbay.sessions
 
-        monkeypatch.setattr(stargate.sessions, "SESSION_DIR", tmp_path / "sessions")
+        monkeypatch.setattr(patchbay.sessions, "SESSION_DIR", tmp_path / "sessions")
         (tmp_path / "sessions").mkdir()
         monkeypatch.setattr(bridge, "PHOTO_DIR", tmp_path / "photos")
         (tmp_path / "photos").mkdir()
