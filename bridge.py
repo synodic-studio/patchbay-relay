@@ -128,6 +128,7 @@ from patchbay.quota import (  # noqa: E402
     is_quota_error as _is_quota_error_impl,
 )
 from patchbay.activity import log_activity  # noqa: E402
+from patchbay.file_send import extract_file_sentinels, send_files  # noqa: E402
 from patchbay.outbound import get_recent_outbound, log_outbound_response  # noqa: E402
 from patchbay.models import (  # noqa: E402
     VALID_MODELS,
@@ -492,6 +493,14 @@ def run_claude(
         "Find it at ~/Library/CloudStorage/ProtonDrive-*/Claude-Support (glob for the exact path). "
         "You can drop files there (documents, images, exports) for the user to access from any device. "
         "Photos sent from Telegram are already handled separately via the photo handler.\n\n"
+        "SENDING FILES TO TELEGRAM: To attach a file directly to your reply (image, gpx, pdf, "
+        "anything), include a sentinel anywhere in your response text:\n"
+        "  [[send-file: /absolute/path/to/file.ext]]\n"
+        "  [[send-file: /absolute/path/to/photo.png | optional caption]]\n"
+        "Image MIMEs are sent inline via sendPhoto; everything else as a document. "
+        "Path must be absolute. Photos cap at 10MB, documents at 50MB. "
+        "The sentinel itself is stripped from the message — write it on its own line. "
+        "Use this instead of dropping into ProtonDrive when the user wants the file in-chat.\n\n"
         f"Telegram session key: {session_key}\n"
         f"Working directory: {project_info}\n"
         f"Chat projects config: {CHAT_PROJECTS_FILE}\n"
@@ -1016,10 +1025,12 @@ async def _send_response(bot, chat_id: int, thread_id: int | None, response: str
         send_kwargs["message_thread_id"] = thread_id
     audit_session_key = _session_key(chat_id, thread_id)
 
-    chunks = [response[i : i + TELEGRAM_MSG_LIMIT] for i in range(0, len(response), TELEGRAM_MSG_LIMIT)]
-    if not chunks:
-        return
+    response, file_requests = extract_file_sentinels(response)
+
+    chunks = [response[i : i + TELEGRAM_MSG_LIMIT] for i in range(0, len(response), TELEGRAM_MSG_LIMIT)] if response else []
     chunk_total = len(chunks)
+    if not chunks and not file_requests:
+        return
 
     # Decide once: if any chunk fails to convert, send everything as plain.
     md_chunks = [_to_markdownv2(c) for c in chunks]
@@ -1125,6 +1136,15 @@ async def _send_response(bot, chat_id: int, thread_id: int | None, response: str
             except Exception as audit_exc:
                 logger.debug("outbound audit log failed (error path): %s", audit_exc)
             raise last_exc
+
+    if file_requests:
+        await send_files(
+            bot,
+            chat_id=chat_id,
+            thread_id=thread_id,
+            session_key=audit_session_key,
+            requests=file_requests,
+        )
 
 
 async def _notify_delivery_failure(bot, chat_id: int, thread_id: int | None, label: str) -> None:

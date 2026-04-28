@@ -23,6 +23,7 @@ The bridge is modularized into a `patchbay/` package with focused modules. `brid
 | `patchbay/activity.py` | Structured JSON-lines activity logging |
 | `patchbay/projects.py` | Chat-to-project directory mapping |
 | `patchbay/self_heal.py` | Repair-agent dispatcher — corrupt-session quarantine, stale-poller signal, claude OOM retry. |
+| `patchbay/file_send.py` | Outbound file attachments. Parses `[[send-file: /abs/path \| caption]]` sentinels out of response text and uploads via `sendPhoto` (image MIME) or `sendDocument` (else). 10MB photo / 50MB doc cap. Logged to `activity.jsonl` as `outbound_file_sent` / `outbound_file_failed`. |
 | `patchbay/harness/` | Pluggable agent backends — `base.py` = protocol + TurnEvent types + `ChannelHandle`/`ChannelCapableHarness`, `claude_cli.py` = CLI subprocess backend, `claude_sdk.py` = Claude Agent SDK backend, `claude_sdk_channel.py` = long-lived `ClaudeSDKClient` wrapper for inflight-push channels (cc-sdk only — see `docs/CHANNELS-DESIGN.md`; primitive shipped, bridge wiring pending), `pi.py` = badlogicgames/pi multi-model coding agent, `aider.py` = aider-chat with chat-history-file resume (default `openrouter/deepseek/deepseek-chat`, override via `STARGATE_AIDER_MODEL`), `opencode.py` = sst/opencode JSON event protocol (default `openrouter/deepseek/deepseek-chat-v3.1`, override via `STARGATE_OPENCODE_MODEL`). See `docs/HARNESS-DESIGN.md`. |
 | `validate.py` | Pre-flight validation (syntax, imports, smoke tests for all modules) |
 

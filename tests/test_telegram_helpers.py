@@ -659,3 +659,58 @@ class TestNotifyDeliveryFailure:
         bot.send_message = AsyncMock(side_effect=Exception("notification also failed"))
         await bridge._notify_delivery_failure(bot, 111, None, "test-label")
         bot.send_message.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# _send_response × file sentinels
+# ---------------------------------------------------------------------------
+
+
+class TestSendResponseFileSentinels:
+    """Sentinels in response text route to send_files and are stripped."""
+
+    @pytest.fixture(autouse=True)
+    def _fast_retries(self, monkeypatch):
+        import bridge
+
+        monkeypatch.setattr(bridge, "SEND_RETRY_BASE_DELAY", 0.0)
+        monkeypatch.setattr(bridge, "SEND_RETRY_ATTEMPTS", 3)
+        monkeypatch.setattr(bridge, "_to_markdownv2", lambda _t: None)
+
+    @pytest.mark.asyncio
+    async def test_sentinel_routes_to_send_document(self, tmp_path):
+        import bridge
+
+        p = tmp_path / "x.gpx"
+        p.write_text("<gpx/>")
+        bot = MagicMock()
+        bot.send_message = AsyncMock()
+        bot.send_document = AsyncMock()
+        bot.send_photo = AsyncMock()
+
+        text = f"Here you go.\n[[send-file: {p}]]"
+        await bridge._send_response(bot, 111, 22, text)
+
+        # Text part sent (sentinel stripped).
+        msg_text = bot.send_message.await_args.kwargs["text"]
+        assert "send-file" not in msg_text
+        assert "Here you go." in msg_text
+        # File sent as document.
+        bot.send_document.assert_awaited_once()
+        bot.send_photo.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_sentinel_only_response_sends_no_text(self, tmp_path):
+        import bridge
+
+        p = tmp_path / "x.png"
+        p.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 32)
+        bot = MagicMock()
+        bot.send_message = AsyncMock()
+        bot.send_photo = AsyncMock()
+        bot.send_document = AsyncMock()
+
+        await bridge._send_response(bot, 111, None, f"[[send-file: {p}]]")
+
+        bot.send_message.assert_not_awaited()
+        bot.send_photo.assert_awaited_once()
