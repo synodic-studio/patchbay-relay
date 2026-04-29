@@ -105,6 +105,8 @@ If Claude hits a quota/rate limit, the message is handed off to Forge (`~/Develo
 
 Managed with `uv`. Run `uv sync` to install dependencies. Scripts use `uv run` — no venv activation needed.
 
+`run.sh` resolves the `uv` binary by probing `$UV_BIN` env var → `$HOME/.local/bin/uv` → `/opt/homebrew/bin/uv` → `/usr/local/bin/uv` → `command -v uv`, then sleeps 30s before exiting if nothing matches (so launchd's KeepAlive doesn't tight-loop). On this Mac Mini, `~/.local/bin/uv` is a symlink into mise's shim chain (`~/.local/share/mise/shims/uv` → `mise` binary → pinned uv 0.11.8 from `~/.config/mise/config.toml`). That collapses every uv invocation — `run.sh`, the `mcp-agent-mail` launchd plist, interactive shells — down to the same mise-pinned binary, so macOS TCC sees one signature and approval persists. Version bumps go through `mise use -g uv@x.y.z`.
+
 ## Authentication
 
 There is none. The bridge gates messages on `ALLOWED_USER_IDS` only.
