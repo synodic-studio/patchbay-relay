@@ -30,7 +30,8 @@
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <!-- UPDATE: Replace YOURUSER with your username so ~/.local/bin (where the uv installer puts uv) is reachable. -->
+        <string>/Users/YOURUSER/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
         <!-- UPDATE: path to picurious' claude-pi-shim if you want pi-backed topics.
              Leave unset (or commented out) to route every topic to real claude. -->
         <key>CLAUDE_PATH</key>

@@ -13,6 +13,27 @@ HEAL_BACKOFF=60        # seconds to wait after triggering CC before next respawn
 CLAUDE_BIN="${CLAUDE_PATH:-$HOME/.local/bin/claude}"
 LOG="$SCRIPT_DIR/logs/bridge.err"
 
+# Resolve uv binary. launchd's PATH is fixed and doesn't include ~/.local/bin,
+# so we can't rely on `uv` being on PATH — find it explicitly.
+UV_BIN="${UV_BIN:-}"
+if [[ -z "$UV_BIN" ]]; then
+    for candidate in "$HOME/.local/bin/uv" /opt/homebrew/bin/uv /usr/local/bin/uv; do
+        if [[ -x "$candidate" ]]; then
+            UV_BIN="$candidate"
+            break
+        fi
+    done
+fi
+if [[ -z "$UV_BIN" ]]; then
+    UV_BIN="$(command -v uv 2>/dev/null || true)"
+fi
+if [[ -z "$UV_BIN" || ! -x "$UV_BIN" ]]; then
+    echo "FATAL: cannot locate uv. Tried \$HOME/.local/bin/uv, /opt/homebrew/bin/uv, /usr/local/bin/uv, and PATH=$PATH" >&2
+    # Sleep before exiting so launchd's KeepAlive doesn't spin in a tight loop.
+    sleep 30
+    exit 1
+fi
+
 # Remove timestamps older than CRASH_WINDOW
 prune_timestamps() {
     local cutoff
@@ -35,7 +56,7 @@ trap '_shutdown' TERM INT
 
 while true; do
     # Pre-flight validation — if validate.py fails, try rolling back to known-good
-    if ! uv run --project "$SCRIPT_DIR" python "$SCRIPT_DIR/validate.py"; then
+    if ! "$UV_BIN" run --project "$SCRIPT_DIR" python "$SCRIPT_DIR/validate.py"; then
         echo "Validation failed. Checking for known-good backup..." >&2
         if [[ -f "$SCRIPT_DIR/.bridge-known-good.py" ]]; then
             echo "Rolling back bridge.py to .bridge-known-good.py" >&2
@@ -45,7 +66,7 @@ while true; do
         fi
     fi
 
-    uv run --project "$SCRIPT_DIR" python "$SCRIPT_DIR/bridge.py" &
+    "$UV_BIN" run --project "$SCRIPT_DIR" python "$SCRIPT_DIR/bridge.py" &
     _child_pid=$!
     wait "$_child_pid"
     exit_code=$?
