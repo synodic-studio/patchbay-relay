@@ -297,6 +297,35 @@ launchctl load ~/Library/LaunchAgents/dev.kj6.auth-bridge.plist
 4. Confirm subsequent messages are processed normally.
 5. Check `auth/auth_log.jsonl` for the `authenticated` event.
 
+## Backlog Rollup (2026-04-29)
+
+Every backlog item below was an active bead before the auth layer was retired. They are absorbed into this document — there is no separate live backlog for auth work. To revive any of them, recover the relevant code from the `v0-pre-public` tag and reopen a bead at that point.
+
+**Apple Sign-In + bridge integration**
+- Sign in with Apple authentication for the bridge (originally CTB-9pw).
+- Apple ID token verification needs graceful handling of Apple key fetch failures (originally CTB-j6z).
+
+**TOTP + session security**
+- Session timeout logic: 4 hr hard, 1 hr inactivity (originally CTB-1xa).
+- `/lock` command + brute force protection: lockout after 3 failed attempts within a 5-minute window (originally CTB-42p).
+
+**Mobile UX**
+- Send TOTP codes / one-time keys as separate Telegram messages so the user can long-press to copy without grabbing surrounding text (originally CTB-lem).
+
+**Test coverage to restore**
+The following test cases were dispatched to a deepseek run that never completed; they belong with the auth code in `v0-pre-public` and should be recreated when the layer is revived:
+- `verify_totp` rejects wrong codes and accepts valid window codes.
+- Auth token is consumed on first use and rejected on second use.
+- IP change detection locks session and `check_ip` returns `False`.
+- Auth rate limiting locks out after 3 failed attempts within 5 min.
+- `auth.is_authenticated` returns `False` for locked sessions.
+- Unauthorized `ALLOWED_USER_IDS` are silently dropped before Claude invocation.
+- `parse_claude_response` extracts text correctly and falls back gracefully.
+- `_parse_events` handles JSON array, NDJSON, single object, empty, and garbage.
+
+**Docs**
+- Auth flow end-to-end (TOTP + Apple Sign In) documentation lives in this file (originally CTB-8sk).
+
 ## Tests (also retired)
 
 Three test files covered the auth system. They were removed alongside the auth code and are recoverable from the `v0-pre-public` tag:
