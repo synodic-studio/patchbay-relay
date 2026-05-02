@@ -174,33 +174,27 @@ class TestMarkdownV2:
         assert "parse_mode" not in bot.send_message.call_args.kwargs
 
     @pytest.mark.asyncio
-    async def test_one_failed_chunk_conversion_drops_whole_response_to_plain(
+    async def test_unbalanced_chunk_drops_whole_response_to_plain(
         self, monkeypatch
     ):
-        """Audit §13: a multi-chunk response must not ship some chunks as
-        MarkdownV2 and others as plain. If any chunk fails to convert, every
-        chunk goes plain."""
+        """If converted MarkdownV2 contains an unbalanced toggle entity
+        (would yield Telegram's `can't find end of bold entity` error), the
+        whole response goes plain — no half-formatted output, no rejected
+        chunks dropped silently."""
         import bridge
 
-        monkeypatch.setattr(bridge, "TELEGRAM_MSG_LIMIT", 10)
-
-        # 3-chunk response. Conversion of the middle chunk returns None;
-        # the other two would convert fine. Whole response should still go plain.
-        responses = ["MD0", None, "MD2"]
-
-        def fake_md(text):
-            return responses.pop(0) if responses else "MD?"
-
-        monkeypatch.setattr(bridge, "_to_markdownv2", fake_md)
+        monkeypatch.setattr(bridge, "TELEGRAM_MSG_LIMIT", 4096)
+        # Conversion produces an orphan `*` (one unmatched bold marker).
+        monkeypatch.setattr(bridge, "_to_markdownv2", lambda _t: "hello *world")
 
         bot = MagicMock()
         bot.send_message = AsyncMock()
 
-        await bridge._send_response(bot, 111, None, "AAAAAAAAAA" + "BBBBBBBBBB" + "CCCCCCCCCC")
-        # 3 chunks, all plain
-        assert bot.send_message.call_count == 3
-        for call in bot.send_message.call_args_list:
-            assert "parse_mode" not in call.kwargs
+        await bridge._send_response(bot, 111, None, "raw response")
+        bot.send_message.assert_called_once()
+        # Sent as plain — the un-converted source, not the malformed md.
+        assert "parse_mode" not in bot.send_message.call_args.kwargs
+        assert bot.send_message.call_args.kwargs["text"] == "raw response"
 
     @pytest.mark.asyncio
     async def test_conversion_failure_logged_to_activity_with_raw_text(
@@ -290,17 +284,17 @@ class TestMarkdownV2:
         self, monkeypatch
     ):
         """If chunk N's MarkdownV2 send fails, chunks N+1, N+2, … are sent
-        plain even if their conversion succeeded — preventing a half-formatted
-        message past the failure point."""
+        plain even if their conversion was balanced — preventing a half-
+        formatted message past the failure point."""
         import bridge
 
         monkeypatch.setattr(bridge, "TELEGRAM_MSG_LIMIT", 10)
-        monkeypatch.setattr(bridge, "_to_markdownv2", lambda t: f"MD::{t}")
+        # Conversion preserves paragraph structure; three balanced paragraphs
+        # become three chunks (one per paragraph) since each is < limit but
+        # they don't fit together.
+        monkeypatch.setattr(bridge, "_to_markdownv2", lambda t: t)
 
         bot = MagicMock()
-        # Chunk 0 succeeds as MarkdownV2 (one call). Chunk 1's MarkdownV2
-        # send fails, then plain succeeds (two calls). Chunk 2 should go
-        # straight to plain (one call) — no markdown attempt.
         side_effects = [
             None,                # chunk 0 markdown OK
             Exception("bad"),    # chunk 1 markdown fails
@@ -309,7 +303,7 @@ class TestMarkdownV2:
         ]
         bot.send_message = AsyncMock(side_effect=side_effects)
 
-        await bridge._send_response(bot, 111, None, "AAAAAAAAAA" + "BBBBBBBBBB" + "CCCCCCCCCC")
+        await bridge._send_response(bot, 111, None, "AAAAAAAA\n\nBBBBBBBB\n\nCCCCCCCC")
         assert bot.send_message.call_count == 4
         calls = bot.send_message.call_args_list
         # chunk 0: markdown

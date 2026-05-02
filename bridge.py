@@ -130,6 +130,11 @@ from patchbay.quota import (  # noqa: E402
 from patchbay.activity import log_activity  # noqa: E402
 from patchbay.file_send import extract_file_sentinels, send_files  # noqa: E402
 from patchbay.outbound import get_recent_outbound, log_outbound_response  # noqa: E402
+from patchbay.text_split import (  # noqa: E402
+    is_markdownv2_balanced,
+    split_for_telegram,
+    split_paired_for_telegram,
+)
 from patchbay.models import (  # noqa: E402
     VALID_MODELS,
     extract_model_prefix,
@@ -1007,18 +1012,24 @@ def _to_markdownv2(text: str) -> str | None:
 async def _send_response(bot, chat_id: int, thread_id: int | None, response: str) -> None:
     """Send a response, splitting at Telegram's message limit.
 
-    Decides MarkdownV2 vs plain *once for the whole response* rather than
-    per chunk. If any chunk fails to convert upfront, every
-    chunk goes plain — no half-formatted / half-raw output. If a chunk's
-    MarkdownV2 send fails mid-response, the *remaining* chunks downgrade
-    to plain too (the chunk that already shipped is unrecoverable, but at
-    least the rest of the message stays consistent). Retries each chunk
-    up to SEND_RETRY_ATTEMPTS times with exponential backoff.
+    The response is converted to MarkdownV2 *once as a whole* (not per
+    chunk) and then split on paragraph > line > word boundaries. Splitting
+    converted text — rather than slicing the raw response and converting
+    each slice independently — prevents mid-`*bold*` cuts that yielded
+    Telegram's `BadRequest: can't find end of bold entity` errors. After
+    splitting, each chunk's toggle entities (`*`, `_`, ``` `, ``` ``` ```,
+    `~`, `||`) are checked for parity; if any chunk is unbalanced, the
+    entire response downgrades to plain text (the same all-or-nothing
+    invariant the previous chunker enforced — no half-formatted output).
+
+    If a chunk's MarkdownV2 send fails mid-response, remaining chunks
+    downgrade to plain too. Retries each chunk up to SEND_RETRY_ATTEMPTS
+    times with exponential backoff.
 
     Every send attempt's outcome is recorded to the outbound audit log
-    (source="claude-response") for diagnosing client-side render drops
-   . Audit failures are swallowed: they must never affect
-    user-visible send behavior.
+    (source="claude-response") for diagnosing client-side render drops.
+    Audit failures are swallowed: they must never affect user-visible
+    send behavior.
     """
     send_kwargs: dict = {"chat_id": chat_id}
     if thread_id is not None:
@@ -1027,22 +1038,49 @@ async def _send_response(bot, chat_id: int, thread_id: int | None, response: str
 
     response, file_requests = extract_file_sentinels(response)
 
-    chunks = [response[i : i + TELEGRAM_MSG_LIMIT] for i in range(0, len(response), TELEGRAM_MSG_LIMIT)] if response else []
-    chunk_total = len(chunks)
-    if not chunks and not file_requests:
+    if not response and not file_requests:
         return
 
-    # Decide once: if any chunk fails to convert, send everything as plain.
-    md_chunks = [_to_markdownv2(c) for c in chunks]
-    use_markdown = all(m is not None for m in md_chunks)
-    if not use_markdown:
-        logger.debug(
-            "MarkdownV2 conversion failed for at least one of %d chunks; "
-            "sending entire response as plain to avoid mixed rendering",
-            chunk_total,
-        )
+    # Convert the whole response once; pair raw + md slices via paragraph
+    # alignment so each chunk's audit log carries the matching source slice
+    # and any mid-response downgrade has a sensible plain fallback for the
+    # remaining chunks.
+    converted_full = _to_markdownv2(response) if response else None
+    raw_chunks: list[str]
+    md_chunks: list[str | None]
+    if converted_full is None:
+        raw_chunks = split_for_telegram(response, TELEGRAM_MSG_LIMIT) if response else []
+        md_chunks = [None] * len(raw_chunks)
+        use_markdown = False
+    else:
+        pairs = split_paired_for_telegram(response, converted_full, TELEGRAM_MSG_LIMIT)
+        md_pieces = [m for _, m in pairs]
+        if all(is_markdownv2_balanced(m) for m in md_pieces):
+            raw_chunks = [r for r, _ in pairs]
+            md_chunks = list(md_pieces)
+            use_markdown = True
+        else:
+            _log_activity(
+                "markdown_chunk_unbalanced",
+                chunk_total=len(md_pieces),
+                converted_len=len(converted_full),
+                response_len=len(response),
+            )
+            logger.warning(
+                "MarkdownV2 chunk parity check failed (%d chunks); "
+                "downgrading entire response to plain to avoid Telegram "
+                "entity rejection",
+                len(md_pieces),
+            )
+            raw_chunks = split_for_telegram(response, TELEGRAM_MSG_LIMIT)
+            md_chunks = [None] * len(raw_chunks)
+            use_markdown = False
 
-    for chunk_index, chunk in enumerate(chunks):
+    chunk_total = len(raw_chunks)
+    if not chunk_total and not file_requests:
+        return
+
+    for chunk_index, chunk in enumerate(raw_chunks):
         md_chunk = md_chunks[chunk_index] if use_markdown else None
         last_exc: Exception | None = None
         for attempt in range(SEND_RETRY_ATTEMPTS):
