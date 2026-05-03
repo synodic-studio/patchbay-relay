@@ -241,7 +241,12 @@ STALL_POLL_INTERVAL = 60  # check every minute
 STALL_TIMEOUT = _env_int("STALL_TIMEOUT", "1800", min_value=1)  # 30 min
 
 # --- Shutdown ---
-SHUTDOWN_PROCESS_TIMEOUT = 30  # seconds to wait for active processes
+SHUTDOWN_PROCESS_TIMEOUT = 30  # seconds to wait for active processes (SIGTERM path)
+# /restart drain: how long to wait for in-flight turns to finish before force
+# killing on user-initiated restart. Long enough to cover most agent turns
+# (file edits, codebase scans, podcast downloads) but bounded so a stuck
+# session doesn't leave the operator wedged. Use `/restart force` to skip.
+RESTART_DRAIN_TIMEOUT = _env_int("RESTART_DRAIN_TIMEOUT", "600", min_value=1)  # 10 min
 
 # --- Sentinel prefix for quota errors ---
 QUOTA_HIT_PREFIX = "\x00QUOTA_HIT\x00"

@@ -307,6 +307,10 @@ class TestCmdRestart:
         monkeypatch.setattr(bridge, "RESTART_NOTIFY_FILE", tmp_path / "restart.json")
         monkeypatch.setattr(bridge, "_sessions", {})
         monkeypatch.setattr(bridge, "_remote_proc", None)
+        # Short drain so tests don't wait the production 10 minutes when a
+        # mock proc reports "still alive" forever.
+        monkeypatch.setattr(bridge, "RESTART_DRAIN_TIMEOUT", 1)
+        monkeypatch.setattr(bridge, "_shutting_down", False)
         self._tmp = tmp_path
 
     @pytest.mark.asyncio
@@ -323,7 +327,58 @@ class TestCmdRestart:
         assert data["thread_id"] == 456
 
     @pytest.mark.asyncio
-    async def test_terminates_active_procs(self):
+    async def test_terminates_active_procs_after_drain_timeout(self):
+        proc = MagicMock()
+        proc.poll.return_value = None  # "still running" — never exits
+        bridge._get_session_state("test").proc = proc
+        update = _make_update()
+        ctx = _make_context()
+        with patch("os._exit"):
+            await bridge.cmd_restart(update, ctx)
+        # Drain timed out → force terminate.
+        proc.terminate.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_force_skips_drain_and_terminates_immediately(self, monkeypatch):
+        """`/restart force` must not wait — it's the escape hatch when the
+        bridge itself is wedged."""
+        proc = MagicMock()
+        proc.poll.return_value = None
+        bridge._get_session_state("test").proc = proc
+        # Make drain very long so the test would hang if force wasn't honored.
+        monkeypatch.setattr(bridge, "RESTART_DRAIN_TIMEOUT", 9999)
+        update = _make_update(text="/restart force")
+        ctx = _make_context()
+        start = time.time()
+        with patch("os._exit"):
+            await bridge.cmd_restart(update, ctx)
+        elapsed = time.time() - start
+        assert elapsed < 2.0, f"force took too long ({elapsed}s) — drain not skipped"
+        proc.terminate.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_drain_exits_early_when_proc_finishes(self, monkeypatch):
+        """If the active process exits during drain, restart proceeds without
+        waiting the full timeout — preserves work-in-progress."""
+        proc = MagicMock()
+        # Report running on first poll, exited on subsequent polls.
+        proc.poll.side_effect = [None, None, 0, 0, 0, 0, 0, 0]
+        bridge._get_session_state("test").proc = proc
+        # Long drain — test should still finish fast because proc "exits".
+        monkeypatch.setattr(bridge, "RESTART_DRAIN_TIMEOUT", 60)
+        update = _make_update()
+        ctx = _make_context()
+        start = time.time()
+        with patch("os._exit"):
+            await bridge.cmd_restart(update, ctx)
+        elapsed = time.time() - start
+        assert elapsed < 10.0, f"drain didn't exit early ({elapsed}s)"
+        # No force-terminate needed since proc already exited.
+        proc.terminate.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_blocks_new_messages_during_drain(self):
+        """While draining, _shutting_down must be True so new messages are dropped."""
         proc = MagicMock()
         proc.poll.return_value = None
         bridge._get_session_state("test").proc = proc
@@ -331,4 +386,4 @@ class TestCmdRestart:
         ctx = _make_context()
         with patch("os._exit"):
             await bridge.cmd_restart(update, ctx)
-        proc.terminate.assert_called_once()
+        assert bridge._shutting_down is True

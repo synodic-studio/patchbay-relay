@@ -36,7 +36,7 @@ The bridge is modularized into a `patchbay/` package with focused modules. `brid
 
 ### Testing
 
-797 tests across the `tests/` dir. Run with `uv run pytest tests/`. The suite includes property tests (`hypothesis`), a `claude` chaos test that materializes a fake binary across 7 failure modes, real drain/debounce integration tests synchronized via `threading.Event`, and self-heal dispatcher tests.
+803 tests across the `tests/` dir. Run with `uv run pytest tests/`. The suite includes property tests (`hypothesis`), a `claude` chaos test that materializes a fake binary across 7 failure modes, real drain/debounce integration tests synchronized via `threading.Event`, and self-heal dispatcher tests.
 
 **Test isolation from production paths.** `tests/conftest.py` ships an autouse fixture (`_isolate_production_paths`) that monkeypatches every production filesystem path (`PENDING_DIR`, `SESSION_DIR`, `ACTIVITY_LOG`, `LOCK_FILE`, `PHOTO_DIR`, `CHAT_PROJECTS_FILE`, `RESTART_NOTIFY_FILE`, etc.) to a per-test tmp dir, across **every** module that imports the constant (`patchbay.config`, `patchbay.sessions`, `patchbay.activity`, `patchbay.singleton`, `bridge`). Without this, `pytest tests/` while the launchd bridge is live can wipe a real user's queued reply, pollute the real `activity.jsonl`, or send SIGTERM to the live bridge via `signal_other_bridge`. When adding new production-path constants, add them to `_PRODUCTION_PATH_GROUPS` in `tests/conftest.py` so every alias resolves to the same tmp path.
 
@@ -75,7 +75,8 @@ All commands are registered in `bridge.py` via `CommandHandler`. Commands silent
 | `/setproject [path]` | Bind this topic to a project directory under `~/Developer`. Without an argument, shows an inline keyboard to pick from all subdirectories. Pass a path relative to `~/Developer` to set it directly. Session is reset on change. |
 | `/project` | Show the project directory currently bound to this topic (and the agent name if one is configured). |
 | `/kill` | Kill the active Claude subprocess for this topic. Session ID is preserved — the next message resumes in the same session. |
-| `/restart` | Restart the bridge process (terminates all active Claude and remote-control processes, then exits non-zero so launchd respawns). Sends a ping to this topic after the new process starts. |
+| `/restart` | Drain mode (default): blocks new messages, waits up to `RESTART_DRAIN_TIMEOUT` (default 10 min) for in-flight turns to finish so their work isn't lost, then terminates remaining processes and exits non-zero so launchd respawns. Sends a ping to this topic after the new process starts. |
+| `/restart force` | Skip drain. Terminate every active turn immediately and exit. Use when the bridge itself is wedged and waiting won't help (work in progress will be lost). |
 | `/remote_control` | Start `claude remote-control` in this topic's project directory, and report connection info. If one is already running, it is replaced. |
 | `/remote_control stop` | Stop the running remote-control process. |
 | `/ping` | Check liveness. Reports "pong" plus a list of any sessions currently running Claude, with elapsed time. Each session is labeled with its forum topic title (cached from `forum_topic_created`/`forum_topic_edited` events into `chat_projects.json` under a `title` key) — falling back to `<dir> › <agent>` (or just `<dir>` / `<agent>`) and finally the raw `chat_id_thread_id` session key. |

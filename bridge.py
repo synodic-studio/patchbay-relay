@@ -79,6 +79,7 @@ from patchbay.config import (  # noqa: E402
     DOC_DIR,
     PHOTO_DIR,
     QUOTA_HIT_PREFIX,
+    RESTART_DRAIN_TIMEOUT,
     RESTART_NOTIFY_FILE,
     SEND_RETRY_ATTEMPTS,
     SEND_RETRY_BASE_DELAY,
@@ -1949,20 +1950,71 @@ async def cmd_kill(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Restart the bridge process. Launchd will respawn it."""
-    user_id = update.effective_user.id
-    await update.message.reply_text("Restarting bridge...")
-    logger.info("User %d triggered bridge restart", user_id)
+    """Restart the bridge process. Launchd will respawn it.
 
-    # cc-cli paths: SIGTERM the proc (graceful, lets it write final stderr).
+    Two modes:
+      * `/restart` (default) — drain mode. Block new messages, wait for
+        in-flight turns to finish (up to RESTART_DRAIN_TIMEOUT), then exit.
+        Preserves work in progress. The orphan-claude failure mode that
+        prompted this — where a 17-minute turn was killed mid-stream and
+        its response went to /dev/null — is what drain prevents.
+      * `/restart force` — old behavior. SIGTERM everything immediately
+        and exit. For when the bridge itself is wedged and waiting won't
+        help.
+    """
+    global _shutting_down
+    user_id = update.effective_user.id
+    parts = (update.message.text or "").split()
+    force = len(parts) > 1 and parts[1].lower() in ("force", "kill", "now")
+
+    active = _iter_active_sessions()
+    n_active = len(active)
+
+    if force:
+        await update.message.reply_text(
+            f"Restarting (force) — terminating {n_active} active turn{'s' if n_active != 1 else ''}..."
+            if n_active
+            else "Restarting (force)..."
+        )
+        logger.info("User %d triggered FORCE bridge restart (%d active)", user_id, n_active)
+    elif n_active == 0:
+        await update.message.reply_text("Restarting (no active turns)...")
+        logger.info("User %d triggered bridge restart (no active turns)", user_id)
+    else:
+        await update.message.reply_text(
+            f"Restarting — draining {n_active} active turn{'s' if n_active != 1 else ''} "
+            f"(up to {RESTART_DRAIN_TIMEOUT // 60} min). "
+            f"Use /restart force to skip."
+        )
+        logger.info(
+            "User %d triggered bridge restart (drain mode, %d active, timeout %ds)",
+            user_id,
+            n_active,
+            RESTART_DRAIN_TIMEOUT,
+        )
+
+    restart_notify = RESTART_NOTIFY_FILE
+    restart_notify.write_text(
+        json.dumps(
+            {
+                "chat_id": update.effective_chat.id,
+                "thread_id": update.message.message_thread_id,
+            }
+        )
+    )
+
+    # Block new incoming messages while we drain / kill.
+    _shutting_down = True
+
+    if not force and n_active > 0:
+        await _drain_active_turns(deadline_seconds=RESTART_DRAIN_TIMEOUT)
+
+    # Force-terminate anything still running (drain timed out, or user used force).
     for key, proc in _iter_active_procs():
         if proc.poll() is None:
             proc.terminate()
             logger.info("Terminated Claude process for %s (pid %d)", key, proc.pid)
 
-    # cc-sdk paths: schedule a task cancel on the worker loop. Best-effort
-    # — we're about to os._exit anyway, so any subprocess the SDK owns
-    # dies as our child when we exit.
     for key, state in _iter_active_sessions():
         if state.proc is not None:
             continue  # already terminated above
@@ -1975,17 +2027,34 @@ async def cmd_restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         _remote_proc.terminate()
         logger.info("Terminated remote-control process (pid %d)", _remote_proc.pid)
 
-    restart_notify = RESTART_NOTIFY_FILE
-    restart_notify.write_text(
-        json.dumps(
-            {
-                "chat_id": update.effective_chat.id,
-                "thread_id": update.message.message_thread_id,
-            }
-        )
-    )
-
     os._exit(1)
+
+
+async def _drain_active_turns(deadline_seconds: int) -> None:
+    """Poll until every session finishes its in-flight turn or the deadline hits.
+
+    Used by `/restart` (drain mode) so a user-initiated restart doesn't strand
+    a long-running agent turn whose response would otherwise be lost when the
+    bridge exits and the subprocess pipe breaks.
+    """
+    deadline = time.time() + deadline_seconds
+    while time.time() < deadline:
+        active = _iter_active_sessions()
+        if not active:
+            logger.info("All active turns drained — proceeding with restart")
+            return
+        # Filter out sessions whose subprocess already exited; harness wrap-up
+        # is in flight and will clear state shortly.
+        alive = [(k, s) for k, s in active if s.proc is None or s.proc.poll() is None]
+        if not alive:
+            logger.info("All Claude subprocesses exited — proceeding with restart")
+            return
+        await asyncio.sleep(2)
+    logger.warning(
+        "Drain timeout (%ds) reached with %d turn(s) still active — force-terminating",
+        deadline_seconds,
+        len(_iter_active_sessions()),
+    )
 
 
 async def cmd_remote_control(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
