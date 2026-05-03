@@ -95,6 +95,15 @@ class ClaudeSdkHarness:
 
         options = self._build_options(req, ClaudeAgentOptions)
 
+        # Capture the running task so cancel() can interrupt it. Without
+        # this, the bridge's stall detector and `/kill` command appear to
+        # cancel the turn (logging + user notification fire) but the SDK
+        # task keeps running unfettered — the user sees a "killed" message
+        # AND a successful response moments later. Set on entry, cleared
+        # in the finally block so a subsequent turn doesn't inherit a
+        # stale handle.
+        self._task = asyncio.current_task()
+
         text_chunks: list[str] = []
         captured_session_id: str | None = None
 
@@ -191,6 +200,11 @@ class ClaudeSdkHarness:
                 metadata={"sdk_error": "CLIJSONDecodeError", "line": getattr(e, "line", "")[:200]},
             )
             return
+        finally:
+            # Always clear the task handle — a stale handle on a subsequent
+            # turn would let cancel() target an already-finished task and
+            # leak the new one (the bug the assignment in run_turn fixes).
+            self._task = None
 
         # Stream ended without ResultMessage. This is a contract violation
         # by the SDK, but we still need to terminate the stream cleanly.

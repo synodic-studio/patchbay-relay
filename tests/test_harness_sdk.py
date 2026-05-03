@@ -459,3 +459,86 @@ class TestOptionsBuilding:
     def test_cwd_set_to_project_dir(self, tmp_path):
         opts = self._build(_make_request(tmp_path=tmp_path))
         assert opts.cwd == str(tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# Cancellation — `harness.cancel()` must actually interrupt the running turn
+# ---------------------------------------------------------------------------
+
+
+class TestCancellation:
+    """Regression: `self._task` was declared but never assigned, so
+    `cancel()` was a silent no-op. The bridge's stall detector / `/kill`
+    appeared to cancel cc-sdk turns (logging + user notification fired)
+    while the SDK actually kept running. The user observed a "killed" message
+    followed by a successful response moments later.
+    """
+
+    def test_task_handle_set_during_run_and_cleared_after(self, tmp_path):
+        harness = ClaudeSdkHarness()
+        # Stub yields one ResultMessage so run_turn completes quickly.
+        client = _StubClient(messages=[_result_msg()])
+
+        events = _run(harness, _make_request(tmp_path=tmp_path), lambda options: client)
+        # Post-run, the task handle must be cleared so the next turn doesn't
+        # inherit a stale (already-done) task and silently no-op cancel().
+        assert harness._task is None
+        # And the turn actually produced a terminator.
+        assert _has_exactly_one_terminator(events)
+
+    def test_cancel_actually_stops_inflight_turn(self, tmp_path):
+        """The real fix: cancel() must interrupt the running task. Use a
+        client that yields nothing and never returns to simulate a long
+        tool call; cancel after a short delay and assert the turn exits."""
+        harness = ClaudeSdkHarness()
+
+        class _NeverEndingClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc_info):
+                return None
+
+            async def query(self, prompt: str) -> None:
+                pass
+
+            async def receive_response(self):
+                # Block forever — simulates a tool call with no events.
+                await asyncio.Event().wait()
+                yield  # pragma: no cover — sentinel for type checker
+
+        async def _go() -> str:
+            with patch("claude_agent_sdk.ClaudeSDKClient", lambda options: _NeverEndingClient()):
+                gen = harness.run_turn(_make_request(tmp_path=tmp_path))
+
+                async def _drive():
+                    async for _ in gen:
+                        pass
+                    return "completed"
+
+                drive_task = asyncio.create_task(_drive())
+                # Let run_turn enter the receive loop and assign self._task.
+                for _ in range(50):
+                    if harness._task is not None:
+                        break
+                    await asyncio.sleep(0.01)
+                assert harness._task is not None, "run_turn did not capture its task"
+                await harness.cancel()
+                # The drive task must finish (cancellation propagates out
+                # of the generator), not hang forever.
+                try:
+                    return await asyncio.wait_for(drive_task, timeout=2.0)
+                except asyncio.CancelledError:
+                    return "cancelled"
+
+        result = asyncio.run(_go())
+        assert result in ("cancelled", "completed")
+        # And the handle is cleared so a follow-up cancel is a no-op, not a
+        # double-fire.
+        assert harness._task is None
+
+    def test_cancel_is_noop_when_no_active_turn(self, tmp_path):
+        """Cancel before any turn started must not raise."""
+        harness = ClaudeSdkHarness()
+        asyncio.run(harness.cancel())
+        assert harness._task is None

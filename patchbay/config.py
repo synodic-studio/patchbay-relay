@@ -233,9 +233,12 @@ MAX_QUEUED_MESSAGES = 20  # max pending messages per session before dropping
 # Stall detection watches stdout-event cadence, not CPU: claude -p in JSON
 # output mode streams events on every tool call / assistant chunk / result,
 # so a real hang (or a process blocked on a TCC dialog with no one to click
-# it) shows up as no-events-for-N-minutes regardless of CPU. Default 10 min.
+# it) shows up as no-events-for-N-minutes regardless of CPU. Default 30 min:
+# 10 min was producing false-positive ghost-kills on cc-sdk during long
+# Bash/Read tool calls (test suites, large file scans) that legitimately
+# don't emit SDK messages while running.
 STALL_POLL_INTERVAL = 60  # check every minute
-STALL_TIMEOUT = _env_int("STALL_TIMEOUT", "600", min_value=1)  # 10 min
+STALL_TIMEOUT = _env_int("STALL_TIMEOUT", "1800", min_value=1)  # 30 min
 
 # --- Shutdown ---
 SHUTDOWN_PROCESS_TIMEOUT = 30  # seconds to wait for active processes
