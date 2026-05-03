@@ -109,6 +109,8 @@ Managed with `uv`. Run `uv sync` to install dependencies. Scripts use `uv run` �
 
 `run.sh` resolves the `uv` binary by probing `$UV_BIN` env var → `$HOME/.local/bin/uv` → `/opt/homebrew/bin/uv` → `/usr/local/bin/uv` → `command -v uv`, then sleeps 30s before exiting if nothing matches (so launchd's KeepAlive doesn't tight-loop). On this Mac Mini, `~/.local/bin/uv` is a symlink into mise's shim chain (`~/.local/share/mise/shims/uv` → `mise` binary → pinned uv 0.11.8 from `~/.config/mise/config.toml`). That collapses every uv invocation — `run.sh`, the `mcp-agent-mail` launchd plist, interactive shells — down to the same mise-pinned binary, so macOS TCC sees one signature and approval persists. Version bumps go through `mise use -g uv@x.y.z`.
 
+**TCC-pinned formulas.** `mise` and `python@3.13`/`python@3.14` are pinned via `brew pin` because each Homebrew upgrade changes the Cellar binary path and silently revokes every TCC permission tied to it (Full Disk Access, Calendar, Contacts). The Library agent hung mid-turn after a mise upgrade for exactly this reason. Banana re-asserts the pins on every tick (`TCC_PINNED_FORMULAS` in `~/Developer/Fanta/agents/pa/banana/heartbeat.py`). Intentional upgrades require an in-person walk to the Mac Mini to re-grant TCC after the upgrade — the workflow is documented in banana's AGENTS.md.
+
 ## Authentication
 
 There is none. The bridge gates messages on `ALLOWED_USER_IDS` only.
