@@ -117,31 +117,44 @@ async def test_turn_error_passes_through_without_mop():
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_violation_logged_to_jsonl(tmp_path):
+async def test_violation_logged_to_jsonl(tmp_path, monkeypatch):
     """On a violation, an entry is appended to MOP_LOG_PATH."""
+    import threading as _threading
+    import patchbay.harness.claude_sdk_mop as _mop_mod
+
     log_file = str(tmp_path / "violations.jsonl")
     final = TurnFinal(session_id=None, num_turns=1, total_cost_usd=None, raw_text="Want me to fix it?")
     harness = _make_harness([final])
+    monkeypatch.setenv("MOP_LOG_PATH", log_file)
+    monkeypatch.setenv("MOP_LLM_BACKEND", "haiku")
+    harness._llm_backend = "haiku"
+    # Inject a minimal rule so the test doesn't depend on the rules dir path.
+    harness._rules = [{
+        "name": "no-permission-asking-for-doable-work",
+        "detector": "llm",
+        "on_violation": "warn",
+        "severity": "warn",
+        "parameters": {"prompt": "Does this message ask permission?"},
+    }]
 
-    import os
-    os.environ["MOP_LOG_PATH"] = log_file
+    # Patch _claude_p_eval to return True so the violation fires without CLI.
+    monkeypatch.setattr(_mop_mod, "_claude_p_eval", lambda rule_name, query: True)
 
-    # Force a violation by patching _evaluate
-    async def _fake_evaluate(text):
-        return ({"name": "no-permission-asking-for-doable-work", "on_violation": "reject", "severity": "violation", "guidance": ""}, "reject")
+    # Make threading.Thread run synchronously so the test doesn't race.
+    class _SyncThread:
+        def __init__(self, target, args=(), daemon=False, **_):
+            self._target, self._args = target, args
+        def start(self):
+            self._target(*self._args)
 
-    harness._evaluate = _fake_evaluate
+    monkeypatch.setattr(_threading, "Thread", _SyncThread)
 
-    try:
-        events = await _collect(harness, _req())
-    finally:
-        os.environ.pop("MOP_LOG_PATH", None)
+    events = await _collect(harness, _req())
 
     assert Path(log_file).exists()
     line = json.loads(Path(log_file).read_text().strip())
     assert line["rule"] == "no-permission-asking-for-doable-work"
     assert "Want me to fix it?" in line["text_preview"]
-    # MVP: audit mode — TurnFinal still delivered
     assert isinstance(events[-1], TurnFinal)
 
 

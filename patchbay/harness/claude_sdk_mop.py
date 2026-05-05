@@ -25,7 +25,7 @@ import json
 import logging
 import os
 import re
-import sys
+import threading
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Literal
@@ -45,7 +45,7 @@ from .base import (
 )
 from .claude_sdk import ClaudeSdkHarness
 
-_MOP_REPO_DEFAULT = Path(__file__).resolve().parents[4] / "model-output-protocol"
+_MOP_REPO_DEFAULT = Path(__file__).resolve().parents[4] / "Developer" / "model-output-protocol"
 
 _CAPABILITIES = HarnessCapabilities(
     supports_resume=True,
@@ -118,26 +118,28 @@ async def _eval_llm(rule: dict, text: str, backend: str) -> bool:
     return False
 
 
-async def _haiku_eval(rule_name: str, query: str) -> bool:
-    """One-shot eval via `claude -p`. Runs under Max plan — no API billing."""
+def _claude_p_eval(rule_name: str, query: str) -> bool:
+    """One-shot eval via `claude -p`. Runs under Max plan — no API billing.
+    Runs in /tmp with no cwd context so project CLAUDE.md/hooks don't fire."""
     import shutil
     import subprocess
     cli = shutil.which("claude") or os.path.expanduser("~/.local/bin/claude")
+    try:
+        result = subprocess.run(
+            [cli, "-p", query, "--max-turns", "1"],
+            capture_output=True, text=True, timeout=30,
+            cwd="/tmp",
+        )
+        raw = result.stdout.strip()
+        return bool(json.loads(raw).get("violation"))
+    except Exception as exc:
+        logger.warning("claude -p eval failed for rule %s: %s — Accept", rule_name, exc)
+        return False
+
+
+async def _haiku_eval(rule_name: str, query: str) -> bool:
     loop = asyncio.get_event_loop()
-
-    def _call() -> bool:
-        try:
-            result = subprocess.run(
-                [cli, "-p", query, "--max-turns", "1"],
-                capture_output=True, text=True, timeout=30,
-            )
-            raw = result.stdout.strip()
-            return bool(json.loads(raw).get("violation"))
-        except (subprocess.TimeoutExpired, json.JSONDecodeError, Exception) as exc:
-            logger.warning("claude -p eval failed for rule %s: %s — defaulting to Accept", rule_name, exc)
-            return False
-
-    return await loop.run_in_executor(None, _call)
+    return await loop.run_in_executor(None, _claude_p_eval, rule_name, query)
 
 
 async def _gemma4_eval(rule_name: str, query: str) -> bool:
@@ -161,6 +163,31 @@ async def _gemma4_eval(rule_name: str, query: str) -> bool:
             return False
 
     return await loop.run_in_executor(None, _call)
+
+
+# ---------------------------------------------------------------------------
+# Sync eval runner — called from daemon thread, no event loop needed
+# ---------------------------------------------------------------------------
+
+def _eval_and_log_sync(session_key: str, text: str, rules: list[dict], backend: str) -> None:
+    """Evaluate text against rules synchronously and log any violations.
+    Designed to run in a daemon thread — never blocks the response path."""
+    for rule in rules:
+        detector = rule.get("detector", "")
+        fired = False
+        if detector == "deterministic":
+            fired = _eval_deterministic(rule, text)
+        elif detector == "llm":
+            if backend in ("haiku", "gemma4"):
+                prompt = rule.get("parameters", {}).get("prompt", "")
+                query = (
+                    f"{prompt.strip()}\n\nMessage to evaluate:\n<message>\n{text}\n</message>\n\n"
+                    "Reply with JSON only: {\"violation\": true} or {\"violation\": false}."
+                )
+                fired = _claude_p_eval(rule["name"], query)
+        if fired:
+            _log_violation(session_key, rule, text)
+            return  # first violation wins
 
 
 # ---------------------------------------------------------------------------
@@ -216,20 +243,6 @@ class ClaudeSdkMopHarness:
             self._rules = _load_active_rules()
         return self._rules
 
-    async def _evaluate(self, text: str) -> tuple[dict | None, str]:
-        """Return (first_violating_rule, action) or (None, 'accept')."""
-        for rule in self._get_rules():
-            detector = rule.get("detector", "")
-            fired = False
-            if detector == "deterministic":
-                fired = _eval_deterministic(rule, text)
-            elif detector == "llm":
-                fired = await _eval_llm(rule, text, self._llm_backend)
-            if fired:
-                action = rule.get("on_violation", "warn")
-                return rule, action
-        return None, "accept"
-
     async def run_turn(self, req: TurnRequest) -> AsyncIterator[TurnEvent]:
         """Buffer full turn, run MOP at TurnFinal."""
         buffered: list[TurnEvent] = []
@@ -255,14 +268,21 @@ class ClaudeSdkMopHarness:
             )
             return
 
-        if isinstance(final, TurnFinal):
-            violated_rule, action = await self._evaluate(final.raw_text)
-            if violated_rule is not None:
-                _log_violation(req.session_key, violated_rule, final.raw_text)
-                # MVP: audit only — log the violation but deliver unchanged.
-                # TODO: when bridge supports it, suppress + inject feedback for reject.
-
+        # Yield TurnFinal immediately — don't block delivery on MOP eval.
+        # Eval runs in a daemon thread so it doesn't add latency to the
+        # response path. Audit mode: violations are logged asynchronously.
         yield final
+
+        if isinstance(final, TurnFinal):
+            session_key = req.session_key
+            text = final.raw_text
+            backend = self._llm_backend
+            rules = list(self._get_rules())
+            threading.Thread(
+                target=_eval_and_log_sync,
+                args=(session_key, text, rules, backend),
+                daemon=True,
+            ).start()
 
     async def cancel(self) -> None:
         await self._inner.cancel()
