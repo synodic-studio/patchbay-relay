@@ -355,7 +355,10 @@ class ClaudeSdkHarness:
 
     def _terminator_from_result(self, msg, text_chunks: list[str]):
         """Map a ResultMessage to either a TurnFinal or a TurnError."""
-        full_text = "".join(text_chunks) or msg.result or ""
+        # msg.result is the CLI's native final-answer field — only the last
+        # assistant turn. text_chunks accumulates ALL turns (tool reasoning +
+        # final), which is wrong for the response. Prefer msg.result.
+        full_text = msg.result or "".join(text_chunks) or ""
         subtype = msg.subtype or ""
         if subtype in ("max_turns", "error_max_turns"):
             return TurnError(
