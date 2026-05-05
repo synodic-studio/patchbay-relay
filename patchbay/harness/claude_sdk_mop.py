@@ -119,25 +119,22 @@ async def _eval_llm(rule: dict, text: str, backend: str) -> bool:
 
 
 async def _haiku_eval(rule_name: str, query: str) -> bool:
-    try:
-        import anthropic
-    except ImportError:
-        logger.warning("anthropic not installed — MOP LLM disabled for %s", rule_name)
-        return False
+    """One-shot eval via `claude -p`. Runs under Max plan — no API billing."""
+    import shutil
+    import subprocess
+    cli = shutil.which("claude") or os.path.expanduser("~/.local/bin/claude")
     loop = asyncio.get_event_loop()
-    client = anthropic.Anthropic()
 
     def _call() -> bool:
-        resp = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=64,
-            messages=[{"role": "user", "content": query}],
-        )
-        raw = resp.content[0].text.strip()
         try:
+            result = subprocess.run(
+                [cli, "-p", query, "--max-turns", "1"],
+                capture_output=True, text=True, timeout=30,
+            )
+            raw = result.stdout.strip()
             return bool(json.loads(raw).get("violation"))
-        except (json.JSONDecodeError, AttributeError):
-            logger.warning("Haiku non-JSON for rule %s: %r", rule_name, raw[:60])
+        except (subprocess.TimeoutExpired, json.JSONDecodeError, Exception) as exc:
+            logger.warning("claude -p eval failed for rule %s: %s — defaulting to Accept", rule_name, exc)
             return False
 
     return await loop.run_in_executor(None, _call)
