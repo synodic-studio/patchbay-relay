@@ -201,7 +201,7 @@ MAX_WORKERS = _env_int("MAX_WORKERS", "4", min_value=1)
 # Agent SDK, pi wraps badlogicgames/pi (multi-model). Per-chat override lives
 # in chat_projects.json under the "harness" key; this value is the fallback
 # when a topic has no override.
-VALID_HARNESSES = ("cc-cli", "cc-sdk", "pi", "aider", "opencode")
+VALID_HARNESSES = ("cc-cli", "cc-sdk", "cc-sdk-mop", "pi", "aider", "opencode")
 DEFAULT_HARNESS = _env_with_legacy(
     "PATCHBAY_DEFAULT_HARNESS", "STARGATE_DEFAULT_HARNESS", "cc-cli"
 )

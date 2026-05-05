@@ -114,6 +114,7 @@ from patchbay.harness import (  # noqa: E402
     CAPABILITIES_BY_NAME,
     ClaudeCliHarness,
     ClaudeSdkHarness,
+    ClaudeSdkMopHarness,
     ToolUse,  # noqa: F401 — re-exported for tests
     TurnError,
     TurnFinal,
@@ -137,9 +138,11 @@ from patchbay.text_split import (  # noqa: E402
     split_paired_for_telegram,
 )
 from patchbay.models import (  # noqa: E402
+    DEFAULT_MODEL,
     VALID_MODELS,
     extract_model_prefix,
     get_chat_model,
+    resolve_model,
     set_chat_model,
 )
 from patchbay.efforts import (  # noqa: E402
@@ -554,7 +557,7 @@ def run_claude(
 
     # Resolve model / effort the same way the legacy path did.
     if not model:
-        model = get_chat_model(session_key)
+        model = resolve_model(session_key)
     effort = resolve_effort(session_key)
 
     # Resolve harness: per-chat override > DEFAULT_HARNESS env. Both
@@ -614,6 +617,18 @@ def run_claude(
         # route through `harness.cancel()` via _cancel_session_async
         # instead. `state.proc` stays None for the duration of this turn.
         harness = ClaudeSdkHarness(
+            cli_path=CLAUDE_PATH,
+            max_timeout_seconds=MAX_TIMEOUT,
+            on_progress=_on_progress,
+            max_turns_default=(
+                max_turns_override if max_turns_override is not None else MAX_TURNS
+            ),
+        )
+    elif effective_harness == "cc-sdk-mop":
+        # cc-sdk-mop wraps cc-sdk and runs MOP output filtering at TurnFinal.
+        # Audit mode for MVP: violations are logged but messages pass through.
+        # Set MOP_LLM_BACKEND env to "haiku" or "gemma4" to enable LLM rules.
+        harness = ClaudeSdkMopHarness(
             cli_path=CLAUDE_PATH,
             max_timeout_seconds=MAX_TIMEOUT,
             on_progress=_on_progress,
@@ -1754,7 +1769,7 @@ async def cmd_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         choice = args[0].lower()
         if choice == "default":
             set_chat_model(key, None)
-            await update.message.reply_text("Model reset to default (opus).")
+            await update.message.reply_text(f"Model reset to default ({DEFAULT_MODEL}).")
             logger.info("Model cleared for %s", key)
             return
         if choice not in VALID_MODELS:
@@ -1766,7 +1781,7 @@ async def cmd_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     # No args: show buttons
-    current = get_chat_model(key) or "default (opus)"
+    current = get_chat_model(key) or f"default ({DEFAULT_MODEL})"
     buttons = [
         [
             InlineKeyboardButton("opus", callback_data="model:opus"),
@@ -1793,7 +1808,7 @@ async def callback_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     choice = query.data.split(":", 1)[1]
     if choice == "__default__":
         set_chat_model(key, None)
-        await query.edit_message_text("Model reset to default (opus).")
+        await query.edit_message_text(f"Model reset to default ({DEFAULT_MODEL}).")
         logger.info("Model cleared for %s", key)
         return
     if choice not in VALID_MODELS:
