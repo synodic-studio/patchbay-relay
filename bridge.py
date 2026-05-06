@@ -647,29 +647,6 @@ def run_claude(
             on_progress=_on_progress,
             proc_setter=_proc_setter,
         )
-    elif effective_harness == "aider":
-        # Aider — model-agnostic coding CLI. session_id is a chat-history
-        # file path (we own ./aider-history/<session-key>.md). Default
-        # model openrouter/deepseek/deepseek-chat (override via
-        # PATCHBAY_AIDER_MODEL env (or legacy STARGATE_AIDER_MODEL) or per-chat /model).
-        from patchbay.harness import AiderHarness
-
-        harness = AiderHarness(
-            max_timeout_seconds=MAX_TIMEOUT,
-            on_progress=_on_progress,
-            proc_setter=_proc_setter,
-        )
-    elif effective_harness == "opencode":
-        # sst/opencode — JSON event protocol via `opencode run --format json`.
-        # Default model `openrouter/deepseek/deepseek-chat-v3.1` (override via
-        # PATCHBAY_OPENCODE_MODEL env (or legacy STARGATE_OPENCODE_MODEL) or per-chat /model).
-        from patchbay.harness import OpenCodeHarness
-
-        harness = OpenCodeHarness(
-            max_timeout_seconds=MAX_TIMEOUT,
-            on_progress=_on_progress,
-            proc_setter=_proc_setter,
-        )
     else:
         harness = ClaudeCliHarness(
             claude_path=CLAUDE_PATH,
@@ -1657,7 +1634,12 @@ async def cmd_clearnew(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     thread_id = update.message.message_thread_id
     key = _session_key(chat_id, thread_id)
     clear_session(key)
-    await update.message.reply_text("Fresh session started.")
+    harness = get_chat_harness(key) or DEFAULT_HARNESS
+    model = get_chat_model(key) or DEFAULT_MODEL
+    effort = get_chat_effort(key) or DEFAULT_EFFORT
+    await update.message.reply_text(
+        f"Fresh session started.\nHarness: {harness}\nModel: {model}\nEffort: {effort}"
+    )
     logger.info("Session cleared for %s", key)
 
 
@@ -1914,11 +1896,9 @@ async def cmd_harness(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         logger.info("Harness set to %s for %s", choice, key)
         return
 
-    current = get_chat_harness(key) or f"default ({DEFAULT_HARNESS})"
+    current = get_chat_harness(key) or DEFAULT_HARNESS
     await update.message.reply_text(
-        f"Current harness: {current}\n"
-        f"Valid choices: {', '.join(VALID_HARNESSES)}, default\n"
-        f"Use /harness <name> to switch."
+        f"Harness: {current}\nValid: {', '.join(VALID_HARNESSES)}, default"
     )
 
 
@@ -1944,6 +1924,7 @@ async def cmd_kill(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     harness_name = getattr(state.harness, "name", "cc-cli")
 
     await _cancel_session_async(state)
+    await _release_processing(state)
     await update.message.reply_text(
         "Killed active Claude process. Session preserved — next message resumes."
     )
@@ -2453,12 +2434,6 @@ def _resolve_harness_for_inquiry(session_key: str):
     elif harness_name == "pi":
         from patchbay.harness import PiHarness
         harness = PiHarness(max_timeout_seconds=MAX_TIMEOUT)
-    elif harness_name == "aider":
-        from patchbay.harness import AiderHarness
-        harness = AiderHarness(max_timeout_seconds=MAX_TIMEOUT)
-    elif harness_name == "opencode":
-        from patchbay.harness import OpenCodeHarness
-        harness = OpenCodeHarness(max_timeout_seconds=MAX_TIMEOUT)
     else:
         return None
 
@@ -2490,9 +2465,8 @@ def _fmt_tokens(n: int) -> str:
 async def cmd_context(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show current context-window usage for this chat's session.
 
-    cc-sdk only today (cc-cli/pi/aider/opencode advertise
-    supports_context_query=False). For unsupported harnesses, suggest
-    /harness cc-sdk.
+    cc-sdk only today (cc-cli/pi advertise supports_context_query=False).
+    For unsupported harnesses, suggest /harness cc-sdk.
     """
     chat_id = update.effective_chat.id
     thread_id = update.message.message_thread_id
@@ -2931,6 +2905,7 @@ async def post_init(app: Application) -> None:
         BotCommand("clearnew", "Start a fresh conversation"),
         BotCommand("setproject", "Set project dir (relative to ~/Developer)"),
         BotCommand("project", "Show current project dir"),
+        BotCommand("harness", "Set agent backend (cc-cli/cc-sdk/cc-sdk-mop/pi)"),
         BotCommand("model", "Set model (opus/sonnet/haiku)"),
         BotCommand("effort", "Set effort level (low/medium/high/xhigh/max)"),
         BotCommand("remote_control", "Start/stop claude remote-control in project dir"),

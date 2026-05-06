@@ -387,6 +387,21 @@ class ClaudeSdkHarness:
                 retryable=False,
                 metadata={"subtype": subtype, "errors": msg.errors},
             )
+        # subtype="success" is authoritative — deliver even if is_error is set.
+        # The SDK sometimes sets is_error=True on success results (tool error
+        # recovery, MOP stop-hook, etc.); subtype is the reliable indicator.
+        if subtype == "success":
+            if msg.is_error:
+                logger.warning(
+                    "ResultMessage subtype=success but is_error=True errors=%s — delivering as TurnFinal",
+                    msg.errors,
+                )
+            return TurnFinal(
+                session_id=msg.session_id,
+                num_turns=msg.num_turns,
+                total_cost_usd=msg.total_cost_usd,
+                raw_text=full_text or "(no parseable response)",
+            )
         if msg.is_error:
             return TurnError(
                 kind="unknown",
