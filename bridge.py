@@ -2496,6 +2496,11 @@ def _resolve_harness_for_inquiry(session_key: str):
         harness = ClaudeSdkHarness(
             cli_path=CLAUDE_PATH, max_timeout_seconds=MAX_TIMEOUT
         )
+    elif harness_name == "cc-sdk-mop":
+        from patchbay.harness import ClaudeSdkMopHarness
+        harness = ClaudeSdkMopHarness(
+            cli_path=CLAUDE_PATH, max_timeout_seconds=MAX_TIMEOUT
+        )
     elif harness_name == "cc-cli":
         harness = ClaudeCliHarness(
             claude_path=CLAUDE_PATH, max_timeout_seconds=MAX_TIMEOUT
