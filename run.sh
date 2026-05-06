@@ -54,12 +54,20 @@ _shutdown() {
 }
 trap '_shutdown' TERM INT
 
-# Load MOP API key from pass for pydantic-ai rewrite backend.
-# Only attempted if pass is available; MOP falls back to original text if absent.
-if command -v pass &>/dev/null && [[ -z "$ANTHROPIC_API_KEY" ]]; then
+# Load MOP API key from pass for pydantic-ai rewrite/eval backend.
+# DO NOT export as ANTHROPIC_API_KEY — that env var is inherited by every
+# claude subprocess the cc-sdk/cc-sdk-mop harness spawns, which bills the
+# coding turns against this API key instead of the user's Max plan
+# (~$15 burned in one session before this was caught). Export under a
+# scoped name; claude_sdk_mop is responsible for plumbing the key into
+# pydantic-ai for eval/rewrite calls only.
+if command -v pass &>/dev/null && [[ -z "$MOP_ANTHROPIC_API_KEY" ]]; then
     _mop_key="$(pass show mop-anthropic-api-key 2>/dev/null || true)"
-    [[ -n "$_mop_key" ]] && export ANTHROPIC_API_KEY="$_mop_key"
+    [[ -n "$_mop_key" ]] && export MOP_ANTHROPIC_API_KEY="$_mop_key"
 fi
+# Belt-and-suspenders: scrub ANTHROPIC_API_KEY from env if it leaked in
+# from a parent process (shell, launchd plist, etc.).
+unset ANTHROPIC_API_KEY
 
 while true; do
     # Pre-flight validation — if validate.py fails, try rolling back to known-good
