@@ -48,15 +48,15 @@ class TestCmdActivity:
         _write(
             isolated_activity_log,
             [
-                {"event": "claude_invoke", "session_key": "k1"},
-                {"event": "claude_complete", "session_key": "k1", "turns_used": 3},
+                {"event": "turn_invoke", "session_key": "k1"},
+                {"event": "turn_complete", "session_key": "k1", "turns_used": 3},
             ],
         )
         update = _make_update("/activity")
         await bridge.cmd_activity(update, MagicMock())
         reply = update.message.reply_text.call_args[0][0]
-        assert "claude_invoke" in reply
-        assert "claude_complete" in reply
+        assert "turn_invoke" in reply
+        assert "turn_complete" in reply
         assert "turns_used=3" in reply
 
     @pytest.mark.asyncio

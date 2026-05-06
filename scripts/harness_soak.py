@@ -90,7 +90,7 @@ def bucket_by_harness(events: list[dict[str, Any]]) -> dict[str, dict[str, Any]]
         event = ev.get("event")
         sk = ev.get("session_key", "")
         harness = ev.get("harness")
-        if event == "claude_invoke":
+        if event in ("turn_invoke", "claude_invoke"):
             harness = ev.get("harness") or "unknown"
             last_invoke_harness[sk] = harness
             buckets[harness]["invokes"] += 1
@@ -100,7 +100,7 @@ def bucket_by_harness(events: list[dict[str, Any]]) -> dict[str, dict[str, Any]]
             harness = last_invoke_harness.get(sk, "legacy")
 
         b = buckets[harness]
-        if event == "claude_complete":
+        if event in ("turn_complete", "claude_complete"):
             b["completes"] += 1
             d = ev.get("duration")
             if isinstance(d, (int, float)):
@@ -110,9 +110,9 @@ def bucket_by_harness(events: list[dict[str, Any]]) -> dict[str, dict[str, Any]]
                 b["response_lens"].append(rl)
                 if rl == 0:
                     b["empty_response"] += 1
-        elif event == "claude_error":
+        elif event in ("turn_error", "claude_error"):
             b["errors"] += 1
-        elif event == "claude_timeout":
+        elif event in ("turn_timeout", "claude_timeout"):
             b["timeouts"] += 1
         elif event == "process_kill":
             reason = ev.get("reason", "")

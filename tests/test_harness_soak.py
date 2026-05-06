@@ -88,9 +88,9 @@ def test_load_events_filters_by_session(soak_module, tmp_path):
 
 def test_bucket_counts_invokes_per_harness(soak_module):
     events = [
-        {"event": "claude_invoke", "session_key": "s1", "harness": "cc-cli"},
-        {"event": "claude_invoke", "session_key": "s2", "harness": "cc-sdk"},
-        {"event": "claude_invoke", "session_key": "s2", "harness": "cc-sdk"},
+        {"event": "turn_invoke", "session_key": "s1", "harness": "cc-cli"},
+        {"event": "turn_invoke", "session_key": "s2", "harness": "cc-sdk"},
+        {"event": "turn_invoke", "session_key": "s2", "harness": "cc-sdk"},
     ]
     b = soak_module.bucket_by_harness(events)
     assert b["cc-cli"]["invokes"] == 1
@@ -100,9 +100,9 @@ def test_bucket_counts_invokes_per_harness(soak_module):
 def test_bucket_attaches_followups_to_invoke_harness(soak_module):
     """A complete event without harness inherits the invoke's harness."""
     events = [
-        {"event": "claude_invoke", "session_key": "s1", "harness": "cc-sdk"},
+        {"event": "turn_invoke", "session_key": "s1", "harness": "cc-sdk"},
         {
-            "event": "claude_complete",
+            "event": "turn_complete",
             "session_key": "s1",
             "duration": 30.0,
             "response_len": 100,
@@ -116,9 +116,9 @@ def test_bucket_attaches_followups_to_invoke_harness(soak_module):
 def test_bucket_uses_explicit_harness_when_present(soak_module):
     """If event already has harness, that wins over inheritance."""
     events = [
-        {"event": "claude_invoke", "session_key": "s1", "harness": "cc-cli"},
+        {"event": "turn_invoke", "session_key": "s1", "harness": "cc-cli"},
         {
-            "event": "claude_complete",
+            "event": "turn_complete",
             "session_key": "s1",
             "duration": 5.0,
             "response_len": 50,
@@ -132,9 +132,9 @@ def test_bucket_uses_explicit_harness_when_present(soak_module):
 
 def test_bucket_classifies_outcomes(soak_module):
     events = [
-        {"event": "claude_invoke", "session_key": "s", "harness": "cc-sdk"},
-        {"event": "claude_error", "session_key": "s", "harness": "cc-sdk"},
-        {"event": "claude_timeout", "session_key": "s", "harness": "cc-sdk"},
+        {"event": "turn_invoke", "session_key": "s", "harness": "cc-sdk"},
+        {"event": "turn_error", "session_key": "s", "harness": "cc-sdk"},
+        {"event": "turn_timeout", "session_key": "s", "harness": "cc-sdk"},
         {
             "event": "process_kill",
             "session_key": "s",
@@ -173,16 +173,16 @@ def test_bucket_classifies_outcomes(soak_module):
 
 def test_bucket_counts_empty_responses(soak_module):
     events = [
-        {"event": "claude_invoke", "session_key": "s", "harness": "cc-cli"},
+        {"event": "turn_invoke", "session_key": "s", "harness": "cc-cli"},
         {
-            "event": "claude_complete",
+            "event": "turn_complete",
             "session_key": "s",
             "duration": 1.0,
             "response_len": 0,
         },
-        {"event": "claude_invoke", "session_key": "s", "harness": "cc-cli"},
+        {"event": "turn_invoke", "session_key": "s", "harness": "cc-cli"},
         {
-            "event": "claude_complete",
+            "event": "turn_complete",
             "session_key": "s",
             "duration": 2.0,
             "response_len": 500,
@@ -214,9 +214,9 @@ def test_render_table_handles_empty(soak_module):
 
 def test_render_table_basic(soak_module):
     events = [
-        {"event": "claude_invoke", "session_key": "s", "harness": "cc-sdk"},
+        {"event": "turn_invoke", "session_key": "s", "harness": "cc-sdk"},
         {
-            "event": "claude_complete",
+            "event": "turn_complete",
             "session_key": "s",
             "duration": 10.0,
             "response_len": 100,
@@ -234,7 +234,7 @@ def test_main_emits_json(soak_module, tmp_path, capsys, monkeypatch):
         [
             {
                 "ts": time.time(),
-                "event": "claude_invoke",
+                "event": "turn_invoke",
                 "session_key": "s",
                 "harness": "cc-sdk",
             }
@@ -257,7 +257,7 @@ def test_main_table(soak_module, tmp_path, capsys, monkeypatch):
         [
             {
                 "ts": time.time(),
-                "event": "claude_invoke",
+                "event": "turn_invoke",
                 "session_key": "s",
                 "harness": "cc-sdk",
             }
@@ -269,6 +269,31 @@ def test_main_table(soak_module, tmp_path, capsys, monkeypatch):
     out = capsys.readouterr().out
     assert "Harness soak" in out
     assert "cc-sdk" in out
+
+
+def test_bucket_reads_legacy_claude_event_names(soak_module):
+    """Historical activity.jsonl uses claude_invoke/claude_complete/claude_error/
+    claude_timeout. The current writer emits turn_*; soak must still parse the
+    legacy names so old data isn't dropped."""
+    events = [
+        {"event": "claude_invoke", "session_key": "s", "harness": "cc-cli"},
+        {
+            "event": "claude_complete",
+            "session_key": "s",
+            "duration": 10.0,
+            "response_len": 100,
+            "harness": "cc-cli",
+        },
+        {"event": "claude_invoke", "session_key": "s2", "harness": "cc-sdk"},
+        {"event": "claude_error", "session_key": "s2", "harness": "cc-sdk"},
+        {"event": "claude_timeout", "session_key": "s2", "harness": "cc-sdk"},
+    ]
+    b = soak_module.bucket_by_harness(events)
+    assert b["cc-cli"]["invokes"] == 1
+    assert b["cc-cli"]["completes"] == 1
+    assert b["cc-sdk"]["invokes"] == 1
+    assert b["cc-sdk"]["errors"] == 1
+    assert b["cc-sdk"]["timeouts"] == 1
 
 
 def test_main_hides_noise_by_default(soak_module, tmp_path, capsys, monkeypatch):
@@ -284,7 +309,7 @@ def test_main_hides_noise_by_default(soak_module, tmp_path, capsys, monkeypatch)
             },
             {
                 "ts": time.time(),
-                "event": "claude_invoke",
+                "event": "turn_invoke",
                 "session_key": "s",
                 "harness": "cc-sdk",
             },

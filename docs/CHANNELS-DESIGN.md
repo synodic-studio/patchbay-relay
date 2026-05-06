@@ -125,11 +125,11 @@ restarts). `/kill` again with no in-flight turn closes the channel.
 
 ### Activity logging
 
-Existing entries (`claude_invoke`, `claude_complete`, etc.) keep their
+Existing entries (`turn_invoke`, `turn_complete`, etc.) keep their
 shape. We add:
 - `channel_open` — when a long-lived client opens
 - `channel_push` — when a new message lands on an existing channel
-  (instead of `claude_invoke`)
+  (instead of `turn_invoke`)
 - `channel_close` — when a channel closes (idle timeout, /clearnew,
   shutdown)
 

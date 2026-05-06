@@ -588,7 +588,7 @@ def run_claude(
     )
     invoke_start = time.time()
     _log_activity(
-        "claude_invoke",
+        "turn_invoke",
         session_key=session_key,
         cwd=chat_cwd,
         model=model or "default",
@@ -678,13 +678,13 @@ def run_claude(
         # /kill cancels the in-flight task; CancelledError unwinds out of
         # asyncio.run() in _drive_harness_sync. Log a terminal activity event
         # so /soak and the activity log see the kill — without this branch
-        # the turn shows only `claude_invoke` + `process_kill` and looks
+        # the turn shows only `turn_invoke` + `process_kill` and looks
         # indistinguishable from a wedge. cmd_kill already replied to the
         # user and cleared state.processing; we re-raise so the orchestrator
         # skips its own send.
         duration = time.time() - invoke_start
         _log_activity(
-            "claude_cancelled",
+            "turn_cancelled",
             session_key=session_key,
             duration=duration,
             elapsed_ms=int(duration * 1000),
@@ -709,7 +709,7 @@ def run_claude(
     if isinstance(final, TurnError):
         if final.kind == "timeout":
             _log_activity(
-                "claude_timeout",
+                "turn_timeout",
                 session_key=session_key,
                 duration=duration,
                 elapsed_ms=int(duration * 1000),
@@ -783,7 +783,7 @@ def run_claude(
                 save_session_id(session_key, sess_id)
             num_turns = final.metadata.get("num_turns")
             _log_activity(
-                "claude_complete",
+                "turn_complete",
                 session_key=session_key,
                 duration=duration,
                 elapsed_ms=int(duration * 1000),
@@ -805,7 +805,7 @@ def run_claude(
                 stderr[:300],
             )
         _log_activity(
-            "claude_error",
+            "turn_error",
             session_key=session_key,
             duration=duration,
             elapsed_ms=int(duration * 1000),
@@ -820,7 +820,7 @@ def run_claude(
             save_session_id(session_key, final.session_id)
             logger.info("Saved session %s for %s", final.session_id[:12], session_key)
         _log_activity(
-            "claude_complete",
+            "turn_complete",
             session_key=session_key,
             duration=duration,
             elapsed_ms=int(duration * 1000),
@@ -853,7 +853,7 @@ def run_claude(
 
     # Defensive: harness didn't terminate properly. Treat as no output.
     _log_activity(
-        "claude_error",
+        "turn_error",
         session_key=session_key,
         duration=duration,
         elapsed_ms=int(duration * 1000),
@@ -2360,7 +2360,7 @@ async def cmd_activity(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
       /activity <event> <count>  - last <count> matching entries (cap 25)
 
     Useful events to grep for:
-      self_heal, claude_timeout, claude_error, claude_cancelled, markdown_send_failed,
+      self_heal, turn_timeout, turn_error, turn_cancelled, markdown_send_failed,
       markdown_conversion_failed, message_dropped, process_kill, quota_hit
     """
 

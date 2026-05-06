@@ -155,9 +155,9 @@ class TestHarnessActivityField:
         ):
             bridge.run_claude(MESSAGE, SESSION_KEY)
 
-        # Both claude_invoke and claude_complete carry the harness field.
-        invoke = next(e for e in events if e["event"] == "claude_invoke")
-        complete = next(e for e in events if e["event"] == "claude_complete")
+        # Both turn_invoke and turn_complete carry the harness field.
+        invoke = next(e for e in events if e["event"] == "turn_invoke")
+        complete = next(e for e in events if e["event"] == "turn_complete")
         assert invoke["harness"] == "cc-cli"
         assert invoke["harness_requested"] == bridge.DEFAULT_HARNESS
         assert complete["harness"] == "cc-cli"
@@ -210,8 +210,8 @@ class TestHarnessActivityField:
         assert "on_progress" in instantiated["kwargs"]
         assert result == "hello from sdk"
 
-        invoke = next(e for e in events if e["event"] == "claude_invoke")
-        complete = next(e for e in events if e["event"] == "claude_complete")
+        invoke = next(e for e in events if e["event"] == "turn_invoke")
+        complete = next(e for e in events if e["event"] == "turn_complete")
         assert invoke["harness"] == "cc-sdk"
         assert invoke["harness_requested"] == "cc-sdk"
         assert complete["harness"] == "cc-sdk"

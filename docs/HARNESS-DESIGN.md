@@ -91,11 +91,12 @@ Code CLI, Claude Agent SDK, codex/pi, cursor, …) behind one interface.
   `harness_requested=cc-sdk` but executed under `harness=cc-cli`. This
   is intentional — phase 3 needs proper /kill integration before
   cc-sdk is safe to dispatch.
-- Every activity entry that touches a turn (`claude_invoke`,
-  `claude_complete`, `claude_error`, `claude_timeout`, `quota_hit`)
-  carries `harness=<effective>`. `claude_invoke` additionally carries
-  `harness_requested=<requested>` for behavioural diffing during the
-  phase-3 soak.
+- Every activity entry that touches a turn (`turn_invoke`,
+  `turn_complete`, `turn_error`, `turn_timeout`, `turn_cancelled`,
+  `quota_hit`) carries `harness=<effective>`. `turn_invoke` additionally
+  carries `harness_requested=<requested>` for behavioural diffing during
+  the phase-3 soak. (Pre-rename history used `claude_*`; `harness_soak.py`
+  reads both.)
 
 ## What's left
 
