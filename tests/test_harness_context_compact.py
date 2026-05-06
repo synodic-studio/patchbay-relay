@@ -68,7 +68,7 @@ def test_compact_result_succeeded_minimal():
 
 def test_only_cc_sdk_supports_context_query_today():
     assert CAPABILITIES_BY_NAME["cc-sdk"].supports_context_query is True
-    for name in ("cc-cli", "pi", "aider", "opencode"):
+    for name in ("cc-cli", "pi"):
         assert CAPABILITIES_BY_NAME[name].supports_context_query is False, (
             f"{name} should not advertise supports_context_query yet"
         )
@@ -76,7 +76,7 @@ def test_only_cc_sdk_supports_context_query_today():
 
 def test_only_cc_sdk_supports_compact_today():
     assert CAPABILITIES_BY_NAME["cc-sdk"].supports_compact is True
-    for name in ("cc-cli", "pi", "aider", "opencode"):
+    for name in ("cc-cli", "pi"):
         assert CAPABILITIES_BY_NAME[name].supports_compact is False
 
 

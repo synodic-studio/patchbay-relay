@@ -60,6 +60,25 @@ class TestExtract:
         # back to a single blank-line gap.
         assert "\n\n\n" not in cleaned
 
+    def test_sentinel_inside_inline_code_is_ignored(self):
+        text = "Use `[[send-file: /abs/path.png]]` in your response."
+        cleaned, requests = extract_file_sentinels(text)
+        assert requests == []
+        assert "`[[send-file: /abs/path.png]]`" in cleaned
+
+    def test_sentinel_inside_fenced_block_is_ignored(self):
+        text = "Example:\n```\n[[send-file: /abs/path.png]]\n```\nDone."
+        cleaned, requests = extract_file_sentinels(text)
+        assert requests == []
+        assert "[[send-file: /abs/path.png]]" in cleaned
+
+    def test_real_sentinel_alongside_code_example(self):
+        text = "Use `[[send-file: /example]]` like this:\n[[send-file: /real/file.png]]"
+        cleaned, requests = extract_file_sentinels(text)
+        assert len(requests) == 1
+        assert str(requests[0].path) == "/real/file.png"
+        assert "`[[send-file: /example]]`" in cleaned
+
 
 # ---------------------------------------------------------------------------
 # send_files

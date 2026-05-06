@@ -54,6 +54,13 @@ _shutdown() {
 }
 trap '_shutdown' TERM INT
 
+# Load MOP API key from pass for pydantic-ai rewrite backend.
+# Only attempted if pass is available; MOP falls back to original text if absent.
+if command -v pass &>/dev/null && [[ -z "$ANTHROPIC_API_KEY" ]]; then
+    _mop_key="$(pass show mop-anthropic-api-key 2>/dev/null || true)"
+    [[ -n "$_mop_key" ]] && export ANTHROPIC_API_KEY="$_mop_key"
+fi
+
 while true; do
     # Pre-flight validation — if validate.py fails, try rolling back to known-good
     if ! "$UV_BIN" run --project "$SCRIPT_DIR" python "$SCRIPT_DIR/validate.py"; then

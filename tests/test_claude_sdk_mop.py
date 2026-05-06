@@ -135,41 +135,34 @@ async def test_turn_error_passes_through_without_mop(monkeypatch):
 @pytest.mark.asyncio
 async def test_violation_logged_to_jsonl(tmp_path, monkeypatch):
     """Audit mode: on a violation, entry is appended to MOP_LOG_PATH."""
-    import threading as _threading
     import patchbay.harness.claude_sdk_mop as _mop_mod
+    from mop import Action, Verdict
 
     monkeypatch.setenv("MOP_MODE", "audit")
     log_file = str(tmp_path / "violations.jsonl")
-    final = TurnFinal(session_id=None, num_turns=1, total_cost_usd=None, raw_text="Want me to fix it?")
-    harness = _make_harness([final], llm_backend="haiku")
     monkeypatch.setenv("MOP_LOG_PATH", log_file)
-    monkeypatch.setenv("MOP_LLM_BACKEND", "haiku")
-    harness._llm_backend = "haiku"
-    harness._rules = [{
-        "name": "no-permission-asking-for-doable-work",
-        "detector": "llm",
-        "on_violation": "warn",
-        "severity": "warn",
-        "parameters": {"prompt": "Does this message ask permission?"},
-    }]
 
-    monkeypatch.setattr(_mop_mod, "_claude_p_eval", lambda rule_name, query: True)
+    final = TurnFinal(session_id=None, num_turns=1, total_cost_usd=None, raw_text="Want me to fix it?")
+    harness = _make_harness([final])
 
-    class _SyncThread:
-        def __init__(self, target, args=(), daemon=False, **_):
-            self._target, self._args = target, args
-        def start(self):
-            self._target(*self._args)
+    async def _stub_evaluate(text, config=None):
+        return Verdict(action=Action.REJECT, rule="no-permission-asking-for-doable-work")
 
-    monkeypatch.setattr(_threading, "Thread", _SyncThread)
+    monkeypatch.setattr(_mop_mod, "evaluate",_stub_evaluate)
 
     events = await _collect(harness, _req())
+    assert isinstance(events[-1], TurnFinal)
+
+    # Daemon thread runs evaluate in its own event loop — wait for it.
+    import time
+    deadline = time.time() + 2.0
+    while not Path(log_file).exists() and time.time() < deadline:
+        await asyncio.sleep(0.05)
 
     assert Path(log_file).exists()
     line = json.loads(Path(log_file).read_text().strip())
     assert line["rule"] == "no-permission-asking-for-doable-work"
     assert "Want me to fix it?" in line["text_preview"]
-    assert isinstance(events[-1], TurnFinal)
 
 
 @pytest.mark.asyncio
@@ -189,17 +182,16 @@ async def test_no_violation_no_log(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_enforce_empty_message_retries(monkeypatch):
-    """Enforce mode: empty raw_text triggers reject + retry."""
+async def test_enforce_empty_message_retries(monkeypatch, tmp_path):
+    """Enforce mode: empty raw_text triggers reject + retry (built-in empty check in mop.filter)."""
     monkeypatch.setenv("MOP_MODE", "enforce")
     monkeypatch.setenv("MOP_MAX_RETRIES", "2")
+    monkeypatch.setenv("MOP_RULES_DIR", str(tmp_path))  # empty dir — no yaml rules
 
     empty_final = TurnFinal(session_id="s1", num_turns=1, total_cost_usd=None, raw_text="")
     good_final = TurnFinal(session_id="s1", num_turns=2, total_cost_usd=None, raw_text="Here you go.")
 
     harness = _make_harness_multi([[empty_final], [good_final]])
-    harness._rules = []  # no rules, only structural check
-
     events = await _collect(harness, _req())
 
     assert len(events) == 1
@@ -208,22 +200,20 @@ async def test_enforce_empty_message_retries(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_enforce_empty_message_max_retries_delivers_last(monkeypatch):
+async def test_enforce_empty_message_max_retries_delivers_last(monkeypatch, tmp_path):
     """Enforce mode: max retries exhausted on empty → deliver last turn anyway."""
     monkeypatch.setenv("MOP_MODE", "enforce")
     monkeypatch.setenv("MOP_MAX_RETRIES", "2")
+    monkeypatch.setenv("MOP_RULES_DIR", str(tmp_path))
 
     empty1 = TurnFinal(session_id="s1", num_turns=1, total_cost_usd=None, raw_text="")
     empty2 = TurnFinal(session_id="s1", num_turns=2, total_cost_usd=None, raw_text="   ")
 
     harness = _make_harness_multi([[empty1], [empty2]])
-    harness._rules = []
-
     events = await _collect(harness, _req())
 
     assert len(events) == 1
     assert isinstance(events[0], TurnFinal)
-    # Delivered the last attempt's TurnFinal despite violation
     assert events[0].raw_text == "   "
 
 
@@ -237,28 +227,22 @@ async def test_enforce_reject_retries_and_delivers_clean(monkeypatch):
     monkeypatch.setenv("MOP_MODE", "enforce")
     monkeypatch.setenv("MOP_MAX_RETRIES", "3")
     import patchbay.harness.claude_sdk_mop as _mop_mod
+    from mop import Action, Verdict
 
     bad_final = TurnFinal(session_id="s1", num_turns=1, total_cost_usd=None, raw_text="Want me to fix that?")
     good_final = TurnFinal(session_id="s1", num_turns=2, total_cost_usd=None, raw_text="Fixed it.")
-
     harness = _make_harness_multi([[bad_final], [good_final]])
-    harness._rules = [{
-        "name": "no-permission-asking-for-doable-work",
-        "detector": "llm",
-        "on_violation": "reject",
-        "severity": "violation",
-        "guidance": "Don't ask permission — just do the work.",
-        "parameters": {"prompt": "Does this ask permission?"},
-    }]
 
     call_count = {"n": 0}
-    def _eval_stub(rule_name, query):
+
+    async def _stub_evaluate(text, config=None):
         call_count["n"] += 1
-        return call_count["n"] == 1  # first call fires, second doesn't
+        if call_count["n"] == 1:
+            return Verdict(action=Action.REJECT, rule="no-permission-asking-for-doable-work",
+                           guidance="Don't ask permission.")
+        return Verdict(action=Action.ACCEPT)
 
-    monkeypatch.setattr(_mop_mod, "_claude_p_eval", _eval_stub)
-    harness._llm_backend = "haiku"
-
+    monkeypatch.setattr(_mop_mod, "evaluate",_stub_evaluate)
     events = await _collect(harness, _req())
 
     assert len(events) == 1
@@ -273,31 +257,22 @@ async def test_enforce_reject_logs_violation(tmp_path, monkeypatch):
     monkeypatch.setenv("MOP_MAX_RETRIES", "2")
     log_file = str(tmp_path / "v.jsonl")
     monkeypatch.setenv("MOP_LOG_PATH", log_file)
-
     import patchbay.harness.claude_sdk_mop as _mop_mod
+    from mop import Action, Verdict
 
     bad_final = TurnFinal(session_id="s1", num_turns=1, total_cost_usd=None, raw_text="Want me to help?")
     good_final = TurnFinal(session_id="s1", num_turns=2, total_cost_usd=None, raw_text="Done.")
-
     harness = _make_harness_multi([[bad_final], [good_final]])
-    harness._rules = [{
-        "name": "no-permission-asking",
-        "detector": "llm",
-        "on_violation": "reject",
-        "severity": "violation",
-        "guidance": "Just do it.",
-        "parameters": {"prompt": "Does it ask permission?"},
-    }]
-    monkeypatch.setattr(_mop_mod, "_claude_p_eval", lambda *_: True)
-    harness._llm_backend = "haiku"
 
-    # Patch second eval to return False so it cleans up
     call_count = {"n": 0}
-    def _staged_eval(*_):
-        call_count["n"] += 1
-        return call_count["n"] == 1
-    monkeypatch.setattr(_mop_mod, "_claude_p_eval", _staged_eval)
 
+    async def _staged_evaluate(text, config=None):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return Verdict(action=Action.REJECT, rule="no-permission-asking")
+        return Verdict(action=Action.ACCEPT)
+
+    monkeypatch.setattr(_mop_mod, "evaluate",_staged_evaluate)
     await _collect(harness, _req())
 
     assert Path(log_file).exists()
@@ -314,20 +289,20 @@ async def test_enforce_edit_rewrites_output(monkeypatch):
     """Enforce mode: Edit verdict rewrites raw_text before delivery."""
     monkeypatch.setenv("MOP_MODE", "enforce")
     import patchbay.harness.claude_sdk_mop as _mop_mod
+    import patchbay.harness.claude_sdk_mop as _mop_mod
+    from mop import Action, Verdict
 
     long_final = TurnFinal(session_id=None, num_turns=1, total_cost_usd=None, raw_text="A " * 300)
-
     harness = _make_harness([long_final])
-    harness._rules = [{
-        "name": "length-cap-chat",
-        "detector": "deterministic",
-        "on_violation": "edit",
-        "severity": "warn",
-        "guidance": "Shorten to under 200 words.",
-        "parameters": {"type": "word_count", "max": 200},
-    }]
 
-    monkeypatch.setattr(_mop_mod, "_claude_p_rewrite", lambda _prompt: "Short reply.")
+    async def _stub_evaluate(text, config=None):
+        return Verdict(action=Action.EDIT, rule="length-cap-chat", guidance="Shorten to under 200 words.")
+
+    async def _stub_rewrite(text, rule_name, guidance):
+        return "Short reply."
+
+    monkeypatch.setattr(_mop_mod, "evaluate",_stub_evaluate)
+    monkeypatch.setattr(_mop_mod, "mop_rewrite",_stub_rewrite)
 
     events = await _collect(harness, _req())
 
@@ -338,27 +313,30 @@ async def test_enforce_edit_rewrites_output(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_enforce_edit_fallback_on_rewrite_failure(monkeypatch):
-    """Enforce mode: Edit verdict falls back to original if rewrite fails."""
+    """Enforce mode: Edit verdict falls back to original if rewrite returns original."""
     monkeypatch.setenv("MOP_MODE", "enforce")
     import patchbay.harness.claude_sdk_mop as _mop_mod
+    import patchbay.harness.claude_sdk_mop as _mop_mod
+    from mop import Action, Verdict
 
-    long_final = TurnFinal(session_id=None, num_turns=1, total_cost_usd=None, raw_text="word " * 250)
-
+    original_text = "word " * 250
+    long_final = TurnFinal(session_id=None, num_turns=1, total_cost_usd=None, raw_text=original_text)
     harness = _make_harness([long_final])
-    harness._rules = [{
-        "name": "length-cap-chat",
-        "detector": "deterministic",
-        "on_violation": "edit",
-        "severity": "warn",
-        "parameters": {"type": "word_count", "max": 200},
-    }]
-    monkeypatch.setattr(_mop_mod, "_claude_p_rewrite", lambda _prompt: "")  # rewrite fails
+
+    async def _stub_evaluate(text, config=None):
+        return Verdict(action=Action.EDIT, rule="length-cap-chat", guidance="Shorten.")
+
+    async def _stub_rewrite(text, rule_name, guidance):
+        return text  # rewrite returns original (failure fallback)
+
+    monkeypatch.setattr(_mop_mod, "evaluate",_stub_evaluate)
+    monkeypatch.setattr(_mop_mod, "mop_rewrite",_stub_rewrite)
 
     events = await _collect(harness, _req())
 
     assert len(events) == 1
     assert isinstance(events[0], TurnFinal)
-    assert events[0].raw_text == "word " * 250  # original
+    assert events[0].raw_text == original_text
 
 
 # ---------------------------------------------------------------------------

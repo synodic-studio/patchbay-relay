@@ -11,8 +11,8 @@ them from the user-visible text, and uploads each file via Telegram's
 sendPhoto (image/* MIME) or sendDocument (everything else).
 
 Why a text sentinel: it works for every harness (cc-cli, cc-sdk, pi,
-aider, opencode) because every harness can produce text. No tool-call
-plumbing required.
+every harness (cc-cli, cc-sdk, pi) because every harness can produce text.
+No tool-call plumbing required.
 """
 
 from __future__ import annotations
@@ -37,6 +37,10 @@ _SENTINEL_RE = re.compile(
     r"\[\[send-file:\s*(?P<path>[^|\]]+?)(?:\s*\|\s*(?P<caption>[^\]]+))?\s*\]\]"
 )
 
+# Matches inline code spans (backtick-delimited) and fenced code blocks.
+# Sentinels inside these are examples/documentation, not real file requests.
+_CODE_RE = re.compile(r"```[\s\S]*?```|`[^`]+`")
+
 
 @dataclass(frozen=True)
 class FileRequest:
@@ -50,10 +54,20 @@ def extract_file_sentinels(text: str) -> tuple[str, list[FileRequest]]:
     """Pull `[[send-file: …]]` sentinels out of text.
 
     Returns (cleaned_text, requests). The cleaned text has every
-    sentinel removed. Trailing whitespace from sentinel-only lines is
-    collapsed so we don't ship blank-line clutter to the user.
+    sentinel removed. Sentinels inside backtick code spans or fenced
+    blocks are ignored — they're examples, not real file requests.
     """
     requests: list[FileRequest] = []
+
+    # Hide code spans so sentinels inside them are never matched.
+    _slots: list[str] = []
+
+    def _hide(m: re.Match[str]) -> str:
+        slot = f"\x00SLOT{len(_slots)}\x00"
+        _slots.append(m.group())
+        return slot
+
+    protected = _CODE_RE.sub(_hide, text)
 
     def _grab(match: re.Match[str]) -> str:
         raw_path = match.group("path").strip()
@@ -62,7 +76,12 @@ def extract_file_sentinels(text: str) -> tuple[str, list[FileRequest]]:
         requests.append(FileRequest(path=Path(raw_path), caption=caption))
         return ""
 
-    cleaned = _SENTINEL_RE.sub(_grab, text)
+    cleaned = _SENTINEL_RE.sub(_grab, protected)
+
+    # Restore code spans.
+    for i, original in enumerate(_slots):
+        cleaned = cleaned.replace(f"\x00SLOT{i}\x00", original)
+
     # Collapse runs of blank lines created by stripping line-only sentinels.
     cleaned = re.sub(r"\n[ \t]*\n[ \t]*\n+", "\n\n", cleaned).strip()
     return cleaned, requests

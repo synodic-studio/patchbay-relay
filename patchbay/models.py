@@ -7,6 +7,7 @@ from .config import BASE_DIR
 
 CHAT_MODELS_FILE = BASE_DIR / "chat_models.json"
 VALID_MODELS = {"opus", "sonnet", "haiku"}
+DEFAULT_MODEL = "sonnet"
 
 # Prefix pattern: message starts with !opus, !sonnet, !haiku (or !o, !s, !h)
 # followed by whitespace and the actual message.
@@ -44,6 +45,11 @@ def set_chat_model(session_key: str, model: str | None) -> None:
     else:
         models[session_key] = model
     _save_chat_models(models)
+
+
+def resolve_model(session_key: str) -> str:
+    """Resolve the model to use: per-chat override, else DEFAULT_MODEL."""
+    return get_chat_model(session_key) or DEFAULT_MODEL
 
 
 def extract_model_prefix(message: str) -> tuple[str | None, str]:

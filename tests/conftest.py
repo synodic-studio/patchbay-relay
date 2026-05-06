@@ -37,11 +37,6 @@ _PRODUCTION_PATH_GROUPS = [
         ],
     ),
     (
-        "aider_history_dir",
-        "dir",
-        [("patchbay.config", "AIDER_HISTORY_DIR")],
-    ),
-    (
         "photo_dir",
         "dir",
         [

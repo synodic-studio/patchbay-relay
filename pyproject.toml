@@ -6,6 +6,7 @@ requires-python = ">=3.13"
 dependencies = [
     "claude-agent-sdk>=0.1.68",
     "httpx>=0.28.1",
+    "model-output-protocol @ file:///Users/bryancostanza/Developer/model-output-protocol",
     "python-dotenv>=1.2.1",
     "python-telegram-bot>=22.6",
     "telegramify-markdown>=0.5.4",

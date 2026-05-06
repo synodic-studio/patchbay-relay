@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.synodic.tcc-watcher</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Library/Frameworks/Python.framework/Versions/3.14/bin/python3</string>
+        <string>/Users/bryancostanza/Developer/patchbay-relay/scripts/tcc_watcher.py</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/Users/bryancostanza/Developer/patchbay-relay/logs/tcc-watcher.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/bryancostanza/Developer/patchbay-relay/logs/tcc-watcher.err</string>
+    <key>WorkingDirectory</key>
+    <string>/Users/bryancostanza/Developer/patchbay-relay</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/bryancostanza/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>/Users/bryancostanza</string>
+        <key>PASSWORD_STORE_DIR</key>
+        <string>/Users/bryancostanza/.password-store</string>
+    </dict>
+</dict>
+</plist>
