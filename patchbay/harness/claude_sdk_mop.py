@@ -67,6 +67,10 @@ _CAPABILITIES = HarnessCapabilities(
     supports_interrupt=True,
     supports_effort=True,
     supports_mcp=True,
+    # False: MOP buffers all TextDelta until TurnFinal before evaluating.
+    # Channels stream partial output — incompatible. Intended fix: audit-only
+    # in channel mode (no blocking), then streaming deterministic eval.
+    # See model-output-protocol/docs/architecture.md §Channels compatibility.
     supports_inflight_push=False,
     supports_context_query=True,
     supports_compact=True,
