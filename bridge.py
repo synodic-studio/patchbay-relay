@@ -674,6 +674,23 @@ def run_claude(
 
     try:
         events = _drive_harness_sync(harness, req, state)
+    except (asyncio.CancelledError, KeyboardInterrupt):
+        # /kill cancels the in-flight task; CancelledError unwinds out of
+        # asyncio.run() in _drive_harness_sync. Log a terminal activity event
+        # so /soak and the activity log see the kill — without this branch
+        # the turn shows only `claude_invoke` + `process_kill` and looks
+        # indistinguishable from a wedge. cmd_kill already replied to the
+        # user and cleared state.processing; we re-raise so the orchestrator
+        # skips its own send.
+        duration = time.time() - invoke_start
+        _log_activity(
+            "claude_cancelled",
+            session_key=session_key,
+            duration=duration,
+            elapsed_ms=int(duration * 1000),
+            harness=effective_harness,
+        )
+        raise
     finally:
         st = _sessions.get(session_key)
         if st is not None:
@@ -2343,7 +2360,7 @@ async def cmd_activity(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
       /activity <event> <count>  - last <count> matching entries (cap 25)
 
     Useful events to grep for:
-      self_heal, claude_timeout, claude_error, markdown_send_failed,
+      self_heal, claude_timeout, claude_error, claude_cancelled, markdown_send_failed,
       markdown_conversion_failed, message_dropped, process_kill, quota_hit
     """
 
