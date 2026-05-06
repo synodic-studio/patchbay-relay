@@ -252,8 +252,28 @@ def _iter_active_sessions() -> list[tuple[str, "SessionState"]]:
     ]
 
 
+async def _interrupt_session_async(state: "SessionState") -> None:
+    """Soft interrupt — SIGINT for cc-cli, task-cancel for cc-sdk.
+
+    cc-cli gets a chance to finish cleanly; cc-sdk behaves the same as
+    _cancel_session_async since the SDK doesn't expose a gentler signal.
+    """
+    import signal as _signal
+
+    proc = state.proc
+    if proc is not None:
+        try:
+            proc.send_signal(_signal.SIGINT)
+        except OSError:
+            pass
+        return
+
+    # cc-sdk: no finer-grained interrupt available — fall through to cancel.
+    await _cancel_session_async(state)
+
+
 async def _cancel_session_async(state: "SessionState") -> None:
-    """Best-effort cancel of the in-flight turn for a session.
+    """Hard cancel — SIGKILL for cc-cli, task-cancel for cc-sdk.
 
     Backend-agnostic dispatch:
       * cc-cli — `state.proc` is set; SIGKILL via `proc.kill()`. Sync,
@@ -1919,11 +1939,43 @@ async def cmd_harness(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     )
 
 
-async def cmd_kill(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Kill the active Claude process / cancel the active turn for this chat/topic.
+async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Soft interrupt — SIGINT for cc-cli, task-cancel for cc-sdk.
 
-    Backend-agnostic via `_cancel_session_async`: cc-cli SIGKILLs the
-    subprocess, cc-sdk task-cancels the harness across the worker loop.
+    Gives Claude a chance to finish cleanly. Use /kill if this doesn't work.
+    """
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    thread_id = update.message.message_thread_id
+    key = _session_key(chat_id, thread_id)
+
+    state = _sessions.get(key)
+    if state is None or (state.proc is None and state.harness is None):
+        await update.message.reply_text("No active Claude process in this chat.")
+        return
+
+    proc = state.proc
+    pid = proc.pid if proc is not None else -1
+    harness_name = getattr(state.harness, "name", "cc-cli")
+
+    await _interrupt_session_async(state)
+    await _release_processing(state)
+    await update.message.reply_text(
+        "Interrupted. Session preserved — next message resumes."
+    )
+    logger.info(
+        "User %d cancelled Claude turn for %s (harness=%s, pid=%d)",
+        user_id, key, harness_name, pid,
+    )
+    _log_activity("process_cancel", session_key=key, pid=pid, user_id=user_id,
+                  reason="manual", harness=harness_name)
+
+
+async def cmd_kill(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Hard kill — SIGKILL for cc-cli, task-cancel for cc-sdk.
+
+    Backend-agnostic via `_cancel_session_async`. Use /cancel first for a
+    graceful interrupt; /kill when that doesn't work.
     """
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
@@ -2926,7 +2978,8 @@ async def post_init(app: Application) -> None:
         BotCommand("model", "Set model (opus/sonnet/haiku)"),
         BotCommand("effort", "Set effort level (low/medium/high/xhigh/max)"),
         BotCommand("remote_control", "Start/stop claude remote-control in project dir"),
-        BotCommand("kill", "Kill active Claude process"),
+        BotCommand("cancel", "Soft interrupt (SIGINT) — try before /kill"),
+        BotCommand("kill", "Hard kill (SIGKILL) active Claude process"),
         BotCommand("restart", "Restart the bridge"),
         BotCommand("ping", "Check if bridge is alive"),
         BotCommand("usage", "Show Claude Code quota (tokens + block time)"),
@@ -3080,6 +3133,7 @@ def main() -> None:
     app.add_handler(CommandHandler("setproject", cmd_setproject))
     app.add_handler(CallbackQueryHandler(callback_setproject, pattern=r"^setproject:"))
     app.add_handler(CommandHandler("project", cmd_project))
+    app.add_handler(CommandHandler("cancel", cmd_cancel))
     app.add_handler(CommandHandler("kill", cmd_kill))
     app.add_handler(CommandHandler("model", cmd_model))
     app.add_handler(CallbackQueryHandler(callback_model, pattern=r"^model:"))
