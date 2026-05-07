@@ -212,6 +212,10 @@ class SessionState:
     queue: list[QueuedMessage] = field(default_factory=list)  # debounced messages awaiting processing
     processing: bool = False  # True while a claude run is in flight for this key
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    # cc-sdk-mop v2: holds the MOP instance for the lifetime of the SDK
+    # client so its in-process MCP tools and Stop-hook closure stay valid.
+    # Cleared after the turn completes.
+    mop: object | None = None
 
 
 _sessions: dict[str, SessionState] = {}
@@ -630,6 +634,89 @@ def run_claude(
         st = _sessions.get(session_key)
         if st is not None:
             st.proc = proc
+
+    # ----- cc-sdk-mop v2 dispatch (in-process MCP + Stop hook) -----
+    # The v2 path bypasses the legacy ClaudeSdkMopHarness.run_turn flow
+    # (which evaluates after-the-fact) and instead wires MOP into the SDK
+    # client itself: model output goes through `mcp__mop__submit_message`,
+    # which calls bot.send_message directly. Because MOP delivers the
+    # response itself, run_claude returns "" and the orchestrator's
+    # _send_response is a no-op (extract_file_sentinels short-circuits on
+    # empty). The MOP instance must outlive the SDK client so its Stop
+    # hook closure stays valid — pinned via state.mop and cleared in the
+    # finally block.
+    if effective_harness == "cc-sdk-mop":
+        from claude_agent_sdk import (
+            AssistantMessage,
+            ClaudeSDKClient,
+            ResultMessage,
+            SystemMessage,
+            TextBlock,
+        )
+        from patchbay.harness.claude_sdk_mop import ClaudeSdkMopHarness
+
+        # Parse session_key → chat_id, thread_id for build_options.
+        if "_" in session_key:
+            chat_id_str, thread_id_str = session_key.split("_", 1)
+            chat_id = int(chat_id_str)
+            thread_id = int(thread_id_str)
+        else:
+            chat_id = int(session_key)
+            thread_id = None
+
+        rules_dir_env = os.environ.get("MOP_RULES_DIR")
+        rules_dir = Path(rules_dir_env) if rules_dir_env else None
+
+        harness_v2 = ClaudeSdkMopHarness()
+        options, mop = harness_v2.build_options(
+            bot=_bot_instance,
+            chat_id=chat_id,
+            thread_id=thread_id,
+            rules_dir=rules_dir,
+        )
+        # Pin mop to session state so the GC doesn't reap its Stop-hook
+        # closure mid-turn.
+        state.mop = mop
+
+        captured_session_id: str | None = None
+
+        async def _drive_v2() -> None:
+            nonlocal captured_session_id
+            async with ClaudeSDKClient(options=options) as client:
+                await client.query(message)
+                async for msg in client.receive_response():
+                    _on_progress()
+                    if isinstance(msg, SystemMessage):
+                        sid = msg.data.get("session_id") if isinstance(msg.data, dict) else None
+                        if sid:
+                            captured_session_id = sid
+                    elif isinstance(msg, ResultMessage):
+                        sid = getattr(msg, "session_id", None)
+                        if sid:
+                            captured_session_id = sid
+                        return
+
+        try:
+            asyncio.run(_drive_v2())
+        finally:
+            state.mop = None
+
+        duration = time.time() - invoke_start
+        if captured_session_id:
+            save_session_id(session_key, captured_session_id)
+        _log_activity(
+            "turn_complete",
+            session_key=session_key,
+            duration=duration,
+            elapsed_ms=int(duration * 1000),
+            turns_used=None,
+            exit_code=0,
+            response_len=0,
+            harness=effective_harness,
+        )
+        # MOP delivered via Telegram itself — empty string suppresses the
+        # orchestrator's redundant _send_response.
+        return ""
 
     if effective_harness == "cc-sdk":
         # cc-sdk owns its subprocess internally — there's no Popen handle

@@ -13,7 +13,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -229,3 +229,109 @@ def test_cc_sdk_mop_capabilities():
     assert caps.supports_resume is True
     assert caps.supports_interrupt is True
     assert caps.supports_inflight_push is False
+
+
+# ---------------------------------------------------------------------------
+# T13: run_claude routes cc-sdk-mop through v2 build_options
+# ---------------------------------------------------------------------------
+
+def test_run_claude_cc_sdk_mop_v2_uses_build_options(monkeypatch, tmp_path):
+    """run_claude with effective_harness=cc-sdk-mop calls harness.build_options
+    and instantiates ClaudeSDKClient with the returned options. The MOP
+    instance is held on SessionState.mop so its Stop hook closure stays alive
+    for the lifetime of the SDK client.
+    """
+    import bridge
+
+    # Force the cc-sdk-mop dispatch.
+    monkeypatch.setattr(bridge, "get_chat_harness", lambda key: "cc-sdk-mop")
+    monkeypatch.setattr(bridge, "get_chat_working_dir", lambda key: str(tmp_path))
+    monkeypatch.setattr(bridge, "get_chat_agent", lambda key: None)
+    monkeypatch.setattr(bridge, "get_session_id", lambda key: None)
+    monkeypatch.setattr(bridge, "save_session_id", lambda key, sid: None)
+    monkeypatch.setattr(bridge, "_load_chat_projects", lambda: {})
+
+    fake_bot = MagicMock()
+    fake_bot.send_message = AsyncMock()
+    monkeypatch.setattr(bridge, "_bot_instance", fake_bot)
+
+    # Capture build_options call args + return synthetic options/mop.
+    sentinel_options = MagicMock(name="ClaudeAgentOptions")
+    sentinel_mop = MagicMock(name="MOP")
+    build_options_calls = []
+
+    def fake_build_options(self, *, bot, chat_id, thread_id, rules_dir):
+        build_options_calls.append(
+            {"bot": bot, "chat_id": chat_id, "thread_id": thread_id, "rules_dir": rules_dir}
+        )
+        return sentinel_options, sentinel_mop
+
+    from patchbay.harness import claude_sdk_mop as mop_mod
+
+    monkeypatch.setattr(
+        mop_mod.ClaudeSdkMopHarness, "build_options", fake_build_options, raising=True
+    )
+
+    # Fake ClaudeSDKClient — async context manager that records the options
+    # it was constructed with and immediately drains. Captures state.mop
+    # while the SDK client is alive (before run_claude's finally clears it).
+    construct_calls = []
+    mop_during_session: list = []
+
+    class FakeResultMessage:
+        session_id = "sid-123"
+        num_turns = 1
+        total_cost_usd = None
+        result = ""
+
+    class FakeClient:
+        def __init__(self, options):
+            construct_calls.append(options)
+            self.options = options
+
+        async def __aenter__(self):
+            # Snapshot mop pin while the SDK session is open.
+            st = bridge._sessions.get("12345_67")
+            mop_during_session.append(st.mop if st else None)
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def query(self, prompt):
+            self.last_prompt = prompt
+
+        async def receive_response(self):
+            yield FakeResultMessage()
+
+    # Patch the symbol that build_options'd code path imports. We import lazily
+    # in the bridge dispatch, so patch it on claude_agent_sdk where the bridge
+    # imports it from.
+    import claude_agent_sdk
+
+    monkeypatch.setattr(claude_agent_sdk, "ClaudeSDKClient", FakeClient)
+
+    # session_key 12345_67 → chat_id=12345, thread_id=67
+    response = bridge.run_claude("hello", "12345_67")
+
+    # build_options received the bot, parsed chat/thread ids.
+    assert len(build_options_calls) == 1
+    call = build_options_calls[0]
+    assert call["bot"] is fake_bot
+    assert call["chat_id"] == 12345
+    assert call["thread_id"] == 67
+
+    # ClaudeSDKClient was constructed with the v2 options.
+    assert len(construct_calls) == 1
+    assert construct_calls[0] is sentinel_options
+
+    # MOP instance pinned to session state for the lifetime of the SDK
+    # client so its Stop-hook closure stays alive. Cleared after the turn.
+    assert mop_during_session == [sentinel_mop]
+    state = bridge._sessions.get("12345_67")
+    assert state is not None
+    assert state.mop is None  # cleared in finally
+
+    # MOP delivers via Telegram itself; run_claude returns "" so the
+    # orchestrator's _send_response is a no-op (empty-string short-circuit).
+    assert response == ""
