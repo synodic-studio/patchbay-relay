@@ -1,9 +1,16 @@
 """Telegram delivery closure for MOP v2.
 
-build_telegram_deliver(bot, chat_id, thread_id) returns a Deliver-shaped
-async callable: `(text, system_note) -> None`. The closure body is the
-actual `bot.send_message` call. MOP calls this from `_apply` on
-accept/rewrite, and from `_failed_open` with a non-None system_note.
+build_telegram_deliver(bot, chat_id, thread_id, main_loop) returns a
+Deliver-shaped async callable: `(text, system_note) -> None`. The
+closure schedules `bot.send_message` on the bridge's main asyncio loop
+via `run_coroutine_threadsafe`, because the v2 dispatch invokes this
+deliver from inside `asyncio.run(_drive_v2())` running in a thread-pool
+worker. Calling `bot.send_message` directly on the temporary loop binds
+httpx connections to a loop that closes when the SDK turn ends — that
+poisons the bot for any subsequent main-loop request (handle_photo,
+the next /command, etc.) with `RuntimeError: Event loop is closed`.
+Routing through `main_loop` keeps every Telegram I/O on the loop where
+the bot's httpx client was created.
 
 When system_note is set, we send TWO Telegram messages: the user message
 unchanged, then a separate bubble with a clear marker prefix so the user
@@ -12,22 +19,31 @@ sees the rule-bypass warning as its own thing.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Awaitable, Callable
 
 
 def build_telegram_deliver(
-    *, bot: Any, chat_id: int, thread_id: int | None
+    *,
+    bot: Any,
+    chat_id: int,
+    thread_id: int | None,
+    main_loop: asyncio.AbstractEventLoop,
 ) -> Callable[[str, str | None], Awaitable[None]]:
     base_kwargs: dict[str, Any] = {"chat_id": chat_id}
     if thread_id is not None:
         base_kwargs["message_thread_id"] = thread_id
 
     async def deliver(text: str, system_note: str | None = None) -> None:
-        await bot.send_message(text=text, **base_kwargs)
+        fut = asyncio.run_coroutine_threadsafe(
+            bot.send_message(text=text, **base_kwargs), main_loop
+        )
+        await asyncio.wrap_future(fut)
         if system_note:
-            await bot.send_message(
-                text=f"⚠️ {system_note}",
-                **base_kwargs,
+            fut2 = asyncio.run_coroutine_threadsafe(
+                bot.send_message(text=f"⚠️ {system_note}", **base_kwargs),
+                main_loop,
             )
+            await asyncio.wrap_future(fut2)
 
     return deliver

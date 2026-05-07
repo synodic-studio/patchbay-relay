@@ -1,5 +1,12 @@
-"""Telegram delivery closure for MOP v2."""
+"""Telegram delivery closure for MOP v2.
 
+The deliver closure schedules sends on the bridge's main asyncio loop
+via `run_coroutine_threadsafe`. In-process tests run with a single loop
+(pytest-asyncio creates one), so passing `asyncio.get_event_loop()`
+makes the cross-loop call resolve immediately on the same loop.
+"""
+
+import asyncio
 from unittest.mock import AsyncMock
 
 import pytest
@@ -10,7 +17,9 @@ from patchbay.mop_deliver import build_telegram_deliver
 @pytest.mark.asyncio
 async def test_deliver_text_calls_send_message():
     bot = AsyncMock()
-    deliver = build_telegram_deliver(bot=bot, chat_id=42, thread_id=None)
+    deliver = build_telegram_deliver(
+        bot=bot, chat_id=42, thread_id=None, main_loop=asyncio.get_event_loop()
+    )
     await deliver("hello", None)
     bot.send_message.assert_called_once()
     kwargs = bot.send_message.call_args.kwargs
@@ -21,7 +30,9 @@ async def test_deliver_text_calls_send_message():
 @pytest.mark.asyncio
 async def test_deliver_with_thread_id_passes_message_thread_id():
     bot = AsyncMock()
-    deliver = build_telegram_deliver(bot=bot, chat_id=42, thread_id=7)
+    deliver = build_telegram_deliver(
+        bot=bot, chat_id=42, thread_id=7, main_loop=asyncio.get_event_loop()
+    )
     await deliver("hello", None)
     kwargs = bot.send_message.call_args.kwargs
     assert kwargs["message_thread_id"] == 7
@@ -30,7 +41,9 @@ async def test_deliver_with_thread_id_passes_message_thread_id():
 @pytest.mark.asyncio
 async def test_deliver_system_note_sends_second_message_with_marker():
     bot = AsyncMock()
-    deliver = build_telegram_deliver(bot=bot, chat_id=42, thread_id=None)
+    deliver = build_telegram_deliver(
+        bot=bot, chat_id=42, thread_id=None, main_loop=asyncio.get_event_loop()
+    )
     await deliver("user message", "MOP failed-open after 4 attempts")
     assert bot.send_message.call_count == 2
     first_kwargs = bot.send_message.call_args_list[0].kwargs

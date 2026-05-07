@@ -263,6 +263,7 @@ class ClaudeSdkMopHarness:
         bot,
         chat_id: int,
         thread_id: int | None,
+        main_loop,
         rules_dir: Path | None = None,
     ) -> tuple[ClaudeAgentOptions, MOP]:
         """Construct ClaudeAgentOptions wired with the in-process MOP.
@@ -270,10 +271,18 @@ class ClaudeSdkMopHarness:
         Returns (options, mop_instance). The caller (run_claude) keeps the
         mop_instance alive for the duration of the SDK client's session
         so the Stop hook callback can read its state.
+
+        `main_loop` is the bridge's primary asyncio loop (where the bot's
+        httpx client was created). Required because run_claude wraps this
+        in `asyncio.run(...)` from a thread-pool worker — calling
+        `bot.send_message` directly on that throwaway loop poisons the
+        bot's connection pool. See `mop_deliver.py` for the rationale.
         """
         rules = load_rules(rules_dir) if rules_dir else []
 
-        deliver = build_telegram_deliver(bot=bot, chat_id=chat_id, thread_id=thread_id)
+        deliver = build_telegram_deliver(
+            bot=bot, chat_id=chat_id, thread_id=thread_id, main_loop=main_loop
+        )
         evaluator = build_haiku_evaluator(rules=rules)
 
         mop = MOP(rules=rules, evaluator=evaluator, deliver=deliver)

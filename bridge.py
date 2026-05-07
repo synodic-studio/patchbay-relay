@@ -411,6 +411,12 @@ _shutting_down = False
 # Bot instance (set in post_init)
 _bot_instance = None
 
+# Bridge's primary asyncio loop, captured in post_init. Used by the
+# cc-sdk-mop v2 deliver closure to schedule `bot.send_message` on the
+# loop where the bot's httpx client was created — calling it from inside
+# the v2 dispatch's temporary `asyncio.run(...)` loop poisons the bot.
+_main_loop: asyncio.AbstractEventLoop | None = None
+
 # Captured once at import time — used by /health to report process uptime.
 _BRIDGE_STARTED_AT = time.time()
 
@@ -667,11 +673,18 @@ def run_claude(
         rules_dir_env = os.environ.get("MOP_RULES_DIR")
         rules_dir = Path(rules_dir_env) if rules_dir_env else None
 
+        if _main_loop is None:
+            raise RuntimeError(
+                "cc-sdk-mop v2 dispatch invoked before post_init captured "
+                "the bridge's main loop — bot would be poisoned. Bug."
+            )
+
         harness_v2 = ClaudeSdkMopHarness()
         options, mop = harness_v2.build_options(
             bot=_bot_instance,
             chat_id=chat_id,
             thread_id=thread_id,
+            main_loop=_main_loop,
             rules_dir=rules_dir,
         )
         # Pin mop to session state so the GC doesn't reap its Stop-hook
@@ -3035,8 +3048,9 @@ async def _stall_detector() -> None:
 
 async def post_init(app: Application) -> None:
     """Register bot commands and replay any messages lost during previous crash."""
-    global _bot_instance
+    global _bot_instance, _main_loop
     _bot_instance = app.bot
+    _main_loop = asyncio.get_running_loop()
 
     from telegram import (
         BotCommand,

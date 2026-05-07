@@ -203,6 +203,7 @@ async def test_v2_harness_constructs_mcp_and_registers_stop_hook(monkeypatch):
         bot=MagicMock(),
         chat_id=42,
         thread_id=None,
+        main_loop=asyncio.get_event_loop(),
         rules_dir=None,
     )
     assert isinstance(mop_instance, MOP)
@@ -255,14 +256,24 @@ def test_run_claude_cc_sdk_mop_v2_uses_build_options(monkeypatch, tmp_path):
     fake_bot.send_message = AsyncMock()
     monkeypatch.setattr(bridge, "_bot_instance", fake_bot)
 
+    # Provide a sentinel main_loop so the v2 dispatch's None-guard passes.
+    fake_loop = MagicMock(name="main_loop")
+    monkeypatch.setattr(bridge, "_main_loop", fake_loop)
+
     # Capture build_options call args + return synthetic options/mop.
     sentinel_options = MagicMock(name="ClaudeAgentOptions")
     sentinel_mop = MagicMock(name="MOP")
     build_options_calls = []
 
-    def fake_build_options(self, *, bot, chat_id, thread_id, rules_dir):
+    def fake_build_options(self, *, bot, chat_id, thread_id, main_loop, rules_dir):
         build_options_calls.append(
-            {"bot": bot, "chat_id": chat_id, "thread_id": thread_id, "rules_dir": rules_dir}
+            {
+                "bot": bot,
+                "chat_id": chat_id,
+                "thread_id": thread_id,
+                "main_loop": main_loop,
+                "rules_dir": rules_dir,
+            }
         )
         return sentinel_options, sentinel_mop
 
@@ -320,6 +331,7 @@ def test_run_claude_cc_sdk_mop_v2_uses_build_options(monkeypatch, tmp_path):
     assert call["bot"] is fake_bot
     assert call["chat_id"] == 12345
     assert call["thread_id"] == 67
+    assert call["main_loop"] is fake_loop
 
     # ClaudeSDKClient was constructed with the v2 options.
     assert len(construct_calls) == 1
