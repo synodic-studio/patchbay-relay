@@ -32,10 +32,17 @@ import threading
 from pathlib import Path
 from typing import Literal
 
-from mop import Action, MopConfig, evaluate
+from claude_agent_sdk import ClaudeAgentOptions, HookMatcher
+
+from mop import MOP, Action, MopConfig, build_mcp_server, evaluate, protocol_prompt
 from mop import rewrite as mop_rewrite
+from mop import stop as mop_stop
+from mop.rules import load_rules
+from mop.types import Block
 
 from ..config import CLAUDE_PATH, MAX_TIMEOUT, MAX_TURNS
+from ..mop_deliver import build_telegram_deliver
+from ..mop_evaluator import build_haiku_evaluator
 from .base import (
     CompactResult,
     ContextUsage,
@@ -249,3 +256,50 @@ class ClaudeSdkMopHarness:
 
     async def compact(self, req: TurnRequest, instructions: str | None = None) -> CompactResult:
         return await self._inner.compact(req, instructions=instructions)
+
+    def build_options(
+        self,
+        *,
+        bot,
+        chat_id: int,
+        thread_id: int | None,
+        rules_dir: Path | None = None,
+    ) -> tuple[ClaudeAgentOptions, MOP]:
+        """Construct ClaudeAgentOptions wired with the in-process MOP.
+
+        Returns (options, mop_instance). The caller (run_claude) keeps the
+        mop_instance alive for the duration of the SDK client's session
+        so the Stop hook callback can read its state.
+        """
+        rules = load_rules(rules_dir) if rules_dir else []
+
+        deliver = build_telegram_deliver(bot=bot, chat_id=chat_id, thread_id=thread_id)
+        evaluator = build_haiku_evaluator(rules=rules)
+
+        mop = MOP(rules=rules, evaluator=evaluator, deliver=deliver)
+
+        mcp_server = build_mcp_server(mop)
+
+        async def stop_hook_callback(input_payload, tool_use_id, context):
+            gate = mop_stop(mop)
+            if isinstance(gate, Block):
+                return {
+                    "decision": "block",
+                    "reason": gate.reason,
+                }
+            return {}
+
+        options = ClaudeAgentOptions(
+            mcp_servers={"mop": mcp_server},
+            allowed_tools=[
+                "mcp__mop__submit_message",
+                "mcp__mop__submit_justification",
+                "mcp__mop__get_rules",
+                "mcp__mop__get_status",
+            ],
+            hooks={
+                "Stop": [HookMatcher(hooks=[stop_hook_callback])],
+            },
+            system_prompt=protocol_prompt(rules),
+        )
+        return options, mop
