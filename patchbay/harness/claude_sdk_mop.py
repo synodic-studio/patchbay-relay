@@ -25,13 +25,12 @@ from pathlib import Path
 
 from claude_agent_sdk import ClaudeAgentOptions, HookMatcher
 
-from mop import MOP, build_mcp_server, protocol_prompt
+from mop import MOP, build_haiku_evaluator, build_mcp_server, protocol_prompt
 from mop import stop as mop_stop
 from mop.rules import load_rules
 from mop.types import Block
 
 from ..mop_deliver import build_telegram_deliver
-from ..mop_evaluator import build_haiku_evaluator
 from .base import HarnessCapabilities
 
 _CAPABILITIES = HarnessCapabilities(

@@ -6,7 +6,7 @@ requires-python = ">=3.13"
 dependencies = [
     "claude-agent-sdk>=0.1.68",
     "httpx>=0.28.1",
-    "model-output-protocol @ file:///Users/bryancostanza/Developer/model-output-protocol",
+    "model-output-protocol",
     "python-dotenv>=1.2.1",
     "python-telegram-bot>=22.6",
     "telegramify-markdown>=0.5.4",
@@ -21,6 +21,9 @@ dev = [
     "pytest-mock>=3.15.1",
     "ruff>=0.9",
 ]
+
+[tool.uv.sources]
+model-output-protocol = { path = "/Users/bryancostanza/Developer/model-output-protocol", editable = true }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

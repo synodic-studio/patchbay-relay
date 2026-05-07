@@ -1400,7 +1400,7 @@ wheels = [
 [[package]]
 name = "model-output-protocol"
 version = "0.0.1"
-source = { directory = "/Users/bryancostanza/Developer/model-output-protocol" }
+source = { editable = "/Users/bryancostanza/Developer/model-output-protocol" }
 dependencies = [
     { name = "claude-agent-sdk" },
     { name = "fastapi" },
@@ -1717,7 +1717,7 @@ dev = [
 requires-dist = [
     { name = "claude-agent-sdk", specifier = ">=0.1.68" },
     { name = "httpx", specifier = ">=0.28.1" },
-    { name = "model-output-protocol", directory = "/Users/bryancostanza/Developer/model-output-protocol" },
+    { name = "model-output-protocol", editable = "/Users/bryancostanza/Developer/model-output-protocol" },
     { name = "python-dotenv", specifier = ">=1.2.1" },
     { name = "python-telegram-bot", specifier = ">=22.6" },
     { name = "telegramify-markdown", specifier = ">=0.5.4" },
