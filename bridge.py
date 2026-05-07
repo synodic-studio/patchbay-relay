@@ -114,7 +114,6 @@ from patchbay.harness import (  # noqa: E402
     CAPABILITIES_BY_NAME,
     ClaudeCliHarness,
     ClaudeSdkHarness,
-    ClaudeSdkMopHarness,
     ToolUse,  # noqa: F401 — re-exported for tests
     TurnError,
     TurnFinal,
@@ -737,18 +736,6 @@ def run_claude(
         # route through `harness.cancel()` via _cancel_session_async
         # instead. `state.proc` stays None for the duration of this turn.
         harness = ClaudeSdkHarness(
-            cli_path=CLAUDE_PATH,
-            max_timeout_seconds=MAX_TIMEOUT,
-            on_progress=_on_progress,
-            max_turns_default=(
-                max_turns_override if max_turns_override is not None else MAX_TURNS
-            ),
-        )
-    elif effective_harness == "cc-sdk-mop":
-        # cc-sdk-mop wraps cc-sdk and runs MOP output filtering at TurnFinal.
-        # Audit mode for MVP: violations are logged but messages pass through.
-        # Set MOP_LLM_BACKEND env to "haiku" or "gemma4" to enable LLM rules.
-        harness = ClaudeSdkMopHarness(
             cli_path=CLAUDE_PATH,
             max_timeout_seconds=MAX_TIMEOUT,
             on_progress=_on_progress,
@@ -2594,11 +2581,6 @@ def _resolve_harness_for_inquiry(session_key: str):
 
     if harness_name == "cc-sdk":
         harness = ClaudeSdkHarness(
-            cli_path=CLAUDE_PATH, max_timeout_seconds=MAX_TIMEOUT
-        )
-    elif harness_name == "cc-sdk-mop":
-        from patchbay.harness import ClaudeSdkMopHarness
-        harness = ClaudeSdkMopHarness(
             cli_path=CLAUDE_PATH, max_timeout_seconds=MAX_TIMEOUT
         )
     elif harness_name == "cc-cli":
