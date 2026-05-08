@@ -23,7 +23,7 @@ dev = [
 ]
 
 [tool.uv.sources]
-model-output-protocol = { path = "/Users/bryancostanza/Developer/model-output-protocol", editable = true }
+model-output-protocol = { path = "../model-output-protocol", editable = true }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
