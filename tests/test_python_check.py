@@ -6,7 +6,6 @@ are not covered here; they are exercised manually against live upstream.
 """
 
 import importlib.util
-import json
 from pathlib import Path
 
 import pytest

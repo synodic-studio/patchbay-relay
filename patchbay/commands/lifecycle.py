@@ -7,7 +7,6 @@ or reporting active turns. Heavy use of bridge module attributes via
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import time

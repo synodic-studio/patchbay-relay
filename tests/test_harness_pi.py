@@ -8,7 +8,6 @@ provider or burning credits.
 from __future__ import annotations
 
 import asyncio
-import json
 import stat
 import sys
 import textwrap
