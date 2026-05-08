@@ -686,11 +686,17 @@ def run_claude(
             main_loop=_main_loop,
             rules_dir=rules_dir,
         )
+        # Resume the existing Claude session so each turn keeps history.
+        # build_options returns a generic ClaudeAgentOptions; the per-turn
+        # session_id is the bridge's responsibility to wire in.
+        if session_id:
+            options.resume = session_id
         # Pin mop to session state so the GC doesn't reap its Stop-hook
         # closure mid-turn.
         state.mop = mop
 
         captured_session_id: str | None = None
+        plain_text_fragments: list[str] = []
 
         async def _drive_v2() -> None:
             nonlocal captured_session_id
@@ -702,6 +708,12 @@ def run_claude(
                         sid = msg.data.get("session_id") if isinstance(msg.data, dict) else None
                         if sid:
                             captured_session_id = sid
+                    elif isinstance(msg, AssistantMessage):
+                        for block in getattr(msg, "content", []) or []:
+                            if isinstance(block, TextBlock):
+                                txt = getattr(block, "text", None)
+                                if txt:
+                                    plain_text_fragments.append(txt)
                     elif isinstance(msg, ResultMessage):
                         sid = getattr(msg, "session_id", None)
                         if sid:
@@ -716,6 +728,27 @@ def run_claude(
         duration = time.time() - invoke_start
         if captured_session_id:
             save_session_id(session_key, captured_session_id)
+
+        # Safety net: if MOP delivered nothing this turn (model didn't call
+        # submit_message and the Stop hook didn't compel it), fall back to
+        # the model's plain TextBlock output so the user never gets silence.
+        # The deliver closure carries `delivery_count`, incremented each time
+        # MOP successfully sent something to Telegram; checked here AFTER
+        # the SDK loop returns. Any positive count means user received
+        # something through MOP and we should NOT also send the plain text.
+        deliver_closure = getattr(mop, "_patchbay_deliver", None)
+        raw_count = getattr(deliver_closure, "delivery_count", 0) if deliver_closure else 0
+        delivery_count = raw_count if isinstance(raw_count, int) else 0
+        delivered = delivery_count > 0
+        fallback_text = ""
+        if not delivered and plain_text_fragments:
+            fallback_text = "\n\n".join(s.strip() for s in plain_text_fragments if s.strip())
+            if fallback_text:
+                logger.warning(
+                    "cc-sdk-mop fallback: MOP did not deliver but model produced %d chars of plain text — sending as regular reply",
+                    len(fallback_text),
+                )
+
         _log_activity(
             "turn_complete",
             session_key=session_key,
@@ -723,12 +756,15 @@ def run_claude(
             elapsed_ms=int(duration * 1000),
             turns_used=None,
             exit_code=0,
-            response_len=0,
+            response_len=len(fallback_text),
             harness=effective_harness,
+            mop_delivery_count=delivery_count,
+            fallback=bool(fallback_text),
         )
         # MOP delivered via Telegram itself — empty string suppresses the
-        # orchestrator's redundant _send_response.
-        return ""
+        # orchestrator's redundant _send_response. If MOP delivered nothing
+        # we return the plain text so _send_response sends it.
+        return fallback_text
 
     if effective_harness == "cc-sdk":
         # cc-sdk owns its subprocess internally — there's no Popen handle

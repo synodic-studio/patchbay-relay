@@ -160,3 +160,72 @@ def test_run_claude_cc_sdk_mop_v2_uses_build_options(monkeypatch, tmp_path):
     assert state.mop is None  # cleared in finally
 
     assert response == ""
+
+
+def test_run_claude_cc_sdk_mop_v2_sets_resume_when_session_exists(monkeypatch, tmp_path):
+    """Regression: when get_session_id returns a session UUID, run_claude must
+    set options.resume on the ClaudeAgentOptions produced by build_options.
+    Without this, every cc-sdk-mop turn starts a fresh Claude session and the
+    model sees no prior history (silent amnesia).
+    """
+    import bridge
+
+    monkeypatch.setattr(bridge, "get_chat_harness", lambda key: "cc-sdk-mop")
+    monkeypatch.setattr(bridge, "get_chat_working_dir", lambda key: str(tmp_path))
+    monkeypatch.setattr(bridge, "get_chat_agent", lambda key: None)
+    monkeypatch.setattr(bridge, "get_session_id", lambda key: "resume-uuid-xyz")
+    monkeypatch.setattr(bridge, "save_session_id", lambda key, sid: None)
+    monkeypatch.setattr(bridge, "_load_chat_projects", lambda: {})
+
+    fake_bot = MagicMock()
+    fake_bot.send_message = AsyncMock()
+    monkeypatch.setattr(bridge, "_bot_instance", fake_bot)
+    monkeypatch.setattr(bridge, "_main_loop", MagicMock(name="main_loop"))
+
+    # Real-shaped options object so we can assert .resume mutation.
+    from claude_agent_sdk import ClaudeAgentOptions
+    real_options = ClaudeAgentOptions()
+    sentinel_mop = MagicMock(name="MOP")
+
+    def fake_build_options(self, *, bot, chat_id, thread_id, main_loop, rules_dir):
+        return real_options, sentinel_mop
+
+    from patchbay.harness import claude_sdk_mop as mop_mod
+    monkeypatch.setattr(
+        mop_mod.ClaudeSdkMopHarness, "build_options", fake_build_options, raising=True
+    )
+
+    seen_resume_at_construct: list = []
+
+    class FakeResultMessage:
+        session_id = "new-sid"
+        num_turns = 1
+        total_cost_usd = None
+        result = ""
+
+    class FakeClient:
+        def __init__(self, options):
+            seen_resume_at_construct.append(options.resume)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def query(self, prompt):
+            pass
+
+        async def receive_response(self):
+            yield FakeResultMessage()
+
+    import claude_agent_sdk
+    monkeypatch.setattr(claude_agent_sdk, "ClaudeSDKClient", FakeClient)
+
+    bridge.run_claude("hello", "12345_67")
+
+    assert seen_resume_at_construct == ["resume-uuid-xyz"], (
+        "options.resume must be set to the session id BEFORE ClaudeSDKClient is "
+        "constructed; otherwise the SDK opens a new session and the model has "
+        "no prior history."
+    )
