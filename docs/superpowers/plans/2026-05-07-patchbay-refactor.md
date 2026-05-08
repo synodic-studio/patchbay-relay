@@ -779,3 +779,22 @@ Send any short prompt. Expected: response comes back through the same MOP path, 
 - **Type consistency:** `running_processes` is the same dict-like registry across runtime + every command module. `BRIDGE_STARTED_AT` is renamed once (Task 3) and stays public from then on. `register_handlers(app: Application)` has the same signature everywhere it's referenced.
 - **Parallelizability:** Tasks 1, 2, 3 touch disjoint files (pyproject.toml + new test; root test files + new tests/ files; new patchbay/runtime.py + bridge.py imports). They can run as three concurrent subagents. Tasks 4–7 must run sequentially after Task 3 because each modifies `patchbay/commands/__init__.py` and `bridge.py`.
 - **Stop hook investigation:** Out of scope for this plan. The diagnostic logging is already in place (Task 0 commits it); the next failure surfaces actionable detail in `activity.jsonl`. There's nothing to actively investigate until that recurs.
+
+---
+
+## Coordination note (added 2026-05-08 ~04:45 UTC)
+
+Two sessions worked on patchbay-relay tonight in parallel — author of this plan (commit `49c5164`/`fea941f`) and a sibling Telegram session.
+
+**Done in the sibling session, not yet reflected here:**
+
+- `MOP_RULES_DIR` set in `.env` and documented in `.env.example` (was missing entirely).
+- `MOP_VERBOSE` env var + `patchbay/mop_verbose.py` (wraps MOP MCP server; surfaces every verdict to chat — `accepted`/`rewritten`/`rejected`/`failed-open` markers, with original text on rejections). Wired through `claude_sdk_mop.build_options`.
+- Diagnostic logging added: `claude_sdk_mop.stop_hook_callback` logs BLOCK/ALLOW + `sent_this_turn` + `stop_hook_active`; `mop_deliver.deliver` logs entry/ok/exception with chat + text_len.
+- **Plain-text safety net** in `bridge.py` v2 dispatch: collects `AssistantMessage.TextBlock` content during the turn; if `mop._patchbay_deliver.delivery_count == 0` after the loop, returns the joined plain text so `_send_response` sends it. Activity log gets `mop_delivery_count` + `fallback` fields. Eliminates the silent black hole when MOP doesn't deliver.
+- `claude_sdk.py:393` `subtype=success but is_error=True` path: when `full_text` is empty, replaced cryptic `(no parseable response)` with a plain-English message naming the Anthropic API hiccup and telling the user to retry.
+- Regression test `test_run_claude_cc_sdk_mop_v2_sets_resume_when_session_exists` added to `tests/test_claude_sdk_mop.py` covering the resume bug your `fea941f` fixed.
+
+**Untracked file flagged:** `tests/test_patchbay_runtime.py` (your TDD placeholder for Task 3) currently fails on `pytest tests/` with `ModuleNotFoundError: No module named 'patchbay.runtime'`. Pre-push will fail until either the module is created (your Task 3) or the test file is gitignored/deleted. Sibling ran tests with `--ignore=tests/test_patchbay_runtime.py` to stay green in the meantime.
+
+**Status of plan tasks:** Task 0 (MOP fix commits) — partially landed via `fea941f`; the verbose-mode + safety-net + error-message work is uncommitted in this worktree. Tasks 1–7 unstarted.

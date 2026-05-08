@@ -396,11 +396,29 @@ class ClaudeSdkHarness:
                     "ResultMessage subtype=success but is_error=True errors=%s — delivering as TurnFinal",
                     msg.errors,
                 )
+                # Anthropic API quirk: the SDK occasionally returns
+                # subtype=success with is_error=True and an empty result
+                # field. When that lands and we have NO partial text to
+                # show, surface a plain-English explanation instead of
+                # the cryptic "(no parseable response)" placeholder.
+                if not full_text:
+                    err_detail = ""
+                    if msg.errors:
+                        err_detail = " — " + " ".join(str(e) for e in msg.errors)
+                    raw_text = (
+                        "⚠️ Anthropic API hiccup — empty response with "
+                        f"is_error=True (subtype=success){err_detail}. "
+                        "Transient upstream issue. Retry your message."
+                    )
+                else:
+                    raw_text = full_text
+            else:
+                raw_text = full_text or "(no parseable response)"
             return TurnFinal(
                 session_id=msg.session_id,
                 num_turns=msg.num_turns,
                 total_cost_usd=msg.total_cost_usd,
-                raw_text=full_text or "(no parseable response)",
+                raw_text=raw_text,
             )
         if msg.is_error:
             return TurnError(
