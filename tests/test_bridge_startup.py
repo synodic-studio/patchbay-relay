@@ -5,7 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-BRIDGE_DIR = Path(__file__).parent
+BRIDGE_DIR = Path(__file__).parent.parent
 
 
 def _import_bridge(env_overrides: dict) -> subprocess.CompletedProcess:
