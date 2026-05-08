@@ -1766,47 +1766,6 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 # ---------------------------------------------------------------------------
 
 
-async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    uid = update.effective_user.id
-    await update.message.reply_text(
-        f"Patchbay active.\nYour Telegram user ID: {uid}\n\n"
-        "Commands:\n"
-        "/clearnew - Start a fresh conversation (in current topic)\n"
-        "/setproject <path> - Set project dir (relative to ~/Developer)\n"
-        "/setproject - Clear project binding (use default)\n"
-        "/project - Show current project dir\n"
-        "/model - Set model (opus/sonnet/haiku) or prefix with !s !o !h\n"
-        "/effort - Set effort level (low/medium/high/xhigh/max)\n"
-        "/harness - Show or set the agent backend (cc-cli/cc-sdk)\n"
-        "/remote-control - Start claude remote-control in this topic's project dir\n"
-        "/remote-control stop - Stop remote-control\n"
-        "/kill - Kill active Claude process\n"
-        "/restart - Restart the bridge\n"
-        "/ping - Check if bridge is alive\n"
-        "/health - Disk, queues, uptime, counts\n"
-        "/activity [event] [count] - Recent activity.jsonl entries (e.g. /activity self_heal)\n"
-        "/soak [since] [session] - Compare harness backends (e.g. /soak 7d)\n"
-        "/context - Show context-window usage for this chat (cc-sdk only)\n"
-        "/compact [steering] - Compact the running context (cc-sdk only)\n"
-        "/usage - Show Claude Code quota (tokens + block time remaining)\n\n"
-        "Each forum topic runs as an independent Claude session."
-    )
-
-
-async def cmd_clearnew(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    chat_id = update.effective_chat.id
-    thread_id = update.message.message_thread_id
-    key = _session_key(chat_id, thread_id)
-    clear_session(key)
-    harness = get_chat_harness(key) or DEFAULT_HARNESS
-    model = get_chat_model(key) or DEFAULT_MODEL
-    effort = get_chat_effort(key) or DEFAULT_EFFORT
-    await update.message.reply_text(
-        f"Fresh session started.\nHarness: {harness}\nModel: {model}\nEffort: {effort}"
-    )
-    logger.info("Session cleared for %s", key)
-
-
 async def cmd_setproject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     thread_id = update.message.message_thread_id
@@ -2064,162 +2023,6 @@ async def cmd_harness(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await update.message.reply_text(
         f"Harness: {current}\nValid: {', '.join(VALID_HARNESSES)}, default"
     )
-
-
-async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Soft interrupt — SIGINT for cc-cli, task-cancel for cc-sdk.
-
-    Gives Claude a chance to finish cleanly. Use /kill if this doesn't work.
-    """
-    user_id = update.effective_user.id
-    chat_id = update.effective_chat.id
-    thread_id = update.message.message_thread_id
-    key = _session_key(chat_id, thread_id)
-
-    state = _sessions.get(key)
-    if state is None or (state.proc is None and state.harness is None):
-        await update.message.reply_text("No active Claude process in this chat.")
-        return
-
-    proc = state.proc
-    pid = proc.pid if proc is not None else -1
-    harness_name = getattr(state.harness, "name", "cc-cli")
-
-    await _interrupt_session_async(state)
-    await _release_processing(state)
-    await update.message.reply_text(
-        "Interrupted. Session preserved — next message resumes."
-    )
-    logger.info(
-        "User %d cancelled Claude turn for %s (harness=%s, pid=%d)",
-        user_id, key, harness_name, pid,
-    )
-    _log_activity("process_cancel", session_key=key, pid=pid, user_id=user_id,
-                  reason="manual", harness=harness_name)
-
-
-async def cmd_kill(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Hard kill — SIGKILL for cc-cli, task-cancel for cc-sdk.
-
-    Backend-agnostic via `_cancel_session_async`. Use /cancel first for a
-    graceful interrupt; /kill when that doesn't work.
-    """
-    user_id = update.effective_user.id
-    chat_id = update.effective_chat.id
-    thread_id = update.message.message_thread_id
-    key = _session_key(chat_id, thread_id)
-
-    state = _sessions.get(key)
-    if state is None or (state.proc is None and state.harness is None):
-        await update.message.reply_text("No active Claude process in this chat.")
-        return
-
-    # Capture pid before cancel for logging — cc-sdk has no proc, log -1.
-    proc = state.proc
-    pid = proc.pid if proc is not None else -1
-    harness_name = getattr(state.harness, "name", "cc-cli")
-
-    await _cancel_session_async(state)
-    await _release_processing(state)
-    await update.message.reply_text(
-        "Killed active Claude process. Session preserved — next message resumes."
-    )
-    logger.info(
-        "User %d killed Claude turn for %s (harness=%s, pid=%d)",
-        user_id,
-        key,
-        harness_name,
-        pid,
-    )
-    _log_activity(
-        "process_kill",
-        session_key=key,
-        pid=pid,
-        user_id=user_id,
-        reason="manual",
-        harness=harness_name,
-    )
-
-
-async def cmd_restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Restart the bridge process. Launchd will respawn it.
-
-    Two modes:
-      * `/restart` (default) — drain mode. Block new messages, wait for
-        in-flight turns to finish (up to RESTART_DRAIN_TIMEOUT), then exit.
-        Preserves work in progress. The orphan-claude failure mode that
-        prompted this — where a 17-minute turn was killed mid-stream and
-        its response went to /dev/null — is what drain prevents.
-      * `/restart force` — old behavior. SIGTERM everything immediately
-        and exit. For when the bridge itself is wedged and waiting won't
-        help.
-    """
-    global _shutting_down
-    user_id = update.effective_user.id
-    parts = (update.message.text or "").split()
-    force = len(parts) > 1 and parts[1].lower() in ("force", "kill", "now")
-
-    active = _iter_active_sessions()
-    n_active = len(active)
-
-    if force:
-        await update.message.reply_text(
-            f"Restarting (force) — terminating {n_active} active turn{'s' if n_active != 1 else ''}..."
-            if n_active
-            else "Restarting (force)..."
-        )
-        logger.info("User %d triggered FORCE bridge restart (%d active)", user_id, n_active)
-    elif n_active == 0:
-        await update.message.reply_text("Restarting (no active turns)...")
-        logger.info("User %d triggered bridge restart (no active turns)", user_id)
-    else:
-        await update.message.reply_text(
-            f"Restarting — draining {n_active} active turn{'s' if n_active != 1 else ''} "
-            f"(up to {RESTART_DRAIN_TIMEOUT // 60} min). "
-            f"Use /restart force to skip."
-        )
-        logger.info(
-            "User %d triggered bridge restart (drain mode, %d active, timeout %ds)",
-            user_id,
-            n_active,
-            RESTART_DRAIN_TIMEOUT,
-        )
-
-    restart_notify = RESTART_NOTIFY_FILE
-    restart_notify.write_text(
-        json.dumps(
-            {
-                "chat_id": update.effective_chat.id,
-                "thread_id": update.message.message_thread_id,
-            }
-        )
-    )
-
-    # Block new incoming messages while we drain / kill.
-    _shutting_down = True
-
-    if not force and n_active > 0:
-        await _drain_active_turns(deadline_seconds=RESTART_DRAIN_TIMEOUT)
-
-    # Force-terminate anything still running (drain timed out, or user used force).
-    for key, proc in _iter_active_procs():
-        if proc.poll() is None:
-            proc.terminate()
-            logger.info("Terminated Claude process for %s (pid %d)", key, proc.pid)
-
-    for key, state in _iter_active_sessions():
-        if state.proc is not None:
-            continue  # already terminated above
-        try:
-            await _cancel_session_async(state)
-        except Exception:  # noqa: BLE001
-            logger.exception("Cancel for cc-sdk session %s during restart raised", key)
-
-    if _remote_proc and _remote_proc.poll() is None:
-        _remote_proc.terminate()
-        logger.info("Terminated remote-control process (pid %d)", _remote_proc.pid)
-
-    os._exit(1)
 
 
 async def _drain_active_turns(deadline_seconds: int) -> None:
@@ -2896,24 +2699,6 @@ def _session_display_label(session_key: str) -> str:
     return session_key
 
 
-async def cmd_ping(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not any(s.processing for s in _sessions.values()):
-        await update.message.reply_text("pong — no active sessions")
-        return
-    now = time.time()
-    lines = ["pong — active sessions:"]
-    for key in sorted(k for k, s in _sessions.items() if s.processing):
-        started = _sessions[key].started_at if key in _sessions else None
-        label = _session_display_label(key)
-        if started:
-            elapsed = int(now - started)
-            mins, secs = divmod(elapsed, 60)
-            lines.append(f"  {label}: running {mins}m{secs:02d}s")
-        else:
-            lines.append(f"  {label}: running (start time unknown)")
-    await update.message.reply_text("\n".join(lines))
-
-
 async def handle_forum_topic_event(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
@@ -3233,6 +3018,24 @@ def _graceful_shutdown(signum: int, frame) -> None:
 
     logger.info("Graceful shutdown complete — exiting")
     sys.exit(0)
+
+
+# ---------------------------------------------------------------------------
+# Command handlers — re-exported from patchbay.commands so external callers
+# (tests doing `bridge.cmd_X`, registrations in main()) keep working after
+# the split. The actual definitions live in patchbay/commands/<group>.py;
+# they reference bridge module attributes at call time, so this re-export
+# only needs to happen after every bridge module-global they touch is
+# defined — which is true here, just before main().
+# ---------------------------------------------------------------------------
+from patchbay.commands.lifecycle import (  # noqa: E402, F401
+    cmd_cancel,
+    cmd_clearnew,
+    cmd_kill,
+    cmd_ping,
+    cmd_restart,
+    cmd_start,
+)
 
 
 def main() -> None:
