@@ -20,6 +20,9 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 import bridge
+from patchbay import config as _config
+from patchbay.config import USAGE_WEEKLY_TOKEN_CAP
+from patchbay.runtime import BRIDGE_STARTED_AT
 
 
 # ---------------------------------------------------------------------------
@@ -172,7 +175,7 @@ async def cmd_usage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         weekly = json.loads(weekly_proc.stdout).get("weekly", [])
         w = weekly[-1] if weekly else None
         used = w.get("totalTokens", 0) if w else 0
-        cap = bridge.USAGE_WEEKLY_TOKEN_CAP
+        cap = USAGE_WEEKLY_TOKEN_CAP
         wk_tok_pct = used / cap * 100 if cap else 0
         wk_time_pct = _week_time_percent()
         lines.append(f"Week (cap {_format_tokens(cap)} est):")
@@ -191,7 +194,7 @@ async def cmd_health(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     from patchbay.config import BASE_DIR
 
     now = time.time()
-    uptime = _format_uptime(now - bridge._BRIDGE_STARTED_AT)
+    uptime = _format_uptime(now - BRIDGE_STARTED_AT)
 
     active = [k for k, s in bridge._sessions.items() if s.processing]
 
@@ -203,9 +206,9 @@ async def cmd_health(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         bridge.logger.warning("disk_usage failed for %s: %s", BASE_DIR, exc)
         disk_line = "disk free: unknown (check logs)"
 
-    session_count = _safe_count(bridge.SESSION_DIR, "*.json")
-    pending_count = _safe_count(bridge.PENDING_DIR, "*.json")
-    failed_dir = bridge.PENDING_DIR / "failed"
+    session_count = _safe_count(_config.SESSION_DIR, "*.json")
+    pending_count = _safe_count(_config.PENDING_DIR, "*.json")
+    failed_dir = _config.PENDING_DIR / "failed"
     failed_count = _safe_count(failed_dir, "*.json") if failed_dir.exists() else 0
 
     lines = [
@@ -237,13 +240,13 @@ async def cmd_activity(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     except ValueError:
         max_count = 8
 
-    if not Path(bridge.ACTIVITY_LOG).exists():
+    if not Path(_config.ACTIVITY_LOG).exists():
         await update.message.reply_text("activity.jsonl does not exist yet.")
         return
 
     # Read tail of file (~last 200 lines is plenty even for max_count=25)
     try:
-        with open(bridge.ACTIVITY_LOG) as f:
+        with open(_config.ACTIVITY_LOG) as f:
             lines = f.readlines()[-200:]
     except OSError as exc:
         await update.message.reply_text(f"Failed to read activity.jsonl: {exc}")
@@ -315,7 +318,7 @@ async def cmd_soak(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
-            cwd=str(Path(bridge.__file__).parent),
+            cwd=str(_config.BASE_DIR),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )

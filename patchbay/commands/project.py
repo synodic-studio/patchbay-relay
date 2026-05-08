@@ -1,10 +1,14 @@
 """Project / model / effort / harness / remote-control commands.
 
-All handlers reference bridge module attributes via `bridge.X` so test
-patches against bridge see through. Module-load order: bridge.py only
-imports patchbay.commands inside its module body via re-export at the
-end, so `import bridge` here doesn't form a load-time cycle when a
-caller imports bridge first.
+Pure data lookups (config, projects, models, efforts, sessions, activity
+log) come from their canonical patchbay submodules. Genuinely bridge-owned
+runtime state (the executor, the remote-control proc handle, the
+remote-stdout drainer, `bridge.logger`) is still reached via `bridge.X`
+since it lives nowhere else.
+
+Module-load order: bridge.py only imports patchbay.commands inside its
+module body via re-export at the end, so `import bridge` here doesn't form
+a load-time cycle when a caller imports bridge first.
 """
 
 from __future__ import annotations
@@ -19,16 +23,47 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 import bridge
+from patchbay import config as _config
+from patchbay.activity import log_activity
+from patchbay.config import (
+    ANSI_RE,
+    CLAUDE_PATH,
+    DEFAULT_HARNESS,
+    VALID_HARNESSES,
+)
+from patchbay.efforts import (
+    DEFAULT_EFFORT,
+    VALID_EFFORTS,
+    get_chat_effort,
+    set_chat_effort,
+)
+from patchbay.models import (
+    DEFAULT_MODEL,
+    VALID_MODELS,
+    get_chat_model,
+    set_chat_model,
+)
+from patchbay.projects import (
+    _load_chat_projects,
+    _parse_project_entry,
+    get_all_projects,
+    get_chat_agent,
+    get_chat_harness,
+    get_chat_working_dir,
+    set_chat_harness,
+    set_chat_project,
+)
+from patchbay.sessions import _session_key, clear_session
 
 
 async def cmd_setproject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     thread_id = update.message.message_thread_id
-    key = bridge._session_key(chat_id, thread_id)
+    key = _session_key(chat_id, thread_id)
 
     args = context.args
     if not args:
-        projects = bridge._get_all_projects()
+        projects = get_all_projects()
         buttons = [
             [InlineKeyboardButton(name, callback_data=f"setproject:{name}")]
             for name in projects
@@ -47,17 +82,17 @@ async def cmd_setproject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if ".." in rel_path or rel_path.startswith("/") or "\\" in rel_path:
         await update.message.reply_text("Invalid project path.")
         return
-    abs_path = os.path.join(bridge.WORKING_DIR, rel_path)
+    abs_path = os.path.join(_config.WORKING_DIR, rel_path)
     real_path = os.path.realpath(abs_path)
-    if not real_path.startswith(os.path.realpath(bridge.WORKING_DIR)):
+    if not real_path.startswith(os.path.realpath(_config.WORKING_DIR)):
         await update.message.reply_text("Invalid project path.")
         return
     if not os.path.isdir(abs_path):
         await update.message.reply_text(f"Directory not found: ~/Developer/{rel_path}")
         return
 
-    bridge.set_chat_project(key, rel_path)
-    bridge.clear_session(key)
+    set_chat_project(key, rel_path)
+    clear_session(key)
     chat_title = update.effective_chat.title or "DM"
     await update.message.reply_text(
         f"Project set: ~/Developer/{rel_path}\nChat: {chat_title}\nSession reset. Claude will run from this directory."
@@ -72,14 +107,14 @@ async def callback_setproject(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     chat_id = update.effective_chat.id
     thread_id = query.message.message_thread_id
-    key = bridge._session_key(chat_id, thread_id)
+    key = _session_key(chat_id, thread_id)
 
     data = query.data  # "setproject:<name>" or "setproject:__clear__"
     rel_path = data.split(":", 1)[1]
 
     if rel_path == "__clear__":
-        bridge.set_chat_project(key, None)
-        bridge.clear_session(key)
+        set_chat_project(key, None)
+        clear_session(key)
         await query.edit_message_text(
             "Project cleared. Using default: ~/Developer\nSession reset."
         )
@@ -91,17 +126,17 @@ async def callback_setproject(update: Update, context: ContextTypes.DEFAULT_TYPE
         await query.edit_message_text("Invalid project path.")
         return
 
-    abs_path = os.path.join(bridge.WORKING_DIR, rel_path)
+    abs_path = os.path.join(_config.WORKING_DIR, rel_path)
     real_path = os.path.realpath(abs_path)
-    if not real_path.startswith(os.path.realpath(bridge.WORKING_DIR)):
+    if not real_path.startswith(os.path.realpath(_config.WORKING_DIR)):
         await query.edit_message_text("Invalid project path.")
         return
     if not os.path.isdir(abs_path):
         await query.edit_message_text(f"Directory not found: ~/Developer/{rel_path}")
         return
 
-    bridge.set_chat_project(key, rel_path)
-    bridge.clear_session(key)
+    set_chat_project(key, rel_path)
+    clear_session(key)
     chat_title = update.effective_chat.title or "DM"
     await query.edit_message_text(
         f"Project set: ~/Developer/{rel_path}\nChat: {chat_title}\nSession reset. Claude will run from this directory."
@@ -112,9 +147,9 @@ async def callback_setproject(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def cmd_project(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     thread_id = update.message.message_thread_id
-    key = bridge._session_key(chat_id, thread_id)
-    agent = bridge.get_chat_agent(key)
-    rel_path_entry, _ = bridge._parse_project_entry(bridge._load_chat_projects().get(key))
+    key = _session_key(chat_id, thread_id)
+    agent = get_chat_agent(key)
+    rel_path_entry, _ = _parse_project_entry(_load_chat_projects().get(key))
     if rel_path_entry:
         label = f"Project: ~/Developer/{rel_path_entry}"
         if agent:
@@ -128,24 +163,24 @@ async def cmd_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Set or show the model for this chat/topic."""
     chat_id = update.effective_chat.id
     thread_id = update.message.message_thread_id
-    key = bridge._session_key(chat_id, thread_id)
+    key = _session_key(chat_id, thread_id)
 
     args = context.args
     if args:
         choice = args[0].lower()
         if choice == "default":
-            bridge.set_chat_model(key, None)
+            set_chat_model(key, None)
             await update.message.reply_text(
-                f"Model reset to default ({bridge.DEFAULT_MODEL})."
+                f"Model reset to default ({DEFAULT_MODEL})."
             )
             bridge.logger.info("Model cleared for %s", key)
             return
-        if choice not in bridge.VALID_MODELS:
+        if choice not in VALID_MODELS:
             await update.message.reply_text(
                 "Invalid model. Choose: opus, sonnet, haiku, default"
             )
             return
-        bridge.set_chat_model(key, choice)
+        set_chat_model(key, choice)
         await update.message.reply_text(
             f"Model set to {choice}. Takes effect on next message."
         )
@@ -153,7 +188,7 @@ async def cmd_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     # No args: show buttons
-    current = bridge.get_chat_model(key) or f"default ({bridge.DEFAULT_MODEL})"
+    current = get_chat_model(key) or f"default ({DEFAULT_MODEL})"
     buttons = [
         [
             InlineKeyboardButton("opus", callback_data="model:opus"),
@@ -175,19 +210,19 @@ async def callback_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     chat_id = update.effective_chat.id
     thread_id = query.message.message_thread_id
-    key = bridge._session_key(chat_id, thread_id)
+    key = _session_key(chat_id, thread_id)
 
     choice = query.data.split(":", 1)[1]
     if choice == "__default__":
-        bridge.set_chat_model(key, None)
-        await query.edit_message_text(f"Model reset to default ({bridge.DEFAULT_MODEL}).")
+        set_chat_model(key, None)
+        await query.edit_message_text(f"Model reset to default ({DEFAULT_MODEL}).")
         bridge.logger.info("Model cleared for %s", key)
         return
-    if choice not in bridge.VALID_MODELS:
+    if choice not in VALID_MODELS:
         await query.edit_message_text(f"Invalid model: {choice}")
         return
 
-    bridge.set_chat_model(key, choice)
+    set_chat_model(key, choice)
     await query.edit_message_text(
         f"Model set to {choice}. Takes effect on next message."
     )
@@ -198,35 +233,35 @@ async def cmd_effort(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     """Set or show the effort level for this chat/topic."""
     chat_id = update.effective_chat.id
     thread_id = update.message.message_thread_id
-    key = bridge._session_key(chat_id, thread_id)
+    key = _session_key(chat_id, thread_id)
 
     args = context.args
     if args:
         choice = args[0].lower()
         if choice == "default":
-            bridge.set_chat_effort(key, None)
+            set_chat_effort(key, None)
             await update.message.reply_text(
-                f"Effort reset to default ({bridge.DEFAULT_EFFORT})."
+                f"Effort reset to default ({DEFAULT_EFFORT})."
             )
             bridge.logger.info("Effort cleared for %s", key)
             return
-        if choice not in bridge.VALID_EFFORTS:
+        if choice not in VALID_EFFORTS:
             await update.message.reply_text(
-                f"Invalid effort. Choose: {', '.join(bridge.VALID_EFFORTS)}, default"
+                f"Invalid effort. Choose: {', '.join(VALID_EFFORTS)}, default"
             )
             return
-        bridge.set_chat_effort(key, choice)
+        set_chat_effort(key, choice)
         await update.message.reply_text(
             f"Effort set to {choice}. Takes effect on next message."
         )
         bridge.logger.info("Effort set to %s for %s", choice, key)
         return
 
-    current = bridge.get_chat_effort(key) or f"default ({bridge.DEFAULT_EFFORT})"
+    current = get_chat_effort(key) or f"default ({DEFAULT_EFFORT})"
     buttons = [
         [
             InlineKeyboardButton(level, callback_data=f"effort:{level}")
-            for level in bridge.VALID_EFFORTS
+            for level in VALID_EFFORTS
         ],
         [InlineKeyboardButton("default", callback_data="effort:__default__")],
     ]
@@ -243,19 +278,19 @@ async def callback_effort(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     chat_id = update.effective_chat.id
     thread_id = query.message.message_thread_id
-    key = bridge._session_key(chat_id, thread_id)
+    key = _session_key(chat_id, thread_id)
 
     choice = query.data.split(":", 1)[1]
     if choice == "__default__":
-        bridge.set_chat_effort(key, None)
-        await query.edit_message_text(f"Effort reset to default ({bridge.DEFAULT_EFFORT}).")
+        set_chat_effort(key, None)
+        await query.edit_message_text(f"Effort reset to default ({DEFAULT_EFFORT}).")
         bridge.logger.info("Effort cleared for %s", key)
         return
-    if choice not in bridge.VALID_EFFORTS:
+    if choice not in VALID_EFFORTS:
         await query.edit_message_text(f"Invalid effort: {choice}")
         return
 
-    bridge.set_chat_effort(key, choice)
+    set_chat_effort(key, choice)
     await query.edit_message_text(
         f"Effort set to {choice}. Takes effect on next message."
     )
@@ -271,33 +306,33 @@ async def cmd_harness(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     """
     chat_id = update.effective_chat.id
     thread_id = update.message.message_thread_id
-    key = bridge._session_key(chat_id, thread_id)
+    key = _session_key(chat_id, thread_id)
 
     args = context.args
     if args:
         choice = args[0].lower()
         if choice == "default":
-            bridge.set_chat_harness(key, None)
+            set_chat_harness(key, None)
             await update.message.reply_text(
-                f"Harness reset to default ({bridge.DEFAULT_HARNESS})."
+                f"Harness reset to default ({DEFAULT_HARNESS})."
             )
             bridge.logger.info("Harness cleared for %s", key)
             return
-        if choice not in bridge.VALID_HARNESSES:
+        if choice not in VALID_HARNESSES:
             await update.message.reply_text(
-                f"Invalid harness. Choose: {', '.join(bridge.VALID_HARNESSES)}, default"
+                f"Invalid harness. Choose: {', '.join(VALID_HARNESSES)}, default"
             )
             return
-        bridge.set_chat_harness(key, choice)
+        set_chat_harness(key, choice)
         await update.message.reply_text(
             f"Harness set to {choice}. Takes effect on next message."
         )
         bridge.logger.info("Harness set to %s for %s", choice, key)
         return
 
-    current = bridge.get_chat_harness(key) or bridge.DEFAULT_HARNESS
+    current = get_chat_harness(key) or DEFAULT_HARNESS
     await update.message.reply_text(
-        f"Harness: {current}\nValid: {', '.join(bridge.VALID_HARNESSES)}, default"
+        f"Harness: {current}\nValid: {', '.join(VALID_HARNESSES)}, default"
     )
 
 
@@ -306,14 +341,14 @@ async def cmd_remote_control(update: Update, context: ContextTypes.DEFAULT_TYPE)
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
     thread_id = update.message.message_thread_id
-    key = bridge._session_key(chat_id, thread_id)
+    key = _session_key(chat_id, thread_id)
 
     args = (update.message.text or "").split()
     if len(args) > 1 and args[1].lower() == "stop":
         if bridge._remote_proc and bridge._remote_proc.poll() is None:
             bridge._remote_proc.terminate()
             bridge._remote_proc.wait(timeout=5)
-            cwd_label = bridge.get_chat_working_dir(bridge._remote_proc_key or key)
+            cwd_label = get_chat_working_dir(bridge._remote_proc_key or key)
             bridge._remote_proc = None
             bridge._remote_proc_key = None
             await update.message.reply_text(f"Remote control stopped ({cwd_label})")
@@ -334,11 +369,11 @@ async def cmd_remote_control(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "Replaced existing remote-control process (pid %d)", bridge._remote_proc.pid
         )
 
-    chat_cwd = bridge.get_chat_working_dir(key)
+    chat_cwd = get_chat_working_dir(key)
     await update.message.reply_text(f"Starting remote-control in {chat_cwd}...")
 
     proc = subprocess.Popen(
-        [bridge.CLAUDE_PATH, "remote-control"],
+        [CLAUDE_PATH, "remote-control"],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -347,7 +382,7 @@ async def cmd_remote_control(update: Update, context: ContextTypes.DEFAULT_TYPE)
     bridge._remote_proc = proc
     bridge._remote_proc_key = key
     bridge.logger.info("Started claude remote-control (pid %d) in %s", proc.pid, chat_cwd)
-    bridge._log_activity("remote_control_start", session_key=key, cwd=chat_cwd, pid=proc.pid)
+    log_activity("remote_control_start", session_key=key, cwd=chat_cwd, pid=proc.pid)
 
     loop = asyncio.get_running_loop()
 
@@ -368,7 +403,7 @@ async def cmd_remote_control(update: Update, context: ContextTypes.DEFAULT_TYPE)
         seen: set[str] = set()
         result: list[str] = []
         for raw in collected:
-            clean = bridge._ANSI_RE.sub("", raw).strip()
+            clean = ANSI_RE.sub("", raw).strip()
             if clean and clean not in seen:
                 seen.add(clean)
                 result.append(clean)

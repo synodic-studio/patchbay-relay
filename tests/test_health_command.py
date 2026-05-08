@@ -33,7 +33,13 @@ def _isolate(tmp_path, monkeypatch):
     (tmp_path / "sessions").mkdir()
     (tmp_path / "pending").mkdir()
     monkeypatch.setattr(bridge, "_sessions", {})
+    # cmd_health (in patchbay.commands.observability) reads
+    # BRIDGE_STARTED_AT from patchbay.runtime; patch all aliases.
+    import patchbay.commands.observability as _obs_cmd
+    import patchbay.runtime
     monkeypatch.setattr(bridge, "_BRIDGE_STARTED_AT", time.time() - 125)
+    monkeypatch.setattr(patchbay.runtime, "BRIDGE_STARTED_AT", time.time() - 125)
+    monkeypatch.setattr(_obs_cmd, "BRIDGE_STARTED_AT", time.time() - 125)
     return tmp_path
 
 

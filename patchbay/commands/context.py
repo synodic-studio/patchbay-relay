@@ -14,7 +14,8 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 import bridge
-from patchbay.config import QUOTA_HIT_PREFIX
+from patchbay.config import CLAUDE_PATH, MAX_TIMEOUT, QUOTA_HIT_PREFIX
+from patchbay.efforts import resolve_effort
 from patchbay.harness import (
     CAPABILITIES_BY_NAME,
     ClaudeCliHarness,
@@ -22,6 +23,9 @@ from patchbay.harness import (
     ClaudeSdkMopHarness,
     TurnRequest,
 )
+from patchbay.models import get_chat_model
+from patchbay.projects import get_chat_harness, get_chat_working_dir
+from patchbay.sessions import _session_key, clear_session, get_session_id
 
 
 _SUMMARIZE_PROMPT = (
@@ -52,22 +56,24 @@ def _resolve_harness_for_inquiry(session_key: str):
     (harness_name, harness, req) or None if the chat's harness doesn't
     exist or isn't suitable.
     """
-    chat_cwd = bridge.get_chat_working_dir(session_key)
-    session_id = bridge.get_session_id(session_key)
-    model = bridge.get_chat_model(session_key)
-    effort = bridge.resolve_effort(session_key)
+    from patchbay.config import DEFAULT_HARNESS, VALID_HARNESSES
 
-    harness_name = bridge.get_chat_harness(session_key) or bridge.DEFAULT_HARNESS
-    if harness_name not in bridge.VALID_HARNESSES:
-        harness_name = bridge.DEFAULT_HARNESS
+    chat_cwd = get_chat_working_dir(session_key)
+    session_id = get_session_id(session_key)
+    model = get_chat_model(session_key)
+    effort = resolve_effort(session_key)
+
+    harness_name = get_chat_harness(session_key) or DEFAULT_HARNESS
+    if harness_name not in VALID_HARNESSES:
+        harness_name = DEFAULT_HARNESS
 
     if harness_name == "cc-sdk":
         harness = ClaudeSdkHarness(
-            cli_path=bridge.CLAUDE_PATH, max_timeout_seconds=bridge.MAX_TIMEOUT
+            cli_path=CLAUDE_PATH, max_timeout_seconds=MAX_TIMEOUT
         )
     elif harness_name == "cc-cli":
         harness = ClaudeCliHarness(
-            claude_path=bridge.CLAUDE_PATH, max_timeout_seconds=bridge.MAX_TIMEOUT
+            claude_path=CLAUDE_PATH, max_timeout_seconds=MAX_TIMEOUT
         )
     elif harness_name == "cc-sdk-mop":
         # cc-sdk-mop has no run_turn/get_context/compact — its v2 dispatch
@@ -78,7 +84,7 @@ def _resolve_harness_for_inquiry(session_key: str):
     elif harness_name == "pi":
         from patchbay.harness import PiHarness
 
-        harness = PiHarness(max_timeout_seconds=bridge.MAX_TIMEOUT)
+        harness = PiHarness(max_timeout_seconds=MAX_TIMEOUT)
     else:
         return None
 
@@ -149,7 +155,7 @@ async def _fallback_compact(
     summary = summary.strip()
     summary_words = len(summary.split())
 
-    bridge.clear_session(session_key)
+    clear_session(session_key)
     bridge.logger.info(
         "Compact fallback for %s: cleared session, summary=%d words",
         session_key,
@@ -185,7 +191,7 @@ async def cmd_context(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     """
     chat_id = update.effective_chat.id
     thread_id = update.message.message_thread_id
-    key = bridge._session_key(chat_id, thread_id)
+    key = _session_key(chat_id, thread_id)
 
     resolved = _resolve_harness_for_inquiry(key)
     if resolved is None:
@@ -225,7 +231,7 @@ async def cmd_compact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     """
     chat_id = update.effective_chat.id
     thread_id = update.message.message_thread_id
-    key = bridge._session_key(chat_id, thread_id)
+    key = _session_key(chat_id, thread_id)
 
     parts = (update.message.text or "").split(maxsplit=1)
     instructions = parts[1].strip() if len(parts) > 1 else None

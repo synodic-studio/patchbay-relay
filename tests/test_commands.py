@@ -129,11 +129,13 @@ class TestCmdProject:
 class TestCmdSetproject:
     @pytest.fixture(autouse=True)
     def _isolate(self, tmp_path, monkeypatch):
+        import patchbay.config
         import patchbay.projects
 
         dev_dir = str(tmp_path / "dev")
         monkeypatch.setattr(patchbay.projects, "CHAT_PROJECTS_FILE", tmp_path / "cp.json")
         monkeypatch.setattr(patchbay.projects, "WORKING_DIR", dev_dir)
+        monkeypatch.setattr(patchbay.config, "WORKING_DIR", dev_dir)
         monkeypatch.setattr(bridge, "WORKING_DIR", dev_dir)
         monkeypatch.setattr(patchbay.sessions, "SESSION_DIR", tmp_path / "sessions")
         (tmp_path / "sessions").mkdir()
@@ -182,11 +184,13 @@ class TestCmdSetproject:
 class TestCallbackSetproject:
     @pytest.fixture(autouse=True)
     def _isolate(self, tmp_path, monkeypatch):
+        import patchbay.config
         import patchbay.projects
 
         dev_dir = str(tmp_path / "dev")
         monkeypatch.setattr(patchbay.projects, "CHAT_PROJECTS_FILE", tmp_path / "cp.json")
         monkeypatch.setattr(patchbay.projects, "WORKING_DIR", dev_dir)
+        monkeypatch.setattr(patchbay.config, "WORKING_DIR", dev_dir)
         monkeypatch.setattr(bridge, "WORKING_DIR", dev_dir)
         monkeypatch.setattr(patchbay.sessions, "SESSION_DIR", tmp_path / "sessions")
         (tmp_path / "sessions").mkdir()
@@ -304,12 +308,19 @@ class TestCmdPing:
 class TestCmdRestart:
     @pytest.fixture(autouse=True)
     def _isolate(self, tmp_path, monkeypatch):
+        # cmd_restart lives in patchbay.commands.lifecycle and reads its
+        # paths/timeouts via `from patchbay import config as _config` — so
+        # the patch must land on patchbay.config, not just bridge.
+        import patchbay.config as _cfg
+
+        monkeypatch.setattr(_cfg, "RESTART_NOTIFY_FILE", tmp_path / "restart.json")
         monkeypatch.setattr(bridge, "RESTART_NOTIFY_FILE", tmp_path / "restart.json")
         monkeypatch.setattr(bridge, "_sessions", {})
         monkeypatch.setattr(bridge, "_remote_proc", None)
         # Short drain so tests don't wait the production 10 minutes when a
         # mock proc reports "still alive" forever.
         monkeypatch.setattr(bridge, "RESTART_DRAIN_TIMEOUT", 1)
+        monkeypatch.setattr(_cfg, "RESTART_DRAIN_TIMEOUT", 1)
         monkeypatch.setattr(bridge, "_shutting_down", False)
         self._tmp = tmp_path
 
@@ -346,7 +357,10 @@ class TestCmdRestart:
         proc.poll.return_value = None
         bridge._get_session_state("test").proc = proc
         # Make drain very long so the test would hang if force wasn't honored.
+        # Patch all aliases — cmd_restart reads via patchbay.config.
+        import patchbay.config as _cfg
         monkeypatch.setattr(bridge, "RESTART_DRAIN_TIMEOUT", 9999)
+        monkeypatch.setattr(_cfg, "RESTART_DRAIN_TIMEOUT", 9999)
         update = _make_update(text="/restart force")
         ctx = _make_context()
         start = time.time()
@@ -365,7 +379,10 @@ class TestCmdRestart:
         proc.poll.side_effect = [None, None, 0, 0, 0, 0, 0, 0]
         bridge._get_session_state("test").proc = proc
         # Long drain — test should still finish fast because proc "exits".
+        # Patch all aliases — cmd_restart reads via patchbay.config.
+        import patchbay.config as _cfg
         monkeypatch.setattr(bridge, "RESTART_DRAIN_TIMEOUT", 60)
+        monkeypatch.setattr(_cfg, "RESTART_DRAIN_TIMEOUT", 60)
         update = _make_update()
         ctx = _make_context()
         start = time.time()

@@ -14,9 +14,18 @@ import bridge
 
 @pytest.fixture
 def isolated_activity_log(tmp_path, monkeypatch):
+    """Override the conftest-provided isolated path with one this test owns.
+
+    Patches every alias the activity layer reads from so a write via any
+    binding lands in the same file.
+    """
+    import patchbay.activity
+    import patchbay.config
+
     log = tmp_path / "activity.jsonl"
-    # cmd_activity reads bridge.ACTIVITY_LOG directly (the import-time alias).
     monkeypatch.setattr(bridge, "ACTIVITY_LOG", log)
+    monkeypatch.setattr(patchbay.config, "ACTIVITY_LOG", log)
+    monkeypatch.setattr(patchbay.activity, "ACTIVITY_LOG", log)
     return log
 
 

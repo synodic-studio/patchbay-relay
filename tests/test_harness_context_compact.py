@@ -246,15 +246,15 @@ def test_resolve_harness_for_inquiry_handles_cc_sdk_mop(monkeypatch, tmp_path):
     cc-sdk/cc-cli/pi. The resolver must return a non-None tuple so cmd_compact
     can fall through to the run_claude-based fallback path.
     """
-    import bridge as br
+    from patchbay.commands import context as _ctx_cmd
     from patchbay.commands.context import _resolve_harness_for_inquiry
     from patchbay.harness import ClaudeSdkMopHarness
 
-    monkeypatch.setattr(br, "get_chat_working_dir", lambda key: str(tmp_path))
-    monkeypatch.setattr(br, "get_session_id", lambda key: "sess-uuid")
-    monkeypatch.setattr(br, "get_chat_model", lambda key: None)
-    monkeypatch.setattr(br, "resolve_effort", lambda key: None)
-    monkeypatch.setattr(br, "get_chat_harness", lambda key: "cc-sdk-mop")
+    monkeypatch.setattr(_ctx_cmd, "get_chat_working_dir", lambda key: str(tmp_path))
+    monkeypatch.setattr(_ctx_cmd, "get_session_id", lambda key: "sess-uuid")
+    monkeypatch.setattr(_ctx_cmd, "get_chat_model", lambda key: None)
+    monkeypatch.setattr(_ctx_cmd, "resolve_effort", lambda key: None)
+    monkeypatch.setattr(_ctx_cmd, "get_chat_harness", lambda key: "cc-sdk-mop")
 
     resolved = _resolve_harness_for_inquiry("test-key")
     assert resolved is not None, "cc-sdk-mop must not be rejected by the resolver"

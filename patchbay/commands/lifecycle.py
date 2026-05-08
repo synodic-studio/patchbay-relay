@@ -1,8 +1,11 @@
 """Lifecycle commands: /start, /clearnew, /cancel, /kill, /restart, /ping.
 
 Each handler does session-state plumbing — clearing, cancelling, draining,
-or reporting active turns. Heavy use of bridge module attributes via
-`bridge.X` so test patches against bridge see through.
+or reporting active turns. Pure data lookups (config, projects, sessions,
+activity log) come from their canonical patchbay submodules. Genuinely
+bridge-owned runtime state and lifecycle helpers (the session registry,
+cancel/interrupt helpers, the shutdown flag, the display-label formatter)
+are still reached via `bridge.X` since they live nowhere else.
 """
 
 from __future__ import annotations
@@ -15,6 +18,13 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 import bridge
+from patchbay import config as _config
+from patchbay.activity import log_activity
+from patchbay.config import DEFAULT_HARNESS
+from patchbay.efforts import DEFAULT_EFFORT, get_chat_effort
+from patchbay.models import DEFAULT_MODEL, get_chat_model
+from patchbay.projects import get_chat_harness
+from patchbay.sessions import _session_key, clear_session
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -47,11 +57,11 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def cmd_clearnew(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     thread_id = update.message.message_thread_id
-    key = bridge._session_key(chat_id, thread_id)
-    bridge.clear_session(key)
-    harness = bridge.get_chat_harness(key) or bridge.DEFAULT_HARNESS
-    model = bridge.get_chat_model(key) or bridge.DEFAULT_MODEL
-    effort = bridge.get_chat_effort(key) or bridge.DEFAULT_EFFORT
+    key = _session_key(chat_id, thread_id)
+    clear_session(key)
+    harness = get_chat_harness(key) or DEFAULT_HARNESS
+    model = get_chat_model(key) or DEFAULT_MODEL
+    effort = get_chat_effort(key) or DEFAULT_EFFORT
     await update.message.reply_text(
         f"Fresh session started.\nHarness: {harness}\nModel: {model}\nEffort: {effort}"
     )
@@ -66,7 +76,7 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
     thread_id = update.message.message_thread_id
-    key = bridge._session_key(chat_id, thread_id)
+    key = _session_key(chat_id, thread_id)
 
     state = bridge._sessions.get(key)
     if state is None or (state.proc is None and state.harness is None):
@@ -86,7 +96,7 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         "User %d cancelled Claude turn for %s (harness=%s, pid=%d)",
         user_id, key, harness_name, pid,
     )
-    bridge._log_activity(
+    log_activity(
         "process_cancel",
         session_key=key,
         pid=pid,
@@ -105,7 +115,7 @@ async def cmd_kill(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
     thread_id = update.message.message_thread_id
-    key = bridge._session_key(chat_id, thread_id)
+    key = _session_key(chat_id, thread_id)
 
     state = bridge._sessions.get(key)
     if state is None or (state.proc is None and state.harness is None):
@@ -129,7 +139,7 @@ async def cmd_kill(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         harness_name,
         pid,
     )
-    bridge._log_activity(
+    log_activity(
         "process_kill",
         session_key=key,
         pid=pid,
@@ -172,17 +182,17 @@ async def cmd_restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     else:
         await update.message.reply_text(
             f"Restarting — draining {n_active} active turn{'s' if n_active != 1 else ''} "
-            f"(up to {bridge.RESTART_DRAIN_TIMEOUT // 60} min). "
+            f"(up to {_config.RESTART_DRAIN_TIMEOUT // 60} min). "
             f"Use /restart force to skip."
         )
         bridge.logger.info(
             "User %d triggered bridge restart (drain mode, %d active, timeout %ds)",
             user_id,
             n_active,
-            bridge.RESTART_DRAIN_TIMEOUT,
+            _config.RESTART_DRAIN_TIMEOUT,
         )
 
-    bridge.RESTART_NOTIFY_FILE.write_text(
+    _config.RESTART_NOTIFY_FILE.write_text(
         json.dumps(
             {
                 "chat_id": update.effective_chat.id,
@@ -195,7 +205,7 @@ async def cmd_restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     bridge._shutting_down = True
 
     if not force and n_active > 0:
-        await bridge._drain_active_turns(deadline_seconds=bridge.RESTART_DRAIN_TIMEOUT)
+        await bridge._drain_active_turns(deadline_seconds=_config.RESTART_DRAIN_TIMEOUT)
 
     # Force-terminate anything still running (drain timed out, or user used force).
     for key, proc in bridge._iter_active_procs():

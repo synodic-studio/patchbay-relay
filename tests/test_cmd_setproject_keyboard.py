@@ -4,6 +4,7 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import bridge
+import patchbay.commands.project as _project_cmd
 
 
 def _make_update(chat_id=123, thread_id=None):
@@ -29,7 +30,7 @@ class TestCmdSetprojectKeyboard:
         update = _make_update()
         ctx = _make_context()
 
-        with patch.object(bridge, "_get_all_projects", return_value=projects):
+        with patch.object(_project_cmd, "get_all_projects", return_value=projects):
             asyncio.run(bridge.cmd_setproject(update, ctx))
 
         update.message.reply_text.assert_called_once()
@@ -44,7 +45,7 @@ class TestCmdSetprojectKeyboard:
         update = _make_update()
         ctx = _make_context()
 
-        with patch.object(bridge, "_get_all_projects", return_value=projects):
+        with patch.object(_project_cmd, "get_all_projects", return_value=projects):
             asyncio.run(bridge.cmd_setproject(update, ctx))
 
         markup = update.message.reply_text.call_args.kwargs.get("reply_markup")
@@ -59,7 +60,7 @@ class TestCmdSetprojectKeyboard:
         update = _make_update()
         ctx = _make_context()
 
-        with patch.object(bridge, "_get_all_projects", return_value=[]):
+        with patch.object(_project_cmd, "get_all_projects", return_value=[]):
             asyncio.run(bridge.cmd_setproject(update, ctx))
 
         markup = update.message.reply_text.call_args.kwargs.get("reply_markup")
