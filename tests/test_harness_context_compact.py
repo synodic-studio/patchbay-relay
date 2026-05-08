@@ -68,7 +68,7 @@ def test_compact_result_succeeded_minimal():
 
 def test_only_cc_sdk_supports_context_query_today():
     assert CAPABILITIES_BY_NAME["cc-sdk"].supports_context_query is True
-    for name in ("cc-cli", "pi"):
+    for name in ("cc-cli", "cc-sdk-mop", "pi"):
         assert CAPABILITIES_BY_NAME[name].supports_context_query is False, (
             f"{name} should not advertise supports_context_query yet"
         )
@@ -76,7 +76,7 @@ def test_only_cc_sdk_supports_context_query_today():
 
 def test_only_cc_sdk_supports_compact_today():
     assert CAPABILITIES_BY_NAME["cc-sdk"].supports_compact is True
-    for name in ("cc-cli", "pi"):
+    for name in ("cc-cli", "cc-sdk-mop", "pi"):
         assert CAPABILITIES_BY_NAME[name].supports_compact is False
 
 
@@ -238,6 +238,30 @@ def test_compact_passes_instructions_through(fake_sdk, tmp_path):
     result = asyncio.run(go())
     assert result.succeeded is True
     assert captured["client"].queries == ["/compact focus on the API design"]
+
+
+def test_resolve_harness_for_inquiry_handles_cc_sdk_mop(monkeypatch, tmp_path):
+    """Regression: /compact and /context once returned 'No harness configured'
+    when the chat was on cc-sdk-mop because the resolver only handled
+    cc-sdk/cc-cli/pi. The resolver must return a non-None tuple so cmd_compact
+    can fall through to the run_claude-based fallback path.
+    """
+    import bridge as br
+    from patchbay.commands.context import _resolve_harness_for_inquiry
+    from patchbay.harness import ClaudeSdkMopHarness
+
+    monkeypatch.setattr(br, "get_chat_working_dir", lambda key: str(tmp_path))
+    monkeypatch.setattr(br, "get_session_id", lambda key: "sess-uuid")
+    monkeypatch.setattr(br, "get_chat_model", lambda key: None)
+    monkeypatch.setattr(br, "resolve_effort", lambda key: None)
+    monkeypatch.setattr(br, "get_chat_harness", lambda key: "cc-sdk-mop")
+
+    resolved = _resolve_harness_for_inquiry("test-key")
+    assert resolved is not None, "cc-sdk-mop must not be rejected by the resolver"
+    name, harness, req = resolved
+    assert name == "cc-sdk-mop"
+    assert isinstance(harness, ClaudeSdkMopHarness)
+    assert req.resume_session_id == "sess-uuid"
 
 
 def test_fallback_compact_handoff_prompt_contains_summary():

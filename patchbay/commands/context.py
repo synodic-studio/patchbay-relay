@@ -19,6 +19,7 @@ from patchbay.harness import (
     CAPABILITIES_BY_NAME,
     ClaudeCliHarness,
     ClaudeSdkHarness,
+    ClaudeSdkMopHarness,
     TurnRequest,
 )
 
@@ -68,6 +69,12 @@ def _resolve_harness_for_inquiry(session_key: str):
         harness = ClaudeCliHarness(
             claude_path=bridge.CLAUDE_PATH, max_timeout_seconds=bridge.MAX_TIMEOUT
         )
+    elif harness_name == "cc-sdk-mop":
+        # cc-sdk-mop has no run_turn/get_context/compact — its v2 dispatch
+        # lives in bridge.run_claude. Returning the instance here lets
+        # cmd_context render a "not supported on cc-sdk-mop" hint and lets
+        # cmd_compact fall through to the run_claude-based fallback path.
+        harness = ClaudeSdkMopHarness()
     elif harness_name == "pi":
         from patchbay.harness import PiHarness
 
