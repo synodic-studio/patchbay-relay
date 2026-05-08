@@ -23,6 +23,15 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable
+
+# When run as `python bridge.py`, this module is loaded as `__main__`.
+# Submodules under `patchbay/commands/` do `import bridge` to reach handler
+# helpers via `bridge.X` (so test monkeypatches against `bridge.X` are
+# visible). Without this alias, that import would re-execute bridge.py as a
+# second module named `bridge`, and the re-entry would hit line 2148's
+# `from patchbay.commands.lifecycle import cmd_cancel, ...` while lifecycle
+# is mid-import → ImportError. Make `__main__` and `bridge` the same module.
+sys.modules.setdefault("bridge", sys.modules[__name__])  # noqa: E402
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
