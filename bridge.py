@@ -217,7 +217,10 @@ class SessionState:
     mop: object | None = None
 
 
-_sessions: dict[str, SessionState] = {}
+# Owned by patchbay.runtime so command handlers (in patchbay/commands/) can
+# import the same dict without a circular dependency on bridge. The local
+# alias keeps existing call sites unchanged.
+from patchbay.runtime import sessions as _sessions  # noqa: E402
 
 
 def _get_session_state(key: str) -> SessionState:
@@ -416,8 +419,9 @@ _bot_instance = None
 # the v2 dispatch's temporary `asyncio.run(...)` loop poisons the bot.
 _main_loop: asyncio.AbstractEventLoop | None = None
 
-# Captured once at import time — used by /health to report process uptime.
-_BRIDGE_STARTED_AT = time.time()
+# Captured once at runtime module import time — used by /health to report
+# process uptime. Local alias preserves existing _BRIDGE_STARTED_AT call sites.
+from patchbay.runtime import BRIDGE_STARTED_AT as _BRIDGE_STARTED_AT  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
