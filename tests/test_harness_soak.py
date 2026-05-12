@@ -193,6 +193,36 @@ def test_bucket_counts_empty_responses(soak_module):
     assert b["empty_response"] == 1
 
 
+def test_bucket_does_not_flag_mop_delivered_zero_as_empty(soak_module):
+    """cc-sdk-mop returns "" to the orchestrator after MOP has already pushed
+    the message to Telegram. `response_len=0` paired with
+    `mop_delivery_count>0` is the happy path, not a silent failure."""
+    events = [
+        {"event": "turn_invoke", "session_key": "s", "harness": "cc-sdk-mop"},
+        {
+            "event": "turn_complete",
+            "session_key": "s",
+            "harness": "cc-sdk-mop",
+            "duration": 1.0,
+            "response_len": 0,
+            "mop_delivery_count": 1,
+        },
+        {"event": "turn_invoke", "session_key": "s", "harness": "cc-sdk-mop"},
+        {
+            "event": "turn_complete",
+            "session_key": "s",
+            "harness": "cc-sdk-mop",
+            "duration": 1.0,
+            "response_len": 0,
+            "mop_delivery_count": 0,
+        },
+    ]
+    b = soak_module.bucket_by_harness(events)["cc-sdk-mop"]
+    assert b["completes"] == 2
+    # Only the mop_delivery_count=0 complete counts as empty.
+    assert b["empty_response"] == 1
+
+
 def test_percentile(soak_module):
     assert soak_module.percentile([], 50) is None
     assert soak_module.percentile([1.0], 50) == 1.0

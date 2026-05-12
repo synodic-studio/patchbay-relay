@@ -108,8 +108,16 @@ def bucket_by_harness(events: list[dict[str, Any]]) -> dict[str, dict[str, Any]]
             rl = ev.get("response_len")
             if isinstance(rl, int):
                 b["response_lens"].append(rl)
+                # cc-sdk-mop returns "" to the orchestrator by design — the
+                # response was already delivered to Telegram via the in-process
+                # MOP MCP server. `mop_delivery_count > 0` means the user got
+                # the message, so an rl=0 complete is NOT a silent failure.
+                # See bridge.py: the cc-sdk-mop dispatch logs `response_len=
+                # len(fallback_text)` and `mop_delivery_count=<int>`.
                 if rl == 0:
-                    b["empty_response"] += 1
+                    mop_delivered = ev.get("mop_delivery_count")
+                    if not (isinstance(mop_delivered, int) and mop_delivered > 0):
+                        b["empty_response"] += 1
         elif event in ("turn_error", "claude_error"):
             b["errors"] += 1
         elif event in ("turn_timeout", "claude_timeout"):
