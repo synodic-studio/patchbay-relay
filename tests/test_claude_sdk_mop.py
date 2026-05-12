@@ -1,10 +1,8 @@
-"""Tests for ClaudeSdkMopHarness — v2 in-process MCP + Stop hook.
+"""Tests for ClaudeSdkMopHarness — in-process MCP + Stop hook.
 
-The legacy buffer-then-evaluate run_turn path was removed in T15. These
-tests cover the v2 surface: build_options() returns a ClaudeAgentOptions
-wired with an in-process MOP MCP server and Stop hook, the harness is
-registered with the right capabilities, and bridge.run_claude routes
-cc-sdk-mop through that path.
+build_options() returns a ClaudeAgentOptions wired with an in-process
+MOP MCP server and Stop hook, the harness is registered with the right
+capabilities, and bridge.run_claude routes cc-sdk-mop through that path.
 """
 
 from __future__ import annotations
@@ -16,12 +14,12 @@ import pytest
 
 
 # ---------------------------------------------------------------------------
-# v2 build_options() — in-process MCP + Stop hook
+# build_options() — in-process MCP + Stop hook
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_v2_harness_constructs_mcp_and_registers_stop_hook(monkeypatch):
-    """v2 cc-sdk-mop builds an in-process MCP and a Stop hook callback."""
+async def test_harness_constructs_mcp_and_registers_stop_hook(monkeypatch):
+    """cc-sdk-mop builds an in-process MCP and a Stop hook callback."""
     from patchbay.harness.claude_sdk_mop import ClaudeSdkMopHarness
     from mop import MOP
 
@@ -57,16 +55,16 @@ def test_cc_sdk_mop_capabilities():
     assert caps.supports_resume is True
     assert caps.supports_interrupt is True
     assert caps.supports_inflight_push is False
-    # v2 doesn't wrap an inner harness, so context/compact aren't supported.
+    # cc-sdk-mop doesn't wrap an inner harness, so context/compact aren't supported.
     assert caps.supports_context_query is False
     assert caps.supports_compact is False
 
 
 # ---------------------------------------------------------------------------
-# bridge.run_claude routes cc-sdk-mop through v2 build_options
+# bridge.run_claude routes cc-sdk-mop through build_options
 # ---------------------------------------------------------------------------
 
-def test_run_claude_cc_sdk_mop_v2_uses_build_options(monkeypatch, tmp_path):
+def test_run_claude_cc_sdk_mop_uses_build_options(monkeypatch, tmp_path):
     """run_claude with effective_harness=cc-sdk-mop calls harness.build_options
     and instantiates ClaudeSDKClient with the returned options. The MOP
     instance is held on SessionState.mop so its Stop hook closure stays alive
@@ -162,7 +160,7 @@ def test_run_claude_cc_sdk_mop_v2_uses_build_options(monkeypatch, tmp_path):
     assert response == ""
 
 
-def test_run_claude_cc_sdk_mop_v2_sets_resume_when_session_exists(monkeypatch, tmp_path):
+def test_run_claude_cc_sdk_mop_sets_resume_when_session_exists(monkeypatch, tmp_path):
     """Regression: when get_session_id returns a session UUID, run_claude must
     set options.resume on the ClaudeAgentOptions produced by build_options.
     Without this, every cc-sdk-mop turn starts a fresh Claude session and the

@@ -212,9 +212,9 @@ class SessionState:
     queue: list[QueuedMessage] = field(default_factory=list)  # debounced messages awaiting processing
     processing: bool = False  # True while a claude run is in flight for this key
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-    # cc-sdk-mop v2: holds the MOP instance for the lifetime of the SDK
-    # client so its in-process MCP tools and Stop-hook closure stay valid.
-    # Cleared after the turn completes.
+    # cc-sdk-mop: holds the MOP instance for the lifetime of the SDK client
+    # so its in-process MCP tools and Stop-hook closure stay valid. Cleared
+    # after the turn completes.
     mop: object | None = None
 
 
@@ -415,9 +415,9 @@ _shutting_down = False
 _bot_instance = None
 
 # Bridge's primary asyncio loop, captured in post_init. Used by the
-# cc-sdk-mop v2 deliver closure to schedule `bot.send_message` on the
-# loop where the bot's httpx client was created — calling it from inside
-# the v2 dispatch's temporary `asyncio.run(...)` loop poisons the bot.
+# cc-sdk-mop deliver closure to schedule `bot.send_message` on the loop
+# where the bot's httpx client was created — calling it from inside the
+# cc-sdk-mop dispatch's temporary `asyncio.run(...)` loop poisons the bot.
 _main_loop: asyncio.AbstractEventLoop | None = None
 
 # Captured once at runtime module import time — used by /health to report
@@ -645,16 +645,14 @@ def run_claude(
         if st is not None:
             st.proc = proc
 
-    # ----- cc-sdk-mop v2 dispatch (in-process MCP + Stop hook) -----
-    # The v2 path bypasses the legacy ClaudeSdkMopHarness.run_turn flow
-    # (which evaluates after-the-fact) and instead wires MOP into the SDK
-    # client itself: model output goes through `mcp__mop__submit_message`,
-    # which calls bot.send_message directly. Because MOP delivers the
-    # response itself, run_claude returns "" and the orchestrator's
-    # _send_response is a no-op (extract_file_sentinels short-circuits on
-    # empty). The MOP instance must outlive the SDK client so its Stop
-    # hook closure stays valid — pinned via state.mop and cleared in the
-    # finally block.
+    # ----- cc-sdk-mop dispatch (in-process MCP + Stop hook) -----
+    # MOP is wired into the SDK client itself: model output goes through
+    # `mcp__mop__submit_message`, which calls bot.send_message directly.
+    # Because MOP delivers the response itself, run_claude returns "" and
+    # the orchestrator's _send_response is a no-op (extract_file_sentinels
+    # short-circuits on empty). The MOP instance must outlive the SDK
+    # client so its Stop hook closure stays valid — pinned via state.mop
+    # and cleared in the finally block.
     if effective_harness == "cc-sdk-mop":
         from claude_agent_sdk import (
             AssistantMessage,
@@ -679,12 +677,12 @@ def run_claude(
 
         if _main_loop is None:
             raise RuntimeError(
-                "cc-sdk-mop v2 dispatch invoked before post_init captured "
+                "cc-sdk-mop dispatch invoked before post_init captured "
                 "the bridge's main loop — bot would be poisoned. Bug."
             )
 
-        harness_v2 = ClaudeSdkMopHarness()
-        options, mop = harness_v2.build_options(
+        harness = ClaudeSdkMopHarness()
+        options, mop = harness.build_options(
             bot=_bot_instance,
             chat_id=chat_id,
             thread_id=thread_id,
@@ -703,7 +701,7 @@ def run_claude(
         captured_session_id: str | None = None
         plain_text_fragments: list[str] = []
 
-        async def _drive_v2() -> None:
+        async def _drive_mop_session() -> None:
             nonlocal captured_session_id
             async with ClaudeSDKClient(options=options) as client:
                 await client.query(message)
@@ -726,7 +724,7 @@ def run_claude(
                         return
 
         try:
-            asyncio.run(_drive_v2())
+            asyncio.run(_drive_mop_session())
         finally:
             state.mop = None
 

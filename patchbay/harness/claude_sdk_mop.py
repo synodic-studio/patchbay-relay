@@ -1,7 +1,7 @@
 """ClaudeSdkMopHarness — cc-sdk wired with in-process Model Output Protocol.
 
-The v2 dispatch in `bridge.run_claude` calls `build_options()` to get a
-`ClaudeAgentOptions` that:
+The cc-sdk-mop dispatch in `bridge.run_claude` calls `build_options()` to
+get a `ClaudeAgentOptions` that:
 
   * Mounts MOP as an in-process MCP server (`mcp__mop__submit_message` etc.).
     Model output is delivered via that tool — never via TextBlock streaming —
@@ -12,11 +12,9 @@ The v2 dispatch in `bridge.run_claude` calls `build_options()` to get a
   * Includes a system prompt enumerating the active rules.
 
 The bridge holds the returned MOP instance on `SessionState.mop` for the
-lifetime of the SDK client so the Stop-hook closure stays alive.
-
-The legacy buffer-then-evaluate `run_turn` path (passthrough/audit/enforce
-modes, retry loop, edit/rewrite) was removed in T15 — v2 evaluates inline
-via `mop.filter()` inside the MCP tool handler.
+lifetime of the SDK client so the Stop-hook closure stays alive. MOP
+evaluates inline via `mop.filter()` inside the MCP tool handler — there
+is no buffer-then-evaluate `run_turn` path.
 """
 
 from __future__ import annotations
@@ -48,8 +46,9 @@ _CAPABILITIES = HarnessCapabilities(
     # would require a separate streaming-eval path.
     supports_inflight_push=False,
     # /context and /compact require a regular ClaudeSdkHarness instance —
-    # the v2 dispatch doesn't construct one. Users hit /context on cc-sdk-mop
-    # and the bridge tells them to switch to cc-sdk for that command.
+    # the cc-sdk-mop dispatch doesn't construct one. Users hit /context on
+    # cc-sdk-mop and the bridge tells them to switch to cc-sdk for that
+    # command.
     supports_context_query=False,
     supports_compact=False,
 )
@@ -59,8 +58,8 @@ class ClaudeSdkMopHarness:
     """cc-sdk wired with in-process MOP for output policing.
 
     This class is a thin holder for `name`, `capabilities`, and
-    `build_options()`. It has no `run_turn` because the v2 dispatch in
-    `bridge.run_claude` drives `ClaudeSDKClient` directly with the options
+    `build_options()`. It has no `run_turn` because the cc-sdk-mop dispatch
+    in `bridge.run_claude` drives `ClaudeSDKClient` directly with the options
     `build_options()` returns — MOP intercepts model output via its MCP
     tools rather than via the harness event stream.
     """

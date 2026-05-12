@@ -1,16 +1,16 @@
-"""Telegram delivery closure for MOP v2.
+"""Telegram delivery closure for MOP.
 
 build_telegram_deliver(bot, chat_id, thread_id, main_loop) returns a
 Deliver-shaped async callable: `(text, system_note) -> None`. The
 closure schedules `bot.send_message` on the bridge's main asyncio loop
-via `run_coroutine_threadsafe`, because the v2 dispatch invokes this
-deliver from inside `asyncio.run(_drive_v2())` running in a thread-pool
-worker. Calling `bot.send_message` directly on the temporary loop binds
-httpx connections to a loop that closes when the SDK turn ends — that
-poisons the bot for any subsequent main-loop request (handle_photo,
-the next /command, etc.) with `RuntimeError: Event loop is closed`.
-Routing through `main_loop` keeps every Telegram I/O on the loop where
-the bot's httpx client was created.
+via `run_coroutine_threadsafe`, because the cc-sdk-mop dispatch invokes
+this deliver from inside `asyncio.run(_drive_mop_session())` running in
+a thread-pool worker. Calling `bot.send_message` directly on the
+temporary loop binds httpx connections to a loop that closes when the
+SDK turn ends — that poisons the bot for any subsequent main-loop
+request (handle_photo, the next /command, etc.) with `RuntimeError:
+Event loop is closed`. Routing through `main_loop` keeps every Telegram
+I/O on the loop where the bot's httpx client was created.
 
 When system_note is set, we send TWO Telegram messages: the user message
 unchanged, then a separate bubble with a clear marker prefix so the user

@@ -1,4 +1,4 @@
-"""Telegram delivery closure for MOP v2.
+"""Telegram delivery closure for MOP.
 
 The deliver closure schedules sends on the bridge's main asyncio loop
 via `run_coroutine_threadsafe`. In-process tests run with a single loop
