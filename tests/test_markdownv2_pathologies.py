@@ -22,15 +22,17 @@ import re
 import pytest
 
 import telegramify_markdown
-from telegramify_markdown.customize import get_runtime_config
+
+from patchbay.markdown_config import configure_telegramify
 
 
-# Match telegramify configuration used by bridge.py (see bridge.py ~line 44).
+# Match telegramify configuration used by bridge.py exactly. Going through
+# the shared `configure_telegramify()` keeps tests and production from
+# drifting — a prior drift (tests used `head_level_1 = ""`, production used
+# `">"`) hid the heading-as-bold-blockquote parse bug.
 @pytest.fixture(autouse=True)
 def _configure_telegramify():
-    rc = get_runtime_config()
-    rc.markdown_symbol.head_level_1 = ""
-    rc.markdown_symbol.link = ""
+    configure_telegramify()
     yield
 
 

@@ -43,7 +43,6 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent / ".env")
 
 import telegramify_markdown  # noqa: E402
-from telegramify_markdown.customize import get_runtime_config  # noqa: E402
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update  # noqa: E402
 from telegram.constants import ParseMode  # noqa: E402
 from telegram.error import ChatMigrated, Forbidden, RetryAfter  # noqa: E402
@@ -56,15 +55,9 @@ from telegram.ext import (  # noqa: E402
     filters,
 )
 
-# Configure telegramify-markdown: no emoji prefixes for headings
-_tgmd_config = get_runtime_config()
-_tgmd_sym = _tgmd_config.markdown_symbol
-_tgmd_sym.head_level_1 = ">"
-_tgmd_sym.head_level_2 = ">>"
-_tgmd_sym.head_level_3 = ">>>"
-_tgmd_sym.head_level_4 = ">>>"
-_tgmd_sym.image = ""
-_tgmd_sym.link = ""
+from patchbay.markdown_config import configure_telegramify  # noqa: E402
+
+configure_telegramify()
 
 # ---------------------------------------------------------------------------
 # Import from package modules — these are the canonical implementations.

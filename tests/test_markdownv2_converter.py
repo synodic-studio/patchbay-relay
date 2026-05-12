@@ -22,15 +22,14 @@ from hypothesis import strategies as st
 
 import bridge
 import telegramify_markdown
-from telegramify_markdown.customize import get_runtime_config
+
+from patchbay.markdown_config import configure_telegramify
 
 
 @pytest.fixture(autouse=True)
 def _configure_telegramify():
-    """Match the runtime config bridge.py uses (head_level_1 / link strip)."""
-    rc = get_runtime_config()
-    rc.markdown_symbol.head_level_1 = ""
-    rc.markdown_symbol.link = ""
+    """Match the runtime config bridge.py uses (shared source of truth)."""
+    configure_telegramify()
     yield
 
 
