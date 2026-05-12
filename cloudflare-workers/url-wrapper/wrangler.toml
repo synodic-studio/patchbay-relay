@@ -1,9 +1,0 @@
-name = "patchbay-url-wrapper"
-main = "src/worker.js"
-compatibility_date = "2024-12-01"
-
-# Deploy under your own domain by adding a custom route after first deploy:
-#   wrangler deploy
-#   wrangler routes create "go.example.com/*"
-#
-# Or use the auto-generated *.workers.dev subdomain Cloudflare gives you.

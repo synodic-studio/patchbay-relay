@@ -190,6 +190,11 @@ uv run pytest tests/ --cov --cov-report=term-missing    # with coverage
 
 Pre-push hook runs the full test suite. There is no CI on the remote — quality gates are local.
 
+## Related projects
+
+- [model-output-protocol](https://github.com/synodic-studio/model-output-protocol) — the structural counterpart to MCP. Sits between an LLM agent and the user, enforcing communication rules before output reaches them. Used here via the `cc-sdk-mop` harness.
+- [patchbay-url-scheme-wrapper](https://github.com/synodic-studio/patchbay-url-scheme-wrapper) — a tiny Cloudflare Worker that wraps custom URL schemes (`obsidian://`, `x-apple-reminderkit://`, ...) in `https://` links so Telegram recognizes them as tappable. Deploy your own, then point agents at it with `PATCHBAY_URL_WRAPPER=https://your-domain.example`.
+
 ## License
 
 MIT
