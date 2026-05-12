@@ -155,6 +155,10 @@ launchctl load ~/Library/LaunchAgents/com.synodic.patchbay-relay.plist
 
 The plist sets `KeepAlive: SuccessfulExit=false` so the bridge auto-restarts on crash, with a 30-second `ThrottleInterval` backstop to prevent rapid-fire restart storms. `run.sh` does pre-flight validation; if `validate.py` fails, it rolls back to a known-good snapshot.
 
+### 7. Optional: macOS TCC watcher
+
+Homebrew upgrades change Cellar binary paths, which silently revokes any TCC permissions (Full Disk Access, Calendar, Contacts) granted to the old binary — a known cause of mid-turn hangs for agents that touch those resources. `scripts/tcc/` ships a separate optional launchd agent that watches for these resets and reports them. It does not start automatically with the bridge. See [`scripts/tcc/README.md`](scripts/tcc/README.md) for install and the brew-upgrade workflow.
+
 ## Telegram commands
 
 | Command | Description |
@@ -192,8 +196,8 @@ Pre-push hook runs the full test suite. There is no CI on the remote — quality
 
 ## Related projects
 
-- [model-output-protocol](https://github.com/synodic-studio/model-output-protocol) — the structural counterpart to MCP. Sits between an LLM agent and the user, enforcing communication rules before output reaches them. Used here via the `cc-sdk-mop` harness.
-- [patchbay-url-scheme-wrapper](https://github.com/synodic-studio/patchbay-url-scheme-wrapper) — a tiny Cloudflare Worker that wraps custom URL schemes (`obsidian://`, `x-apple-reminderkit://`, ...) in `https://` links so Telegram recognizes them as tappable. Deploy your own, then point agents at it with `PATCHBAY_URL_WRAPPER=https://your-domain.example`.
+- [model-output-protocol](https://github.com/synodic-studio/model-output-protocol) — output-shaping layer between agent and user. Wired in here as the `cc-sdk-mop` harness for enforcing per-topic reply rules.
+- [patchbay-url-scheme-wrapper](https://github.com/synodic-studio/patchbay-url-scheme-wrapper) — Cloudflare Worker that rewrites custom URL schemes (`obsidian://`, `x-apple-reminderkit://`, ...) into tappable `https://` links for Telegram. Point the bridge at your deployment with `PATCHBAY_URL_WRAPPER=https://your-domain.example`.
 
 ## License
 
