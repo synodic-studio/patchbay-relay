@@ -26,6 +26,30 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_LOG = REPO_ROOT / "activity.jsonl"
 
+# Real Telegram session_keys are `<chat_id>_<thread_id>` where chat_id is a
+# 10+ digit user id or a negative supergroup id (`-100…`). Test fixtures use
+# short synthetic keys (`1_2`, `100`, `stalled`, `s1`, `aaa-bbb-ccc`, …) that
+# leaked into the production activity.jsonl from `pytest tests/` runs before
+# the `_isolate_production_paths` autouse fixture landed (2026-04-27). The
+# resulting events polluted soak numbers by orders of magnitude (e.g. 161 of
+# 169 "manual kills" came from session_key=`1_2`). This regex matches the
+# shape of any real Telegram session_key; anything else is treated as test
+# fixture leakage and dropped during loading.
+_REAL_SESSION_KEY = re.compile(r"^-?\d{8,}_\d+$")
+
+
+def is_real_session_key(sk: Any) -> bool:
+    """True if `sk` looks like a real Telegram session_key.
+
+    Empty / missing / None keys are accepted — some events legitimately omit
+    the field (e.g. early bridge lifecycle events).
+    """
+    if sk is None or sk == "":
+        return True
+    if not isinstance(sk, str):
+        return False
+    return bool(_REAL_SESSION_KEY.fullmatch(sk))
+
 
 def parse_since(spec: str) -> float:
     """'7d', '24h', '30m' → cutoff timestamp (seconds since epoch)."""
@@ -56,6 +80,8 @@ def load_events(
         if since_ts is not None and (not isinstance(ts, (int, float)) or ts < since_ts):
             continue
         if session_filter and ev.get("session_key") != session_filter:
+            continue
+        if not is_real_session_key(ev.get("session_key")):
             continue
         out.append(ev)
     return out

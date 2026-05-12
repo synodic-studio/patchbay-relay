@@ -78,19 +78,19 @@ def test_load_events_filters_by_session(soak_module, tmp_path):
     log = write_log(
         tmp_path,
         [
-            {"ts": 1.0, "event": "a", "session_key": "s1"},
-            {"ts": 2.0, "event": "b", "session_key": "s2"},
+            {"ts": 1.0, "event": "a", "session_key": "-1000000000001_1"},
+            {"ts": 2.0, "event": "b", "session_key": "-1000000000002_2"},
         ],
     )
-    events = soak_module.load_events(log, None, "s2")
+    events = soak_module.load_events(log, None, "-1000000000002_2")
     assert [e["event"] for e in events] == ["b"]
 
 
 def test_bucket_counts_invokes_per_harness(soak_module):
     events = [
-        {"event": "turn_invoke", "session_key": "s1", "harness": "cc-cli"},
-        {"event": "turn_invoke", "session_key": "s2", "harness": "cc-sdk"},
-        {"event": "turn_invoke", "session_key": "s2", "harness": "cc-sdk"},
+        {"event": "turn_invoke", "session_key": "-1000000000001_1", "harness": "cc-cli"},
+        {"event": "turn_invoke", "session_key": "-1000000000002_2", "harness": "cc-sdk"},
+        {"event": "turn_invoke", "session_key": "-1000000000002_2", "harness": "cc-sdk"},
     ]
     b = soak_module.bucket_by_harness(events)
     assert b["cc-cli"]["invokes"] == 1
@@ -100,10 +100,10 @@ def test_bucket_counts_invokes_per_harness(soak_module):
 def test_bucket_attaches_followups_to_invoke_harness(soak_module):
     """A complete event without harness inherits the invoke's harness."""
     events = [
-        {"event": "turn_invoke", "session_key": "s1", "harness": "cc-sdk"},
+        {"event": "turn_invoke", "session_key": "-1000000000001_1", "harness": "cc-sdk"},
         {
             "event": "turn_complete",
-            "session_key": "s1",
+            "session_key": "-1000000000001_1",
             "duration": 30.0,
             "response_len": 100,
         },
@@ -116,10 +116,10 @@ def test_bucket_attaches_followups_to_invoke_harness(soak_module):
 def test_bucket_uses_explicit_harness_when_present(soak_module):
     """If event already has harness, that wins over inheritance."""
     events = [
-        {"event": "turn_invoke", "session_key": "s1", "harness": "cc-cli"},
+        {"event": "turn_invoke", "session_key": "-1000000000001_1", "harness": "cc-cli"},
         {
             "event": "turn_complete",
-            "session_key": "s1",
+            "session_key": "-1000000000001_1",
             "duration": 5.0,
             "response_len": 50,
             "harness": "cc-sdk",
@@ -132,31 +132,31 @@ def test_bucket_uses_explicit_harness_when_present(soak_module):
 
 def test_bucket_classifies_outcomes(soak_module):
     events = [
-        {"event": "turn_invoke", "session_key": "s", "harness": "cc-sdk"},
-        {"event": "turn_error", "session_key": "s", "harness": "cc-sdk"},
-        {"event": "turn_timeout", "session_key": "s", "harness": "cc-sdk"},
+        {"event": "turn_invoke", "session_key": "-1000000000000_0", "harness": "cc-sdk"},
+        {"event": "turn_error", "session_key": "-1000000000000_0", "harness": "cc-sdk"},
+        {"event": "turn_timeout", "session_key": "-1000000000000_0", "harness": "cc-sdk"},
         {
             "event": "process_kill",
-            "session_key": "s",
+            "session_key": "-1000000000000_0",
             "harness": "cc-sdk",
             "reason": "stalled",
         },
         {
             "event": "process_kill",
-            "session_key": "s",
+            "session_key": "-1000000000000_0",
             "harness": "cc-sdk",
             "reason": "user_kill",
         },
-        {"event": "forge_handoff", "session_key": "s", "harness": "cc-sdk"},
+        {"event": "forge_handoff", "session_key": "-1000000000000_0", "harness": "cc-sdk"},
         {
             "event": "self_heal",
-            "session_key": "s",
+            "session_key": "-1000000000000_0",
             "harness": "cc-sdk",
             "kind": "claude_oom_137",
         },
         {
             "event": "self_heal",
-            "session_key": "s",
+            "session_key": "-1000000000000_0",
             "harness": "cc-sdk",
             "kind": "corrupt_session_json",
         },
@@ -173,17 +173,17 @@ def test_bucket_classifies_outcomes(soak_module):
 
 def test_bucket_counts_empty_responses(soak_module):
     events = [
-        {"event": "turn_invoke", "session_key": "s", "harness": "cc-cli"},
+        {"event": "turn_invoke", "session_key": "-1000000000000_0", "harness": "cc-cli"},
         {
             "event": "turn_complete",
-            "session_key": "s",
+            "session_key": "-1000000000000_0",
             "duration": 1.0,
             "response_len": 0,
         },
-        {"event": "turn_invoke", "session_key": "s", "harness": "cc-cli"},
+        {"event": "turn_invoke", "session_key": "-1000000000000_0", "harness": "cc-cli"},
         {
             "event": "turn_complete",
-            "session_key": "s",
+            "session_key": "-1000000000000_0",
             "duration": 2.0,
             "response_len": 500,
         },
@@ -193,24 +193,59 @@ def test_bucket_counts_empty_responses(soak_module):
     assert b["empty_response"] == 1
 
 
+def test_load_events_drops_test_fixture_session_keys(soak_module, tmp_path):
+    """activity.jsonl picked up ~9000 leaked test fixture events (session_keys
+    like `1_2`, `100`, `stalled`, `aaa-bbb-…`) before `_isolate_production_paths`
+    landed. They distorted soak numbers (e.g. 42 of 43 `cc-cli` "manual kills"
+    were from session_key=`1_2`). load_events must drop those rows."""
+    log = write_log(
+        tmp_path,
+        [
+            {"ts": 1.0, "event": "turn_invoke", "session_key": "-1003884282041_30", "harness": "cc-cli"},
+            {"ts": 2.0, "event": "process_kill", "session_key": "1_2", "reason": "manual", "harness": "cc-cli"},
+            {"ts": 3.0, "event": "process_kill", "session_key": "100_200", "reason": "stalled"},
+            {"ts": 4.0, "event": "process_kill", "session_key": "stalled", "reason": "stalled"},
+            {"ts": 5.0, "event": "turn_invoke", "session_key": "aaa-bbb-ccc", "harness": "cc-sdk"},
+            {"ts": 6.0, "event": "turn_invoke", "session_key": "100", "harness": "cc-cli"},
+            {"ts": 7.0, "event": "lifecycle"},  # legitimately missing session_key
+        ],
+    )
+    events = soak_module.load_events(log, None, None)
+    sks = [e.get("session_key") for e in events]
+    assert sks == ["-1003884282041_30", None]
+
+
+def test_is_real_session_key_classification(soak_module):
+    assert soak_module.is_real_session_key("-1003884282041_30")
+    assert soak_module.is_real_session_key("8289585314_0")  # DM
+    assert soak_module.is_real_session_key(None)  # missing field is OK
+    assert soak_module.is_real_session_key("")
+    assert not soak_module.is_real_session_key("1_2")
+    assert not soak_module.is_real_session_key("100")
+    assert not soak_module.is_real_session_key("100_200")
+    assert not soak_module.is_real_session_key("stalled")
+    assert not soak_module.is_real_session_key("aaa-bbb-ccc")
+    assert not soak_module.is_real_session_key(42)  # non-string
+
+
 def test_bucket_does_not_flag_mop_delivered_zero_as_empty(soak_module):
     """cc-sdk-mop returns "" to the orchestrator after MOP has already pushed
     the message to Telegram. `response_len=0` paired with
     `mop_delivery_count>0` is the happy path, not a silent failure."""
     events = [
-        {"event": "turn_invoke", "session_key": "s", "harness": "cc-sdk-mop"},
+        {"event": "turn_invoke", "session_key": "-1000000000000_0", "harness": "cc-sdk-mop"},
         {
             "event": "turn_complete",
-            "session_key": "s",
+            "session_key": "-1000000000000_0",
             "harness": "cc-sdk-mop",
             "duration": 1.0,
             "response_len": 0,
             "mop_delivery_count": 1,
         },
-        {"event": "turn_invoke", "session_key": "s", "harness": "cc-sdk-mop"},
+        {"event": "turn_invoke", "session_key": "-1000000000000_0", "harness": "cc-sdk-mop"},
         {
             "event": "turn_complete",
-            "session_key": "s",
+            "session_key": "-1000000000000_0",
             "harness": "cc-sdk-mop",
             "duration": 1.0,
             "response_len": 0,
@@ -244,10 +279,10 @@ def test_render_table_handles_empty(soak_module):
 
 def test_render_table_basic(soak_module):
     events = [
-        {"event": "turn_invoke", "session_key": "s", "harness": "cc-sdk"},
+        {"event": "turn_invoke", "session_key": "-1000000000000_0", "harness": "cc-sdk"},
         {
             "event": "turn_complete",
-            "session_key": "s",
+            "session_key": "-1000000000000_0",
             "duration": 10.0,
             "response_len": 100,
         },
@@ -265,7 +300,7 @@ def test_main_emits_json(soak_module, tmp_path, capsys, monkeypatch):
             {
                 "ts": time.time(),
                 "event": "turn_invoke",
-                "session_key": "s",
+                "session_key": "-1000000000000_0",
                 "harness": "cc-sdk",
             }
         ],
@@ -288,7 +323,7 @@ def test_main_table(soak_module, tmp_path, capsys, monkeypatch):
             {
                 "ts": time.time(),
                 "event": "turn_invoke",
-                "session_key": "s",
+                "session_key": "-1000000000000_0",
                 "harness": "cc-sdk",
             }
         ],
@@ -306,17 +341,17 @@ def test_bucket_reads_legacy_claude_event_names(soak_module):
     claude_timeout. The current writer emits turn_*; soak must still parse the
     legacy names so old data isn't dropped."""
     events = [
-        {"event": "claude_invoke", "session_key": "s", "harness": "cc-cli"},
+        {"event": "claude_invoke", "session_key": "-1000000000000_0", "harness": "cc-cli"},
         {
             "event": "claude_complete",
-            "session_key": "s",
+            "session_key": "-1000000000000_0",
             "duration": 10.0,
             "response_len": 100,
             "harness": "cc-cli",
         },
-        {"event": "claude_invoke", "session_key": "s2", "harness": "cc-sdk"},
-        {"event": "claude_error", "session_key": "s2", "harness": "cc-sdk"},
-        {"event": "claude_timeout", "session_key": "s2", "harness": "cc-sdk"},
+        {"event": "claude_invoke", "session_key": "-1000000000002_2", "harness": "cc-sdk"},
+        {"event": "claude_error", "session_key": "-1000000000002_2", "harness": "cc-sdk"},
+        {"event": "claude_timeout", "session_key": "-1000000000002_2", "harness": "cc-sdk"},
     ]
     b = soak_module.bucket_by_harness(events)
     assert b["cc-cli"]["invokes"] == 1
@@ -340,7 +375,7 @@ def test_main_hides_noise_by_default(soak_module, tmp_path, capsys, monkeypatch)
             {
                 "ts": time.time(),
                 "event": "turn_invoke",
-                "session_key": "s",
+                "session_key": "-1000000000000_0",
                 "harness": "cc-sdk",
             },
         ],
