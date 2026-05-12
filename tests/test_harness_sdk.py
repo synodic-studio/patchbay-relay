@@ -53,8 +53,10 @@ class _StubClient:
     """Stand-in for ClaudeSDKClient.
 
     Constructed with a list of messages to yield (or an exception to raise
-    instead). Honors the same async context manager + `query()` +
-    `receive_response()` shape the harness consumes.
+    instead). Honors the async context manager + `query()` +
+    `receive_messages()` shape the harness consumes. `receive_response`
+    is kept as a thin alias because the older harness used it and a few
+    tests still poke that name directly.
     """
 
     def __init__(self, *, messages: list = None, raise_in_stream: Exception = None):
@@ -71,11 +73,17 @@ class _StubClient:
     async def query(self, prompt: str) -> None:
         self.queries.append(prompt)
 
-    async def receive_response(self) -> AsyncIterator:
+    async def receive_messages(self) -> AsyncIterator:
         if self._raise is not None:
             raise self._raise
         for msg in self._messages:
             yield msg
+
+    # Back-compat alias — the harness moved from receive_response to
+    # receive_messages when inflight push was wired (the message loop
+    # needs to keep draining past the first ResultMessage when more
+    # queries are in flight). Keep this so older tests still work.
+    receive_response = receive_messages
 
 
 def _make_request(*, tmp_path: Path, prompt: str = "hi", resume: str | None = None) -> TurnRequest:
@@ -388,10 +396,11 @@ class TestTimeout:
             async def __aenter__(self): return self
             async def __aexit__(self, *e): return None
             async def query(self, p): return None
-            async def receive_response(self):
+            async def receive_messages(self):
                 if False:  # never True; just makes this an async generator
                     yield None
                 await asyncio.sleep(10)
+            receive_response = receive_messages
 
         harness = ClaudeSdkHarness(max_timeout_seconds=0.2)
         events = _run(
@@ -502,10 +511,12 @@ class TestCancellation:
             async def query(self, prompt: str) -> None:
                 pass
 
-            async def receive_response(self):
+            async def receive_messages(self):
                 # Block forever — simulates a tool call with no events.
                 await asyncio.Event().wait()
                 yield  # pragma: no cover — sentinel for type checker
+
+            receive_response = receive_messages
 
         async def _go() -> str:
             with patch("claude_agent_sdk.ClaudeSDKClient", lambda options: _NeverEndingClient()):
@@ -542,3 +553,116 @@ class TestCancellation:
         harness = ClaudeSdkHarness()
         asyncio.run(harness.cancel())
         assert harness._task is None
+
+
+# ---------------------------------------------------------------------------
+# Inflight push — `push()` must route a new user message into a turn that
+# is still mid-stream, and the receive loop must keep draining until the
+# pushed query's ResultMessage arrives.
+# ---------------------------------------------------------------------------
+
+
+class TestInflightPush:
+    def test_push_returns_false_when_no_live_client(self, tmp_path):
+        """Outside of a turn, push() has nothing to inject into. The bridge
+        falls back to the queue in that case, so push must NOT raise."""
+        harness = ClaudeSdkHarness()
+        accepted = asyncio.run(harness.push("hello again"))
+        assert accepted is False
+        # And it didn't leak inflight-query bookkeeping across calls.
+        assert harness._inflight_queries == 0
+
+    def test_push_mid_turn_routes_into_same_client_and_drains_extra_result(self, tmp_path):
+        """The full path: while run_turn is between the initial query and
+        its ResultMessage, push() injects a second query; the harness
+        keeps draining receive_messages() until BOTH ResultMessages have
+        been consumed; the final TurnFinal aggregates text from both.
+
+        Without the inflight-push wiring, push() would either error
+        ("no live client") or the receive loop would exit on the first
+        ResultMessage and the response to the pushed query would be lost.
+        """
+
+        # A controllable async iterator so the test can interleave with
+        # the receive loop. The test pushes between the first
+        # AssistantMessage and the first ResultMessage.
+        gate_before_first_result = asyncio.Event()
+        push_done = asyncio.Event()
+
+        class _ControllableClient:
+            def __init__(self):
+                self.queries: list[str] = []
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc_info):
+                return None
+
+            async def query(self, prompt: str) -> None:
+                self.queries.append(prompt)
+
+            async def receive_messages(self):
+                # First query's stream: text then a ResultMessage, but
+                # we pause before the ResultMessage so the test can
+                # call push() while inflight_queries is still 1.
+                yield AssistantMessage(
+                    content=[TextBlock(text="A")], model="m", error=None
+                )
+                gate_before_first_result.set()
+                await push_done.wait()
+                yield _result_msg(session_id="s1", num_turns=1)
+                # Pushed query's stream: text then its own ResultMessage.
+                yield AssistantMessage(
+                    content=[TextBlock(text="B")], model="m", error=None
+                )
+                yield _result_msg(session_id="s1", num_turns=2)
+
+            receive_response = receive_messages
+
+        harness = ClaudeSdkHarness()
+        stub_factory = lambda options: _ControllableClient()  # noqa: E731
+
+        async def _go() -> list[TurnEvent]:
+            collected: list[TurnEvent] = []
+            with patch("claude_agent_sdk.ClaudeSDKClient", stub_factory):
+                gen = harness.run_turn(_make_request(tmp_path=tmp_path))
+
+                async def _drain():
+                    async for ev in gen:
+                        collected.append(ev)
+
+                drive = asyncio.create_task(_drain())
+                # Wait until the harness is between the first Assistant
+                # message and the first ResultMessage, then push.
+                await asyncio.wait_for(gate_before_first_result.wait(), timeout=2.0)
+                accepted = await harness.push("second user message")
+                assert accepted is True
+                push_done.set()
+                await asyncio.wait_for(drive, timeout=2.0)
+            return collected
+
+        events = asyncio.run(_go())
+        # Exactly one terminator, at the end, and it's a TurnFinal — the
+        # receive loop did NOT exit on the first ResultMessage.
+        assert _has_exactly_one_terminator(events)
+        assert isinstance(events[-1], TurnFinal)
+        # Both AssistantMessage text blocks made it into the final text.
+        assert "A" in events[-1].raw_text and "B" in events[-1].raw_text
+        # And bookkeeping cleared after the turn.
+        assert harness._inflight_queries == 0
+        assert harness._live_client is None
+
+    def test_push_after_error_terminator_does_not_hang(self, tmp_path):
+        """If the SDK raises mid-stream, run_turn yields a TurnError and
+        returns. _live_client is cleared in the finally so a subsequent
+        push() bounces (returns False) instead of hanging the bridge."""
+        harness = ClaudeSdkHarness()
+        # Trigger a corrupt_session terminator and confirm the harness
+        # tears down _live_client cleanly.
+        client = _StubClient(raise_in_stream=CLIJSONDecodeError("bad", ValueError("x")))
+        events = _run(harness, _make_request(tmp_path=tmp_path), lambda options: client)
+        assert isinstance(events[-1], TurnError)
+        assert harness._live_client is None
+        # Subsequent push has nothing to inject.
+        assert asyncio.run(harness.push("late")) is False

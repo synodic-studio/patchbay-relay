@@ -319,6 +319,62 @@ async def _cancel_session_async(state: "SessionState") -> None:
         pass
 
 
+async def _try_inflight_push(
+    state: SessionState,
+    text: str,
+    session_key: str,
+    label: str,
+) -> bool:
+    """Route `text` into the running session's live SDK client, if any.
+
+    Returns True iff the message was accepted by an in-flight cc-sdk turn
+    via `ClaudeSdkHarness.push()`. False means the caller should fall
+    back to the existing claim/queue path:
+      * no turn is processing for this session, OR
+      * the active harness isn't a ClaudeSdkHarness with a live client
+        (cc-sdk-mop, pi, between-turn states), OR
+      * push() raised — we don't want a broken inflight to swallow the
+        message silently.
+
+    Holds `state.lock` only long enough to read the harness + loop refs
+    so a concurrent _claim_or_queue can't slip a queued entry in
+    between our read and the push. The actual push happens off-lock
+    (it crosses event loops via run_coroutine_threadsafe and can block
+    briefly on the SDK transport write).
+    """
+    async with state.lock:
+        if not state.processing:
+            return False
+        harness = state.harness
+        worker_loop = state.worker_loop
+    if (
+        worker_loop is None
+        or worker_loop.is_closed()
+        or not isinstance(harness, ClaudeSdkHarness)
+        or harness._live_client is None
+    ):
+        return False
+    try:
+        future = asyncio.run_coroutine_threadsafe(harness.push(text), worker_loop)
+        accepted = await asyncio.wait_for(asyncio.wrap_future(future), timeout=5.0)
+    except (asyncio.TimeoutError, RuntimeError, Exception) as e:  # noqa: BLE001 — never let a failed push lose the message; bridge falls back to queue
+        logger.warning(
+            "Inflight push failed for %s (%s): %s — falling back to queue",
+            session_key,
+            label,
+            e,
+        )
+        return False
+    if accepted:
+        logger.info("Pushed %s inflight into running cc-sdk session for %s", label, session_key)
+        _log_activity(
+            f"{label}_pushed_inflight",
+            session_key=session_key,
+            text_len=len(text),
+        )
+    return bool(accepted)
+
+
 async def _claim_or_queue(state: SessionState, text: str, pending_id: str = "") -> tuple[str, int | None]:
     """Atomically claim the processing lane or enqueue the message.
 
@@ -1226,6 +1282,18 @@ async def _process_with_claude_turn(
     # queue until drain) survive a SIGTERM-mid-debounce — replay_pending()
     # picks up anything still on disk on the next bridge start.
     pending_id = save_pending(chat_id, thread_id, prompt, session_key)
+
+    # Inflight push: if a cc-sdk turn is already mid-stream for this
+    # session, route the new message straight into the live SDK client
+    # rather than queueing it. The receive loop in
+    # ClaudeSdkHarness.run_turn waits for every pushed query's
+    # ResultMessage before exiting, so the response to this prompt
+    # lands in the same Telegram delivery as the original turn — no
+    # second invocation, no "Queued (N)" reply.
+    if await _try_inflight_push(state, prompt, session_key, label):
+        clear_pending(pending_id)
+        return
+
     status, depth = await _claim_or_queue(state, prompt, pending_id)
 
     if status == "full":

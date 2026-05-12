@@ -67,6 +67,15 @@ class ClaudeSdkHarness:
         self._on_progress = on_progress
         # The current in-flight task, so cancel() can interrupt cleanly.
         self._task: asyncio.Task | None = None
+        # Live SDK client + outstanding-query count for inflight pushes.
+        # While `run_turn` is mid-stream, `push()` can inject a new user
+        # message into the same session. The receive loop keeps draining
+        # until every queued query has produced its ResultMessage, so
+        # nothing the model produces in response to a pushed message
+        # gets lost. Cleared in `run_turn`'s finally so a subsequent turn
+        # doesn't see a stale client.
+        self._live_client = None
+        self._inflight_queries: int = 0
 
     # ---- Public API ----
 
@@ -107,8 +116,18 @@ class ClaudeSdkHarness:
         try:
             async with asyncio.timeout(self._max_timeout):
                 async with ClaudeSDKClient(options=options) as client:
+                    # Expose the client so the bridge can push inflight
+                    # messages into this same session instead of queueing.
+                    # The receive loop watches `_inflight_queries`: each
+                    # `query()` (initial + pushes) increments, each
+                    # ResultMessage decrements, and the loop exits only
+                    # when the counter hits zero. That way a push at any
+                    # point during the turn still gets its response
+                    # drained on the same iterator.
+                    self._live_client = client
+                    self._inflight_queries = 1
                     await client.query(req.prompt)
-                    async for msg in client.receive_response():
+                    async for msg in client.receive_messages():
                         # Refresh the bridge's stall-detector timestamp on
                         # every SDK message so we get a steady per-event
                         # cadence signal.
@@ -160,8 +179,28 @@ class ClaudeSdkHarness:
                             if sid:
                                 captured_session_id = sid
                         elif isinstance(msg, ResultMessage):
-                            yield self._terminator_from_result(msg, text_chunks)
-                            return
+                            # One queued query (initial or pushed) just
+                            # finished. If others are still in flight,
+                            # keep draining; otherwise this is the
+                            # turn's terminator. Errors short-circuit
+                            # regardless so a rate-limit / max-turns
+                            # mid-stream still surfaces immediately.
+                            self._inflight_queries = max(
+                                0, self._inflight_queries - 1
+                            )
+                            terminator = self._terminator_from_result(
+                                msg, text_chunks
+                            )
+                            if (
+                                isinstance(terminator, TurnError)
+                                or self._inflight_queries <= 0
+                            ):
+                                yield terminator
+                                return
+                            # Pushed query is still mid-flight — keep
+                            # accumulating text into the same TurnFinal
+                            # and don't emit a terminator yet.
+                            continue
         except asyncio.TimeoutError:
             yield TurnError(
                 kind="timeout",
@@ -202,6 +241,8 @@ class ClaudeSdkHarness:
             # turn would let cancel() target an already-finished task and
             # leak the new one (the bug the assignment in run_turn fixes).
             self._task = None
+            self._live_client = None
+            self._inflight_queries = 0
 
         # Stream ended without ResultMessage. This is a contract violation
         # by the SDK, but we still need to terminate the stream cleanly.
@@ -226,6 +267,37 @@ class ClaudeSdkHarness:
             await task
         except (asyncio.CancelledError, Exception):  # noqa: BLE001 — silence everything during cancel
             pass
+
+    async def push(self, prompt: str) -> bool:
+        """Inject a user message into the live turn's SDK session.
+
+        Returns True iff a turn is currently mid-stream and the message
+        was queued for the model to act on. Returns False if there is
+        no live client (caller should fall back to bridge-level queue
+        or a fresh turn). Must be awaited on the same event loop the
+        client is running on — the bridge schedules it via
+        `asyncio.run_coroutine_threadsafe(harness.push(...),
+        state.worker_loop)`.
+
+        Each successful push increments `_inflight_queries` so the
+        receive loop in `run_turn` keeps draining until the pushed
+        query's ResultMessage arrives.
+        """
+        client = self._live_client
+        if client is None:
+            return False
+        # Increment BEFORE writing so a ResultMessage from the original
+        # query arriving on another scheduler tick can't decrement past
+        # this push and trigger an early-exit before our query is sent.
+        self._inflight_queries += 1
+        try:
+            await client.query(prompt)
+        except Exception:
+            # Roll back so the receive loop doesn't wait forever for a
+            # ResultMessage that will never come.
+            self._inflight_queries = max(0, self._inflight_queries - 1)
+            raise
+        return True
 
     async def open_channel(self, req: TurnRequest):
         """Open a long-lived ClaudeSdkChannel for inflight pushes.
