@@ -38,6 +38,32 @@ async def test_harness_constructs_mcp_and_registers_stop_hook(monkeypatch):
     assert "Stop" in options.hooks
 
 
+@pytest.mark.asyncio
+async def test_harness_wires_jsonl_auditor_into_mop(monkeypatch, tmp_path):
+    """The cc-sdk-mop harness must hand MOP a JsonlAuditor so every verdict
+    is recorded to disk. Without this, the flight recorder is empty even
+    while the bridge is happily filtering messages."""
+    from patchbay.harness.claude_sdk_mop import ClaudeSdkMopHarness
+    from mop import JsonlAuditor
+
+    monkeypatch.setenv("MOP_ANTHROPIC_API_KEY", "fake-key")
+
+    h = ClaudeSdkMopHarness()
+    _options, mop_instance = h.build_options(
+        bot=MagicMock(),
+        chat_id=42,
+        thread_id=None,
+        main_loop=asyncio.get_event_loop(),
+        rules_dir=None,
+    )
+    assert isinstance(mop_instance.auditor, JsonlAuditor)
+    # The autouse production-paths fixture redirects config.MOP_AUDIT_DIR
+    # to a tmp dir per test; the harness reads it through the config module
+    # at call time, so the auditor should land under the patched path.
+    from patchbay import config
+    assert mop_instance.auditor.log_dir == config.MOP_AUDIT_DIR
+
+
 # ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------

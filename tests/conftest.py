@@ -87,6 +87,15 @@ _PRODUCTION_PATH_GROUPS = [
         "file",
         [("patchbay.singleton", "LOCK_FILE")],
     ),
+    (
+        "mop_audit_dir",
+        "dir",
+        # Only patch the source. patchbay.harness.claude_sdk_mop reads through
+        # `config.MOP_AUDIT_DIR` (not via a bound import), so a patch here
+        # propagates without forcing the harness module to be imported during
+        # every test's setup.
+        [("patchbay.config", "MOP_AUDIT_DIR")],
+    ),
 ]
 
 

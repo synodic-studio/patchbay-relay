@@ -13,6 +13,7 @@ chat_models.json
 chat_efforts.json
 activity.jsonl
 activity.jsonl.*
+mop-audit/
 .tcc-paths
 scripts/tcc/.tcc-paths
 # Operational launchd plist for the TCC watcher carries absolute paths and

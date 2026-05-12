@@ -24,11 +24,12 @@ from pathlib import Path
 
 from claude_agent_sdk import ClaudeAgentOptions, HookMatcher
 
-from mop import MOP, build_haiku_evaluator, protocol_prompt
+from mop import MOP, JsonlAuditor, build_haiku_evaluator, protocol_prompt
 from mop import stop as mop_stop
 from mop.rules import load_rules
 from mop.types import Block
 
+from .. import config
 from ..mop_deliver import build_telegram_deliver
 from ..mop_verbose import build_server as build_mop_mcp_server
 from ..mop_verbose import is_verbose_enabled
@@ -95,7 +96,15 @@ class ClaudeSdkMopHarness:
         )
         evaluator = build_haiku_evaluator(rules=rules)
 
-        mop = MOP(rules=rules, evaluator=evaluator, deliver=deliver)
+        # Flight recorder: every verdict gets one JSONL line under
+        # config.MOP_AUDIT_DIR/YYYY-MM-DD.jsonl with the original text, the
+        # active rules at evaluation time, and the verdict + any rewrite or
+        # violations. Read through the config module (not a bound name) so
+        # tests' monkeypatch of config.MOP_AUDIT_DIR propagates here without
+        # having to also patch a copy on this module.
+        auditor = JsonlAuditor(config.MOP_AUDIT_DIR)
+
+        mop = MOP(rules=rules, evaluator=evaluator, deliver=deliver, auditor=auditor)
         # Pin the deliver closure on the MOP instance so the bridge can read
         # deliver.delivery_count to detect "MOP delivered nothing this turn"
         # and trigger the plain-text fallback safety net.
