@@ -1,14 +1,11 @@
 """ClaudeSdkHarness — runs a turn via the Claude Agent SDK.
 
-The SDK still uses the `claude` CLI as a subprocess under the hood, so
-the blast-radius story is the same as `ClaudeCliHarness`. What the SDK
-buys us is typed messages instead of raw NDJSON parsing: AssistantMessage
-content blocks already separate text/tool_use, ResultMessage carries
-session_id/cost as fields, AssistantMessage.error is a typed Literal
-with a `"rate_limit"` value (no string matching for the common case).
-
-Sits as a peer to ClaudeCliHarness. Tests below stub the SDK client
-so they don't burn API credits.
+The SDK uses the `claude` CLI as a subprocess under the hood but exposes
+typed messages instead of raw NDJSON: AssistantMessage content blocks
+already separate text/tool_use, ResultMessage carries session_id/cost as
+fields, AssistantMessage.error is a typed Literal with a `"rate_limit"`
+value (no string matching for the common case). Tests below stub the
+SDK client so they don't burn API credits.
 
 See docs/HARNESS-DESIGN.md for the protocol contract.
 """
@@ -66,7 +63,7 @@ class ClaudeSdkHarness:
         self._max_turns_default = max_turns_default
         # External observer (the bridge) calls this on every SDK message
         # so SessionState.last_event_at advances and the stall detector
-        # has the same per-event cadence signal it gets from cc-cli.
+        # sees a steady per-event cadence signal.
         self._on_progress = on_progress
         # The current in-flight task, so cancel() can interrupt cleanly.
         self._task: asyncio.Task | None = None
@@ -113,8 +110,8 @@ class ClaudeSdkHarness:
                     await client.query(req.prompt)
                     async for msg in client.receive_response():
                         # Refresh the bridge's stall-detector timestamp on
-                        # every SDK message — same cadence guarantee as
-                        # cc-cli's per-stdout-line `on_progress` callback.
+                        # every SDK message so we get a steady per-event
+                        # cadence signal.
                         if self._on_progress is not None:
                             try:
                                 self._on_progress()

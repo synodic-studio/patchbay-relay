@@ -68,7 +68,7 @@ def test_compact_result_succeeded_minimal():
 
 def test_only_cc_sdk_supports_context_query_today():
     assert CAPABILITIES_BY_NAME["cc-sdk"].supports_context_query is True
-    for name in ("cc-cli", "cc-sdk-mop", "pi"):
+    for name in ("cc-sdk-mop", "pi"):
         assert CAPABILITIES_BY_NAME[name].supports_context_query is False, (
             f"{name} should not advertise supports_context_query yet"
         )
@@ -76,7 +76,7 @@ def test_only_cc_sdk_supports_context_query_today():
 
 def test_only_cc_sdk_supports_compact_today():
     assert CAPABILITIES_BY_NAME["cc-sdk"].supports_compact is True
-    for name in ("cc-cli", "cc-sdk-mop", "pi"):
+    for name in ("cc-sdk-mop", "pi"):
         assert CAPABILITIES_BY_NAME[name].supports_compact is False
 
 
@@ -243,7 +243,7 @@ def test_compact_passes_instructions_through(fake_sdk, tmp_path):
 def test_resolve_harness_for_inquiry_handles_cc_sdk_mop(monkeypatch, tmp_path):
     """Regression: /compact and /context once returned 'No harness configured'
     when the chat was on cc-sdk-mop because the resolver only handled
-    cc-sdk/cc-cli/pi. The resolver must return a non-None tuple so cmd_compact
+    cc-sdk/pi. The resolver must return a non-None tuple so cmd_compact
     can fall through to the run_claude-based fallback path.
     """
     from patchbay.commands import context as _ctx_cmd

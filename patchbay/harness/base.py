@@ -137,7 +137,7 @@ TurnEvent = Union[TextDelta, ToolUse, ToolResult, TurnError, TurnFinal]
 class Harness(Protocol):
     """A coding-agent backend.
 
-    Implementations: `ClaudeCliHarness`, `ClaudeSdkHarness` (phase 2),
+    Implementations: `ClaudeSdkHarness`, `ClaudeSdkMopHarness`, `PiHarness`,
     future codex/cursor harnesses.
 
     Contract:

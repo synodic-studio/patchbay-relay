@@ -18,7 +18,6 @@ from patchbay.config import CLAUDE_PATH, MAX_TIMEOUT, QUOTA_HIT_PREFIX
 from patchbay.efforts import resolve_effort
 from patchbay.harness import (
     CAPABILITIES_BY_NAME,
-    ClaudeCliHarness,
     ClaudeSdkHarness,
     ClaudeSdkMopHarness,
     TurnRequest,
@@ -70,10 +69,6 @@ def _resolve_harness_for_inquiry(session_key: str):
     if harness_name == "cc-sdk":
         harness = ClaudeSdkHarness(
             cli_path=CLAUDE_PATH, max_timeout_seconds=MAX_TIMEOUT
-        )
-    elif harness_name == "cc-cli":
-        harness = ClaudeCliHarness(
-            claude_path=CLAUDE_PATH, max_timeout_seconds=MAX_TIMEOUT
         )
     elif harness_name == "cc-sdk-mop":
         # cc-sdk-mop has no run_turn/get_context/compact — its dispatch
@@ -186,7 +181,8 @@ async def _fallback_compact(
 async def cmd_context(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show current context-window usage for this chat's session.
 
-    cc-sdk only today (cc-cli/pi advertise supports_context_query=False).
+    cc-sdk only today (pi advertises supports_context_query=False;
+    cc-sdk-mop has no run_turn so context query routes through cc-sdk).
     For unsupported harnesses, suggest /harness cc-sdk.
     """
     chat_id = update.effective_chat.id

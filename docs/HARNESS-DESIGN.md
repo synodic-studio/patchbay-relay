@@ -1,7 +1,15 @@
 # Harness Design — Patchbay
 
 The seam that lets patchbay run multiple coding-agent backends (Claude
-Code CLI, Claude Agent SDK, codex/pi, cursor, …) behind one interface.
+Agent SDK, pi, codex/cursor, …) behind one interface.
+
+> **2026-05-11 — cc-cli removed.** The `claude -p` subprocess harness was
+> retired after a live-soak comparison: cc-sdk completed every turn type
+> cc-cli could, with ~35% lower median latency. The protocol seam, the
+> per-chat `/harness` selector, and the `harness=` activity field stay —
+> they're now load-bearing for cc-sdk / cc-sdk-mop / pi only. The phase
+> history below is preserved for context and refers to code paths that no
+> longer exist.
 
 ## Status
 
@@ -15,8 +23,8 @@ Code CLI, Claude Agent SDK, codex/pi, cursor, …) behind one interface.
 | 3a — Backend-agnostic cancel | ✅ | `SessionState.harness` + `worker_loop` fields. `_cancel_session_async` dispatches `proc.kill()` for cc-cli or `run_coroutine_threadsafe(harness.cancel(), worker_loop)` for cc-sdk. `_iter_active_sessions` is the new backend-agnostic snapshot used by /ping, the stall detector, /restart, shutdown. 582 tests. |
 | 3b — cc-sdk dispatch | ✅ | `run_claude` instantiates `ClaudeSdkHarness` when cc-sdk is selected. SDK harness gained `on_progress` so `last_event_at` refreshes per SDK message. /kill, stall detector, shutdown all route cancellation through the unified helper. 583 tests. |
 | 3c — Soak tooling | ✅ | `scripts/harness_soak.py` + `/soak [since] [session]` Telegram command. Buckets `activity.jsonl` rows by `harness=` field, reports turn counts, outcome rates, p50/p95 duration, OOM/quota/stall counts. 18 tests. |
-| 3 — Live soak | running | cc-sdk active in synodic-kit topic; `/soak` for live readout. |
-| 4 — Flip default | future | `STARGATE_DEFAULT_HARNESS=cc-sdk`. Keep `cc-cli` as fallback. |
+| 3 — Live soak | ✅ | cc-sdk validated against cc-cli; cc-sdk ~35% faster median. |
+| 4 — Flip default + retire cc-cli | ✅ | `PATCHBAY_DEFAULT_HARNESS=cc-sdk`. `claude_cli.py` and all cc-cli code paths deleted; protocol seam retained for cc-sdk / cc-sdk-mop / pi. |
 | 5a — Pi harness | ✅ | `patchbay/harness/pi.py` — wraps `pi -p --mode json`. Resume via `--session <id>`, multi-model via `--model PROVIDER/ID`, classified errors from `stopReason==error`. 29 tests + smoke-tested end-to-end with deepseek (cost, session resume, BANANA recall). |
 | 5b — Aider harness | ✅ | `patchbay/harness/aider.py` — wraps `aider --message` with banner stripping. session_id is the chat-history file path under `aider-history/`. Default model `openrouter/deepseek/deepseek-chat`, override via `STARGATE_AIDER_MODEL` env or per-chat `/model`. 24 tests + smoke-tested with deepseek (banner strip + cost parse). |
 | 5c — OpenCode harness | ✅ | `patchbay/harness/opencode.py` — wraps `opencode run --format json --pure --dangerously-skip-permissions`. Sessions are first-class `ses_*` UUIDs, resumed via `--session`. Effort maps to `--variant`. 21 tests + smoke-tested with deepseek (resume across two turns). |

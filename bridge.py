@@ -114,7 +114,6 @@ from patchbay.sessions import (  # noqa: E402
 )
 from patchbay.harness import (  # noqa: E402
     CAPABILITIES_BY_NAME,
-    ClaudeCliHarness,
     ClaudeSdkHarness,
     ToolUse,  # noqa: F401 — re-exported for tests
     TurnError,
@@ -204,9 +203,9 @@ class QueuedMessage(NamedTuple):
 class SessionState:
     """All per-session runtime state, keyed by session_key in `_sessions`."""
 
-    proc: subprocess.Popen | None = None  # cc-cli only; mirrored by harness's proc_setter
+    proc: subprocess.Popen | None = None  # subprocess harnesses (pi) only; mirrored by harness's proc_setter
     harness: object | None = None  # whichever harness instance is driving the active turn
-    worker_loop: asyncio.AbstractEventLoop | None = None  # loop owned by _drive_harness_sync; needed for cross-loop cancel of cc-sdk
+    worker_loop: asyncio.AbstractEventLoop | None = None  # loop owned by _drive_harness_sync; needed for cross-loop cancel of SDK-based harnesses
     started_at: float | None = None  # time.time() when processing began
     last_event_at: float | None = None  # last time stall-detector saw activity
     queue: list[QueuedMessage] = field(default_factory=list)  # debounced messages awaiting processing
@@ -236,9 +235,10 @@ def _get_session_state(key: str) -> SessionState:
 def _iter_active_procs() -> list[tuple[str, subprocess.Popen]]:
     """Snapshot of (session_key, proc) for every session with a live subprocess.
 
-    cc-cli only — sessions where the harness owns its own subprocess
-    (cc-sdk) won't appear here. Use `_iter_active_sessions` for the
-    backend-agnostic view (e.g. /ping, stall detector).
+    Subprocess harnesses only (pi) — SDK-based sessions where the harness
+    owns its own subprocess (cc-sdk) won't appear here. Use
+    `_iter_active_sessions` for the backend-agnostic view (e.g. /ping,
+    stall detector).
     """
     return [(k, s.proc) for k, s in _sessions.items() if s.proc is not None]
 
@@ -246,11 +246,11 @@ def _iter_active_procs() -> list[tuple[str, subprocess.Popen]]:
 def _iter_active_sessions() -> list[tuple[str, "SessionState"]]:
     """Snapshot of (session_key, state) for every session running a turn,
     regardless of harness. Used by /ping, the stall detector, /restart,
-    and graceful shutdown so cc-sdk turns are visible too.
+    and graceful shutdown so SDK turns are visible too.
 
-    A session counts as active when either `state.proc` is set (cc-cli)
-    or `state.harness` is set (cc-sdk, or cc-cli before the proc is
-    spawned and after it is reaped). Either signal alone is sufficient.
+    A session counts as active when either `state.proc` is set
+    (subprocess harnesses) or `state.harness` is set (SDK harnesses).
+    Either signal alone is sufficient.
     """
     return [
         (k, s)
@@ -260,10 +260,11 @@ def _iter_active_sessions() -> list[tuple[str, "SessionState"]]:
 
 
 async def _interrupt_session_async(state: "SessionState") -> None:
-    """Soft interrupt — SIGINT for cc-cli, task-cancel for cc-sdk.
+    """Soft interrupt — SIGINT for subprocess harnesses, task-cancel for SDK.
 
-    cc-cli gets a chance to finish cleanly; cc-sdk behaves the same as
-    _cancel_session_async since the SDK doesn't expose a gentler signal.
+    Subprocess harnesses (pi) get a chance to finish cleanly; SDK
+    harnesses behave the same as _cancel_session_async since the SDK
+    doesn't expose a gentler signal.
     """
     import signal as _signal
 
@@ -275,21 +276,22 @@ async def _interrupt_session_async(state: "SessionState") -> None:
             pass
         return
 
-    # cc-sdk: no finer-grained interrupt available — fall through to cancel.
+    # SDK harness: no finer-grained interrupt available — fall through to cancel.
     await _cancel_session_async(state)
 
 
 async def _cancel_session_async(state: "SessionState") -> None:
-    """Hard cancel — SIGKILL for cc-cli, task-cancel for cc-sdk.
+    """Hard cancel — SIGKILL for subprocess harnesses, task-cancel for SDK.
 
     Backend-agnostic dispatch:
-      * cc-cli — `state.proc` is set; SIGKILL via `proc.kill()`. Sync,
-        immediate; the harness's drain returns and `_drive_harness_sync`
-        exits naturally.
-      * cc-sdk — no subprocess handle the bridge can reach (the SDK
-        owns it). Schedule `harness.cancel()` on the worker-thread loop
-        captured in `state.worker_loop` via `run_coroutine_threadsafe`,
-        await with a short timeout so a wedged loop can't hang us.
+      * subprocess harnesses (pi) — `state.proc` is set; SIGKILL via
+        `proc.kill()`. Sync, immediate; the harness's drain returns and
+        `_drive_harness_sync` exits naturally.
+      * SDK harnesses (cc-sdk, cc-sdk-mop) — no subprocess handle the
+        bridge can reach (the SDK owns it). Schedule `harness.cancel()`
+        on the worker-thread loop captured in `state.worker_loop` via
+        `run_coroutine_threadsafe`, await with a short timeout so a
+        wedged loop can't hang us.
 
     Idempotent and silent on error — callers (cmd_kill, stall detector,
     shutdown) treat this as a fire-and-forget request.
@@ -446,8 +448,8 @@ def _drive_harness_sync(
     When `state` is given, we mirror the harness instance and the
     worker-thread's event loop into it for the duration of the turn.
     `_cancel_session_async` reads those fields to dispatch a cancel:
-    cc-cli is killed via `state.proc.kill()` (same as before), cc-sdk
-    is cancelled via `run_coroutine_threadsafe(harness.cancel(),
+    subprocess harnesses are killed via `state.proc.kill()`, SDK
+    harnesses are cancelled via `run_coroutine_threadsafe(harness.cancel(),
     state.worker_loop)`. The fields are cleared in `finally`.
     """
     events: list = []
@@ -475,7 +477,7 @@ def run_claude(
     model: str | None = None,
     max_turns_override: int | None = None,
 ) -> str:
-    """Invoke claude via ClaudeCliHarness, translate the event stream to a string.
+    """Invoke a coding-agent harness for one turn, translate events to a string.
 
     max_turns_override: when set, replaces MAX_TURNS for this invocation
     only. Used by the OOM self-heal path (see patchbay/self_heal.py) to
@@ -594,11 +596,10 @@ def run_claude(
         model = resolve_model(session_key)
     effort = resolve_effort(session_key)
 
-    # Resolve harness: per-chat override > DEFAULT_HARNESS env. Both
-    # cc-cli and cc-sdk are dispatched as of phase 3b — selection is
-    # logged on every activity entry under `harness=` and
-    # `harness_requested=` so the live-soak comparison can grep
-    # behavioural diffs.
+    # Resolve harness: per-chat override > DEFAULT_HARNESS env. Every
+    # supported harness is dispatched directly — selection is logged on
+    # every activity entry under `harness=` and `harness_requested=` so
+    # cross-harness comparison stays possible.
     harness_name = get_chat_harness(session_key) or DEFAULT_HARNESS
     if harness_name not in VALID_HARNESSES:
         logger.warning(
@@ -784,8 +785,8 @@ def run_claude(
         )
     elif effective_harness == "pi":
         # Pi (badlogicgames/pi) — multi-model coding agent. Uses its own
-        # session storage (~/.pi/agent/sessions). Subprocess like cc-cli
-        # so proc_setter mirrors into state.proc for /kill / stall.
+        # session storage (~/.pi/agent/sessions). Subprocess-based, so
+        # proc_setter mirrors into state.proc for /kill / stall.
         from patchbay.harness import PiHarness
 
         harness = PiHarness(
@@ -794,14 +795,8 @@ def run_claude(
             proc_setter=_proc_setter,
         )
     else:
-        harness = ClaudeCliHarness(
-            claude_path=CLAUDE_PATH,
-            max_timeout_seconds=MAX_TIMEOUT,
-            on_progress=_on_progress,
-            proc_setter=_proc_setter,
-            max_turns_default=(
-                max_turns_override if max_turns_override is not None else MAX_TURNS
-            ),
+        raise RuntimeError(
+            f"Unhandled harness {effective_harness!r} after validation. Bug."
         )
     req = TurnRequest(
         prompt=message,
@@ -1600,21 +1595,20 @@ async def _conflict_storm_watcher() -> None:
 async def _stall_detector() -> None:
     """Background task: kill claude processes that have gone silent.
 
-    Watches `state.last_event_at`, which the harness's `on_progress`
-    callback (wired into `ClaudeCliHarness._drain_streams`) refreshes on
-    every line of claude's JSON-mode output. A real hang — including a
-    process blocked on a TCC dialog that nobody can click — produces
-    zero events; the reader's timestamp stops advancing and we kill
-    after STALL_TIMEOUT seconds of silence.
+    Watches `state.last_event_at`, which each harness's `on_progress`
+    callback refreshes on every event from the underlying agent. A real
+    hang — including a process blocked on a TCC dialog that nobody can
+    click — produces zero events; the timestamp stops advancing and we
+    kill after STALL_TIMEOUT seconds of silence.
     """
     while True:
         await asyncio.sleep(STALL_POLL_INTERVAL)
         now = time.time()
-        # Iterate by harness presence so cc-sdk turns are watched too.
+        # Iterate by harness presence so SDK turns are watched too.
         for key, state in _iter_active_sessions():
             proc = state.proc
-            # cc-cli optimization: if the proc already exited, the harness
-            # is in its wrap-up phase — clear the timer and move on.
+            # Subprocess optimization: if the proc already exited, the
+            # harness is in its wrap-up phase — clear the timer and move on.
             if proc is not None and proc.poll() is not None:
                 state.last_event_at = None
                 continue
@@ -1700,7 +1694,7 @@ async def post_init(app: Application) -> None:
         BotCommand("clearnew", "Start a fresh conversation"),
         BotCommand("setproject", "Set project dir (relative to ~/Developer)"),
         BotCommand("project", "Show current project dir"),
-        BotCommand("harness", "Set agent backend (cc-cli/cc-sdk/cc-sdk-mop/pi)"),
+        BotCommand("harness", "Set agent backend (cc-sdk/cc-sdk-mop/pi)"),
         BotCommand("model", "Set model (opus/sonnet/haiku)"),
         BotCommand("effort", "Set effort level (low/medium/high/xhigh/max)"),
         BotCommand("remote_control", "Start/stop claude remote-control in project dir"),

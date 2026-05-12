@@ -1,11 +1,9 @@
 """Tests for `_cancel_session_async` — the harness-agnostic cancel helper.
 
-cc-cli sessions cancel via `state.proc.kill()` (sync, immediate). cc-sdk
-sessions cancel via `run_coroutine_threadsafe(state.harness.cancel(),
-state.worker_loop)` because the harness's task lives in a separate event
-loop on a worker thread.
-
-Phase 3a of.
+Subprocess harnesses (pi) cancel via `state.proc.kill()` (sync, immediate).
+SDK harnesses (cc-sdk, cc-sdk-mop) cancel via
+`run_coroutine_threadsafe(state.harness.cancel(), state.worker_loop)`
+because the harness's task lives in a separate event loop on a worker thread.
 """
 
 from __future__ import annotations
@@ -25,12 +23,12 @@ def _isolate_sessions(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# cc-cli path: `state.proc` set, `_cancel_session_async` SIGKILLs the proc
+# Subprocess path: `state.proc` set, `_cancel_session_async` SIGKILLs the proc
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_cc_cli_path_kills_proc():
+async def test_subprocess_path_kills_proc():
     state = bridge.SessionState()
     state.proc = MagicMock()
     state.proc.pid = 12345
@@ -41,7 +39,7 @@ async def test_cc_cli_path_kills_proc():
 
 
 @pytest.mark.asyncio
-async def test_cc_cli_path_swallows_oserror_on_kill():
+async def test_subprocess_path_swallows_oserror_on_kill():
     state = bridge.SessionState()
     state.proc = MagicMock()
     state.proc.kill.side_effect = OSError("already gone")
@@ -137,15 +135,15 @@ async def test_no_harness_no_proc_is_noop():
 
 
 @pytest.mark.asyncio
-async def test_cc_cli_takes_precedence_over_cc_sdk():
-    """If both proc and harness are set (cc-cli mid-run), proc.kill() wins
-    and we don't try to schedule across loops."""
+async def test_subprocess_takes_precedence_over_sdk():
+    """If both proc and harness are set (subprocess mid-run), proc.kill()
+    wins and we don't try to schedule across loops."""
     worker_loop, worker_thread = _spin_up_worker_loop()
     try:
         sdk_cancel_called = False
 
         class _ShouldNotCancel:
-            name = "cc-cli"
+            name = "pi"
 
             async def cancel(self) -> None:
                 nonlocal sdk_cancel_called

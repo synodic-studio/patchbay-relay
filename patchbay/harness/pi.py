@@ -5,8 +5,8 @@ JSON streaming protocol very similar to claude's. It uses any of a
 dozen model providers (anthropic, openai, deepseek, openrouter, ...)
 and stores per-cwd sessions in ~/.pi/agent/sessions.
 
-Phase 5a of. Same shape as ClaudeCliHarness — sync Popen,
-drain stdout/stderr, parse JSON-lines after the proc exits.
+Subprocess harness — sync Popen, drain stdout/stderr, parse JSON-lines
+after the proc exits.
 
 CLI surface mapping (see `pi --help`):
 

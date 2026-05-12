@@ -183,6 +183,10 @@ RESTART_NOTIFY_FILE = BASE_DIR / "restart_notify.json"
 CHAT_PROJECTS_FILE = BASE_DIR / "chat_projects.json"
 FORGE_QUEUE_DIR = Path(PA_PLUGIN_DIR) / "agents" / "dev" / "forge" / "queue"
 ACTIVITY_LOG = BASE_DIR / "activity.jsonl"
+# MOP audit log: one JSONL line per verdict (Accepted / Rewritten / Rejected /
+# AcceptedFailedOpen), rotated daily by date. Populated only when the
+# cc-sdk-mop harness is in use; other harnesses leave the dir empty.
+MOP_AUDIT_DIR = BASE_DIR / "mop-audit"
 PHOTO_DIR = Path(tempfile.gettempdir()) / "claude-telegram-photos"
 PHOTO_DIR.mkdir(exist_ok=True)
 DOC_DIR = Path(tempfile.gettempdir()) / "claude-telegram-docs"
@@ -195,13 +199,13 @@ MAX_TURNS = _env_int("MAX_TURNS", "500", min_value=1)
 MAX_WORKERS = _env_int("MAX_WORKERS", "4", min_value=1)
 
 # --- Harness ---
-# Pluggable agent backend. cc-cli wraps `claude -p`, cc-sdk uses the Claude
-# Agent SDK, pi wraps badlogicgames/pi (multi-model). Per-chat override lives
-# in chat_projects.json under the "harness" key; this value is the fallback
-# when a topic has no override.
-VALID_HARNESSES = ("cc-cli", "cc-sdk", "cc-sdk-mop", "pi")
+# Pluggable agent backend. cc-sdk uses the Claude Agent SDK, cc-sdk-mop layers
+# Model Output Protocol filtering on top, pi wraps badlogicgames/pi
+# (multi-model). Per-chat override lives in chat_projects.json under the
+# "harness" key; this value is the fallback when a topic has no override.
+VALID_HARNESSES = ("cc-sdk", "cc-sdk-mop", "pi")
 DEFAULT_HARNESS = _env_with_legacy(
-    "PATCHBAY_DEFAULT_HARNESS", "STARGATE_DEFAULT_HARNESS", "cc-cli"
+    "PATCHBAY_DEFAULT_HARNESS", "STARGATE_DEFAULT_HARNESS", "cc-sdk"
 )
 if DEFAULT_HARNESS not in VALID_HARNESSES:
     raise SystemExit(

@@ -213,12 +213,12 @@ class TestChatHarness:
         patchbay.projects._save_chat_projects(
             {"chat_1": {"path": "Fanta", "agent": "iron-temple"}}
         )
-        patchbay.projects.set_chat_harness("chat_1", "cc-cli")
+        patchbay.projects.set_chat_harness("chat_1", "pi")
         loaded = patchbay.projects._load_chat_projects()
         assert loaded["chat_1"] == {
             "path": "Fanta",
             "agent": "iron-temple",
-            "harness": "cc-cli",
+            "harness": "pi",
         }
 
     def test_set_none_clears_only_harness_key(self):

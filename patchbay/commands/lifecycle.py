@@ -38,7 +38,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/project - Show current project dir\n"
         "/model - Set model (opus/sonnet/haiku) or prefix with !s !o !h\n"
         "/effort - Set effort level (low/medium/high/xhigh/max)\n"
-        "/harness - Show or set the agent backend (cc-cli/cc-sdk)\n"
+        "/harness - Show or set the agent backend (cc-sdk/cc-sdk-mop/pi)\n"
         "/remote-control - Start claude remote-control in this topic's project dir\n"
         "/remote-control stop - Stop remote-control\n"
         "/kill - Kill active Claude process\n"
@@ -69,7 +69,7 @@ async def cmd_clearnew(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Soft interrupt — SIGINT for cc-cli, task-cancel for cc-sdk.
+    """Soft interrupt — SIGINT for subprocess harnesses, task-cancel for SDK.
 
     Gives Claude a chance to finish cleanly. Use /kill if this doesn't work.
     """
@@ -85,7 +85,7 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     proc = state.proc
     pid = proc.pid if proc is not None else -1
-    harness_name = getattr(state.harness, "name", "cc-cli")
+    harness_name = getattr(state.harness, "name", "unknown")
 
     await bridge._interrupt_session_async(state)
     await bridge._release_processing(state)
@@ -107,7 +107,7 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def cmd_kill(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Hard kill — SIGKILL for cc-cli, task-cancel for cc-sdk.
+    """Hard kill — SIGKILL for subprocess harnesses, task-cancel for SDK.
 
     Backend-agnostic via `_cancel_session_async`. Use /cancel first for a
     graceful interrupt; /kill when that doesn't work.
@@ -122,10 +122,11 @@ async def cmd_kill(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("No active Claude process in this chat.")
         return
 
-    # Capture pid before cancel for logging — cc-sdk has no proc, log -1.
+    # Capture pid before cancel for logging — SDK harnesses have no
+    # proc on the bridge side, log -1 in that case.
     proc = state.proc
     pid = proc.pid if proc is not None else -1
-    harness_name = getattr(state.harness, "name", "cc-cli")
+    harness_name = getattr(state.harness, "name", "unknown")
 
     await bridge._cancel_session_async(state)
     await bridge._release_processing(state)

@@ -41,11 +41,11 @@ sessions: dict[str, "SessionState"] = {}
 def iter_active_sessions() -> list[tuple[str, "SessionState"]]:
     """Snapshot of (session_key, state) for every session running a turn,
     regardless of harness. Used by /ping, the stall detector, /restart,
-    and graceful shutdown so cc-sdk turns are visible too.
+    and graceful shutdown so SDK turns are visible too.
 
-    A session counts as active when either `state.proc` is set (cc-cli)
-    or `state.harness` is set (cc-sdk, or cc-cli before the proc is
-    spawned and after it is reaped). Either signal alone is sufficient.
+    A session counts as active when either `state.proc` is set
+    (subprocess harnesses) or `state.harness` is set (SDK harnesses).
+    Either signal alone is sufficient.
     """
     return [
         (k, s)
