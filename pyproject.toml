@@ -32,7 +32,7 @@ asyncio_mode = "auto"
 
 [tool.coverage.run]
 source = ["bridge", "patchbay"]
-omit = ["tests/*", "tcc-approve.py", "validate.py"]
+omit = ["tests/*", "scripts/tcc/*", "validate.py"]
 
 [tool.coverage.report]
 show_missing = true

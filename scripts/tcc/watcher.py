@@ -2,11 +2,19 @@
 """TCC prompt watcher — fires Telegram alert the instant macOS shows a TCC dialog.
 
 Runs as a persistent launchd daemon. Streams system log from tccd and sends
-an immediate Telegram message when a consent dialog appears, so you know
-within seconds instead of finding out an hour later.
+an immediate Telegram message when a consent dialog appears, so the operator
+knows within seconds instead of finding out an hour later that a daemon was
+silently stuck waiting on approval.
+
+Configuration via environment variables:
+  TCC_WATCHER_CHAT_ID     Telegram chat to alert (required)
+  TCC_WATCHER_THREAD_ID   Forum topic id within the chat (optional)
+  TELEGRAM_BOT_TOKEN      Bot token (optional — falls back to `pass show telegram-bot-token`)
+  TCC_WATCHER_CAFILE      Path to a PEM cert bundle (optional — auto-detects certifi/system CAs)
 """
 
 import json
+import os
 import re
 import ssl
 import subprocess
@@ -16,8 +24,6 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-CHAT_ID = -1003884282041
-THREAD_ID = 30
 DEDUP_WINDOW_S = 120
 
 # Phrases that appear when tccd actually shows a dialog to the user.
@@ -48,13 +54,21 @@ def _ssl_ctx() -> ssl.SSLContext:
     ctx = ssl.create_default_context()
     if ctx.cert_store_stats().get("x509_ca", 0) > 0:
         return ctx
-    # Python 3.14 framework has an empty cert store in launchd envs.
-    # Try certifi bundle first, then /etc/ssl/cert.pem.
-    for cafile in (
-        "/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/site-packages/certifi/cacert.pem",
-        "/etc/ssl/cert.pem",
-    ):
-        if Path(cafile).is_file():
+    # The Python.org framework build under launchd ships with an empty cert
+    # store. Fall back through explicit override → certifi (if importable)
+    # → common system bundle locations.
+    candidates: list[str] = []
+    override = os.environ.get("TCC_WATCHER_CAFILE")
+    if override:
+        candidates.append(override)
+    try:
+        import certifi
+        candidates.append(certifi.where())
+    except ImportError:
+        pass
+    candidates.extend(["/etc/ssl/cert.pem", "/usr/local/etc/openssl@3/cert.pem"])
+    for cafile in candidates:
+        if cafile and Path(cafile).is_file():
             ctx.load_verify_locations(cafile=cafile)
             if ctx.cert_store_stats().get("x509_ca", 0) > 0:
                 return ctx
@@ -62,6 +76,9 @@ def _ssl_ctx() -> ssl.SSLContext:
 
 
 def _bot_token() -> str:
+    env = os.environ.get("TELEGRAM_BOT_TOKEN")
+    if env:
+        return env.strip()
     try:
         r = subprocess.run(
             ["pass", "show", "telegram-bot-token"],
@@ -71,17 +88,15 @@ def _bot_token() -> str:
             return r.stdout.strip().split("\n")[0]
     except Exception:
         pass
-    import os
-    return os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    return ""
 
 
-def _send(text: str, token: str) -> None:
+def _send(text: str, token: str, chat_id: int, thread_id: int | None) -> None:
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = json.dumps({
-        "chat_id": CHAT_ID,
-        "message_thread_id": THREAD_ID,
-        "text": text,
-    }).encode()
+    body: dict = {"chat_id": chat_id, "text": text}
+    if thread_id is not None:
+        body["message_thread_id"] = thread_id
+    payload = json.dumps(body).encode()
     try:
         req = urllib.request.Request(
             url, data=payload, headers={"Content-Type": "application/json"}
@@ -117,6 +132,27 @@ def _is_prompt_line(line: str) -> bool:
 
 
 def watch() -> None:
+    chat_id_str = os.environ.get("TCC_WATCHER_CHAT_ID", "").strip()
+    if not chat_id_str:
+        print("[tcc-watcher] ERROR: TCC_WATCHER_CHAT_ID not set — exiting",
+              file=sys.stderr, flush=True)
+        sys.exit(1)
+    try:
+        chat_id = int(chat_id_str)
+    except ValueError:
+        print(f"[tcc-watcher] ERROR: TCC_WATCHER_CHAT_ID is not an integer ({chat_id_str!r})",
+              file=sys.stderr, flush=True)
+        sys.exit(1)
+
+    thread_str = os.environ.get("TCC_WATCHER_THREAD_ID", "").strip()
+    thread_id: int | None = None
+    if thread_str:
+        try:
+            thread_id = int(thread_str)
+        except ValueError:
+            print(f"[tcc-watcher] WARNING: TCC_WATCHER_THREAD_ID is not an integer ({thread_str!r}); ignoring",
+                  file=sys.stderr, flush=True)
+
     token = _bot_token()
     if not token:
         print("[tcc-watcher] ERROR: no bot token — exiting", file=sys.stderr, flush=True)
@@ -145,11 +181,11 @@ def watch() -> None:
                 last_alerted[binary] = now
                 msg = (
                     f"TCC dialog waiting: {binary}\n\n"
-                    f"Approve in System Settings > Privacy & Security on the Mac Mini.\n\n"
+                    f"Approve in System Settings > Privacy & Security on the host.\n\n"
                     f"Log: {line[:300]}"
                 )
                 print(f"[tcc-watcher] alert: {binary}", flush=True)
-                _send(msg, token)
+                _send(msg, token, chat_id, thread_id)
             proc.wait()
         except Exception as e:
             print(f"[tcc-watcher] error: {e} — restarting in 5s", file=sys.stderr, flush=True)

@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Template launchd plist for the TCC watcher daemon.
+
+  Copy to ~/Library/LaunchAgents/<your-label>.plist and replace the
+  REPLACE_* placeholders with values for your host. The operational
+  plist is gitignored — only this template ships with the repo.
+
+  Required env vars:
+    TCC_WATCHER_CHAT_ID    Telegram chat id (negative for groups/supergroups)
+    TCC_WATCHER_THREAD_ID  Forum topic id within that chat (optional)
+
+  Bot token resolution order:
+    1. TELEGRAM_BOT_TOKEN env var (set it in EnvironmentVariables below if
+       you don't want `pass` involved)
+    2. `pass show telegram-bot-token` (requires PASSWORD_STORE_DIR + GPG)
+
+  Load with:
+    launchctl load ~/Library/LaunchAgents/<your-label>.plist
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>REPLACE_WITH_REVERSE_DNS_LABEL</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>REPLACE_WITH_PYTHON3_PATH</string>
+        <string>REPLACE_WITH_REPO_PATH/scripts/tcc/watcher.py</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>REPLACE_WITH_REPO_PATH/logs/tcc-watcher.log</string>
+    <key>StandardErrorPath</key>
+    <string>REPLACE_WITH_REPO_PATH/logs/tcc-watcher.err</string>
+
+    <key>WorkingDirectory</key>
+    <string>REPLACE_WITH_REPO_PATH</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>REPLACE_WITH_USER_LOCAL_BIN:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>REPLACE_WITH_HOME</string>
+
+        <!-- Required: where the watcher posts alerts -->
+        <key>TCC_WATCHER_CHAT_ID</key>
+        <string>REPLACE_WITH_TELEGRAM_CHAT_ID</string>
+
+        <!-- Optional: forum topic id within that chat -->
+        <!--
+        <key>TCC_WATCHER_THREAD_ID</key>
+        <string>REPLACE_WITH_TELEGRAM_THREAD_ID</string>
+        -->
+
+        <!-- Pick one bot-token source: env var OR password-store -->
+        <!--
+        <key>TELEGRAM_BOT_TOKEN</key>
+        <string>REPLACE_WITH_BOT_TOKEN</string>
+        -->
+        <key>PASSWORD_STORE_DIR</key>
+        <string>REPLACE_WITH_HOME/.password-store</string>
+    </dict>
+</dict>
+</plist>

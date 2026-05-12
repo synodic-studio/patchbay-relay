@@ -4,7 +4,7 @@
 # Claude Code session to investigate and fix. The loop keeps respawning the
 # bridge regardless; CC fixes land on the next restart.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-"$SCRIPT_DIR/tcc-check.sh" || true
+"$SCRIPT_DIR/scripts/tcc/check.sh" || true
 
 CRASH_TIMESTAMPS="$SCRIPT_DIR/.crash-timestamps"
 CRASH_WINDOW=300       # seconds — sliding window for crash counting

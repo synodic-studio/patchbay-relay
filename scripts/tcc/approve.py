@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """Trigger all common macOS TCC permission prompts at once.
 
-Run this with the bridge's Python so permissions map to the correct binary:
-    ~/Developer/venvs/claude-telegram-bridge/bin/python3 tcc-approve.py
+macOS TCC permissions are per-binary-path. When Homebrew (or mise, or uv)
+upgrades Python/Node/Claude, the underlying binary path changes and every
+TCC permission tied to it silently resets. Re-run this script after any
+such upgrade to click through every prompt in one sitting instead of
+hitting them one-by-one over the next week.
 
-macOS TCC permissions are per-binary-path. When Homebrew upgrades Python,
-Node, or Claude Code, the Cellar path changes and all permissions reset.
-Re-run this script after any `brew upgrade python`.
+Invoke with whichever Python you actually want TCC to remember — that
+binary's realpath is what TCC keys on:
+
+    /path/to/your/python3 scripts/tcc/approve.py
 """
 
 import os
@@ -67,22 +71,14 @@ def trigger_apple_events():
             print(f"  {name}: timed out (dialog may still be showing)")
 
 
-def trigger_calendar_reminders():
-    """Trigger Calendar and Reminders TCC prompts via EventKit-style access."""
-    # osascript-based access already covers these via Apple Events
-    # but direct framework access is a separate TCC category
-    try:
-        subprocess.run(
-            ["osascript", "-e",
-             'tell application "System Events" to return name of every process whose background only is false'],
-            capture_output=True, text=True, timeout=10
-        )
-    except subprocess.TimeoutExpired:
-        pass
+def check_other_binaries():
+    """Show Node and Claude paths that may need separate TCC approval.
 
-
-def check_node_claude():
-    """Show Node and Claude paths that also need TCC approval."""
+    Long-running agents like Claude Code run as child processes. macOS
+    treats them as a distinct TCC identity from this Python — both may
+    need to be approved separately the first time they touch a protected
+    resource.
+    """
     print("\nOther binaries that may need separate TCC approval:")
     for name, cmd in [("Node", "node"), ("Claude Code", "claude")]:
         path = subprocess.run(
@@ -93,13 +89,6 @@ def check_node_claude():
             print(f"  {name}: {real}")
         else:
             print(f"  {name}: not found in PATH")
-    print()
-    print("Claude Code runs as a child of this Python process.")
-    print("When it accesses protected resources, macOS may prompt for")
-    print("BOTH Python (this binary) and Node/Claude separately.")
-    print()
-    print("To pre-approve Node/Claude, run Claude Code interactively:")
-    print("  claude -p 'access ~/Documents, ~/Desktop, ~/Downloads'")
 
 
 def main():
@@ -113,15 +102,11 @@ def main():
 
     print("Apple Events (Automation):")
     trigger_apple_events()
-    print()
 
-    trigger_calendar_reminders()
-    check_node_claude()
+    check_other_binaries()
 
-    print("\nDone. These permissions persist until:")
-    print("  - `brew upgrade python` changes the Cellar path")
-    print("  - You reset TCC via System Settings")
-    print("\nRe-run this script after Python upgrades.")
+    print("\nDone. These permissions persist until the binary path changes")
+    print("(e.g. a brew/mise/uv upgrade) or you reset TCC in System Settings.")
 
 
 if __name__ == "__main__":
