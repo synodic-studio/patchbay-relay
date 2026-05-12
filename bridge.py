@@ -1234,6 +1234,7 @@ async def _send_response(bot, chat_id: int, thread_id: int | None, response: str
         else:
             _log_activity(
                 "markdown_chunk_unbalanced",
+                session_key=audit_session_key,
                 chunk_total=len(md_pieces),
                 converted_len=len(converted_full),
                 response_len=len(response),
@@ -1290,6 +1291,7 @@ async def _send_response(bot, chat_id: int, thread_id: int | None, response: str
                     # the Telegram-rejected payload later.
                     _log_activity(
                         "markdown_send_failed",
+                        session_key=audit_session_key,
                         error_type=type(e).__name__,
                         error=str(e)[:300],
                         chunk_index=chunk_index,
