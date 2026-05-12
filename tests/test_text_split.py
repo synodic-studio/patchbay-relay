@@ -1,20 +1,25 @@
 """Tests for patchbay.text_split.
 
-Covers the splitter's preference for paragraph > line > word boundaries,
-the MarkdownV2 parity check, the paired raw/md splitter, and the
-GravityWell regression — a long markdown response whose naive byte-slice
-chunking produced an orphan `*` in chunk 1 and made Telegram return
-`BadRequest: can't find end of bold entity at byte offset 319`.
+Covers the splitter's preference for paragraph > line > word boundaries
+and the MarkdownV2 parity check that guards against converter bugs
+producing unbalanced toggle entities (the original 2026-05-02 failure
+mode where a chunk contained an orphan `*` and Telegram returned
+`BadRequest: can't find end of bold entity`).
+
+The paired raw/md splitter and the paragraph-aligned multi-chunk path
+were removed on 2026-05-11 after the heading-prefix root cause was
+fixed in patchbay/markdown_config.py — convert-once-then-split-converted
+plus the parity safety net is sufficient.
 """
 
 from __future__ import annotations
 
 import telegramify_markdown
 
+from patchbay.markdown_config import configure_telegramify
 from patchbay.text_split import (
     is_markdownv2_balanced,
     split_for_telegram,
-    split_paired_for_telegram,
 )
 
 
@@ -112,38 +117,12 @@ class TestIsMarkdownV2Balanced:
         assert is_markdownv2_balanced("*bold* and _italic_ and `code`") is True
 
 
-class TestSplitPairedForTelegram:
-    def test_empty_inputs_return_empty(self):
-        assert split_paired_for_telegram("", "", 100) == []
-
-    def test_short_paired_text_returns_single_pair(self):
-        pairs = split_paired_for_telegram("raw", "md", 100)
-        assert pairs == [("raw", "md")]
-
-    def test_paragraph_alignment(self):
-        raw = "first paragraph\n\nsecond paragraph\n\nthird paragraph"
-        md = "first md\n\nsecond md\n\nthird md"
-        pairs = split_paired_for_telegram(raw, md, 20)
-        # Each paragraph fits alone but not together → one pair per paragraph.
-        assert pairs == [
-            ("first paragraph", "first md"),
-            ("second paragraph", "second md"),
-            ("third paragraph", "third md"),
-        ]
-
-    def test_packs_multiple_paragraphs_when_they_fit(self):
-        raw = "a\n\nb\n\nc"
-        md = "A\n\nB\n\nC"
-        pairs = split_paired_for_telegram(raw, md, 100)
-        assert pairs == [("a\n\nb\n\nc", "A\n\nB\n\nC")]
-
-
 class TestGravityWellRegression:
     """The actual failure logged on 2026-05-02: telegramify converts the
     Library agent's project list, the naive splitter cut chunk 1 inside a
     bold marker, Telegram rejected with offset-319 bold-entity error and
-    the message vanished. The new splitter must produce only balanced
-    chunks for this input.
+    the message vanished. With convert-once-then-split-converted on
+    paragraph boundaries, no chunk is allowed to cut mid-entity.
     """
 
     def _build_input(self) -> str:
@@ -169,16 +148,19 @@ class TestGravityWellRegression:
         return "\n\n".join(sections * 3)
 
     def test_converted_chunks_are_all_balanced(self):
+        # Honor the production heading-prefix config so the regression
+        # exercises the same converter the bridge does.
+        configure_telegramify()
         raw = self._build_input()
         md = telegramify_markdown.markdownify(raw)
         # Sanity: input is large enough to require multi-chunk split.
         assert len(md) > 4096
-        pairs = split_paired_for_telegram(raw, md, 4096)
-        assert len(pairs) >= 2, "expected multi-chunk split"
-        for _, md_chunk in pairs:
-            assert is_markdownv2_balanced(md_chunk), (
+        chunks = split_for_telegram(md, 4096)
+        assert len(chunks) >= 2, "expected multi-chunk split"
+        for chunk in chunks:
+            assert is_markdownv2_balanced(chunk), (
                 f"unbalanced chunk would trigger Telegram rejection:\n"
-                f"{md_chunk[:200]}…"
+                f"{chunk[:200]}…"
             )
 
     def test_minimal_orphan_bold_chunk_caught_by_parity(self):

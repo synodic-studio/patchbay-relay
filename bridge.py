@@ -136,7 +136,6 @@ from patchbay.outbound import get_recent_outbound, log_outbound_response  # noqa
 from patchbay.text_split import (  # noqa: E402
     is_markdownv2_balanced,
     split_for_telegram,
-    split_paired_for_telegram,
 )
 from patchbay.models import (  # noqa: E402
     DEFAULT_MODEL,
@@ -1200,10 +1199,13 @@ async def _send_response(bot, chat_id: int, thread_id: int | None, response: str
     if not response and not file_requests:
         return
 
-    # Convert the whole response once; pair raw + md slices via paragraph
-    # alignment so each chunk's audit log carries the matching source slice
-    # and any mid-response downgrade has a sensible plain fallback for the
-    # remaining chunks.
+    # Convert the whole response once, then split the converted MarkdownV2
+    # text on paragraph/line/word boundaries so chunks never cut mid-entity.
+    # The parity check is defense-in-depth: the 2026-05-11 heading-prefix
+    # fix removed the only known converter bug that produced unbalanced
+    # output, but if a future converter regression slips one through we'd
+    # rather downgrade the whole response to plain than ship a chunk
+    # Telegram will reject with `can't find end of bold entity`.
     converted_full = _to_markdownv2(response) if response else None
     raw_chunks: list[str]
     md_chunks: list[str | None]
@@ -1212,10 +1214,21 @@ async def _send_response(bot, chat_id: int, thread_id: int | None, response: str
         md_chunks = [None] * len(raw_chunks)
         use_markdown = False
     else:
-        pairs = split_paired_for_telegram(response, converted_full, TELEGRAM_MSG_LIMIT)
-        md_pieces = [m for _, m in pairs]
+        md_pieces = split_for_telegram(converted_full, TELEGRAM_MSG_LIMIT)
         if all(is_markdownv2_balanced(m) for m in md_pieces):
-            raw_chunks = [r for r, _ in pairs]
+            # Audit `raw` field is best-effort: for single-chunk responses
+            # it's the full original markdown (perfect fidelity); for
+            # multi-chunk we fall back to a parallel split of the source so
+            # diagnostics still see source-shaped slices even if the byte
+            # offsets don't line up exactly with the md chunks.
+            if len(md_pieces) == 1:
+                raw_chunks = [response]
+            else:
+                raw_chunks = split_for_telegram(response, TELEGRAM_MSG_LIMIT)
+                if len(raw_chunks) != len(md_pieces):
+                    # Pad/truncate raw to match md count so the audit log
+                    # has one raw per md chunk.
+                    raw_chunks = (raw_chunks + [""] * len(md_pieces))[: len(md_pieces)]
             md_chunks = list(md_pieces)
             use_markdown = True
         else:
