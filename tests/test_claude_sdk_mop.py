@@ -116,7 +116,7 @@ def test_run_claude_cc_sdk_mop_uses_build_options(monkeypatch, tmp_path):
     sentinel_mop = MagicMock(name="MOP")
     build_options_calls = []
 
-    def fake_build_options(self, *, bot, chat_id, thread_id, main_loop, rules_dir):
+    def fake_build_options(self, *, bot, chat_id, thread_id, main_loop, rules_dir, session_key=None):
         build_options_calls.append(
             {
                 "bot": bot,
@@ -211,7 +211,7 @@ def test_run_claude_cc_sdk_mop_sets_resume_when_session_exists(monkeypatch, tmp_
     real_options = ClaudeAgentOptions()
     sentinel_mop = MagicMock(name="MOP")
 
-    def fake_build_options(self, *, bot, chat_id, thread_id, main_loop, rules_dir):
+    def fake_build_options(self, *, bot, chat_id, thread_id, main_loop, rules_dir, session_key=None):
         return real_options, sentinel_mop
 
     from patchbay.harness import claude_sdk_mop as mop_mod

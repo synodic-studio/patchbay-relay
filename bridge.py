@@ -745,6 +745,7 @@ def run_claude(
             thread_id=thread_id,
             main_loop=_main_loop,
             rules_dir=rules_dir,
+            session_key=session_key,
         )
         # Resume the existing Claude session so each turn keeps history.
         # build_options returns a generic ClaudeAgentOptions; the per-turn

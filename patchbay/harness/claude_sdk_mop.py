@@ -76,6 +76,7 @@ class ClaudeSdkMopHarness:
         thread_id: int | None,
         main_loop,
         rules_dir: Path | None = None,
+        session_key: str | None = None,
     ) -> tuple[ClaudeAgentOptions, MOP]:
         """Construct ClaudeAgentOptions wired with the in-process MOP.
 
@@ -92,7 +93,11 @@ class ClaudeSdkMopHarness:
         rules = load_rules(rules_dir) if rules_dir else []
 
         deliver = build_telegram_deliver(
-            bot=bot, chat_id=chat_id, thread_id=thread_id, main_loop=main_loop
+            bot=bot,
+            chat_id=chat_id,
+            thread_id=thread_id,
+            main_loop=main_loop,
+            session_key=session_key,
         )
         evaluator = build_haiku_evaluator(rules=rules)
 
