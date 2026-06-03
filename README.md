@@ -2,7 +2,9 @@
 
 **Run AI coding agents on your computer, from your phone.**
 
-Patchbay bridges Telegram to AI coding agents running on your own machine — Claude Code, the Claude Agent SDK, Aider, OpenCode, and more — letting you develop software, manage infrastructure, and run autonomous agents from a mobile messaging app while your real workstation does the actual work.
+> **Status: alpha, no longer actively developed.** Patchbay ran my studio for months and worked well, but it was never finished. I have since moved that workflow onto [Hermes](https://github.com/NousResearch/hermes-agent), Nous Research's self-hosted agent framework, which covers the same routing, scheduling, and recovery with less plumbing to maintain. This repo stays up as a working reference for the headless-first, harness-agnostic design. MIT-licensed; fork freely.
+
+Patchbay bridges Telegram to AI coding agents running on your own machine — the Claude Agent SDK, the SDK with MOP output filtering, or pi — letting you develop software, manage infrastructure, and run autonomous agents from a mobile messaging app while your real workstation does the actual work.
 
 ---
 
@@ -30,6 +32,22 @@ The unifying property: the phone never holds the work. The workstation does. The
 
 Each Telegram forum topic maps to an independent agent session. Multiple topics run in parallel, each with its own project directory, harness backend, and session state. Sessions persist across messages and auto-expire after configurable inactivity.
 
+```mermaid
+flowchart TD
+    TG["Telegram Bot API<br/>(long-polling)"] --> BR["bridge.py<br/>message router"]
+    BR --> CP["chat_projects.json<br/>topic → directory + agent"]
+    BR --> H{"harness backend<br/>(per topic)"}
+    H -->|cc-sdk| CC["Claude Agent SDK"]
+    H -->|cc-sdk-mop| MOP["Claude Agent SDK + MOP<br/>output filtering"]
+    H -->|pi| PI["pi"]
+    CC --> KIT["synodic-kit plugin<br/>hooks · skills · commands"]
+    MOP --> KIT
+    KIT --> AID["agent identity stack<br/>(if topic maps to an agent)"]
+    AID --> OUT["response chunking<br/>+ typing indicators"]
+    PI --> OUT
+    OUT --> SEND["Telegram Bot API<br/>send response"]
+```
+
 ### Module map
 
 ```
@@ -45,11 +63,9 @@ patchbay/                 Core package
   singleton.py            Single-instance lock (avoids 409 getUpdates conflicts)
   harness/                Pluggable agent backends
     base.py               Protocol + TurnEvent types + ChannelHandle protocol
-    claude_cli.py         Claude Code CLI subprocess
     claude_sdk.py         Claude Agent SDK (typed messages, mid-turn push)
     claude_sdk_channel.py Long-lived ClaudeSDKClient for inflight push
-    aider.py              Aider with chat-history-file resume
-    opencode.py           sst/opencode JSON event protocol
+    claude_sdk_mop.py     Claude Agent SDK + MOP output filtering (cc-sdk-mop)
     pi.py                 badlogicgames/pi multi-model agent
 validate.py               Pre-flight validation (syntax, imports, parser smoke tests)
 run.sh                    Entry point with crash-loop detection and self-healing
@@ -63,7 +79,7 @@ A single Telegram chat would force the user to pick "what project am I working o
 
 ### Pluggable harness, single transport
 
-The bridge does not care which agent runs the turn. The `Harness` protocol (`patchbay/harness/base.py`) is a streaming-event interface that all backends conform to: Claude Code CLI, Claude Agent SDK, Aider, OpenCode, badlogicgames/pi. New harnesses can be added by implementing one class. Capabilities (resume, mid-turn push, MCP, tool streaming) are advertised via `HarnessCapabilities` so the bridge can degrade gracefully when a backend doesn't support a feature.
+The bridge does not care which agent runs the turn. The `Harness` protocol (`patchbay/harness/base.py`) is a streaming-event interface that all backends conform to. The current backends are the Claude Agent SDK (`cc-sdk`), the SDK with MOP output filtering (`cc-sdk-mop`), and badlogicgames/pi (`pi`); an earlier Claude Code CLI backend was retired once the SDK covered the same ground. New harnesses can be added by implementing one class. Capabilities (resume, mid-turn push, MCP, tool streaming) are advertised via `HarnessCapabilities` so the bridge can degrade gracefully when a backend doesn't support a feature.
 
 ### Crash-loop self-heal
 
@@ -83,7 +99,7 @@ Test suite is 708 tests across 47 test files covering the bridge, the parser, ev
 
 ## Features
 
-- **Multi-harness** — Claude Code CLI, Claude Agent SDK, Aider, OpenCode, badlogicgames/pi. Switch per topic via `/harness <name>`.
+- **Multi-harness** — `cc-sdk` (Claude Agent SDK), `cc-sdk-mop` (the SDK with MOP output filtering), and `pi` (badlogicgames/pi). Switch per topic via `/harness <name>`.
 - **Multi-project routing** — Each Telegram topic binds to a project directory via `chat_projects.json`. Each topic can target a different codebase.
 - **Per-topic agent identity** — Topics can load identity files (e.g. `SOUL.md`, `IDENTITY.md`, `AGENTS.md`) into the agent's system prompt to specialize behavior per persona.
 - **Crash recovery** — Self-healing crash-loop detection: 3+ crashes in 5 minutes triggers an autonomous repair session.
@@ -104,7 +120,7 @@ Anyone with a Mac and 30 minutes should be able to follow this end-to-end.
 - macOS (uses launchd for process management)
 - Python 3.13+
 - [uv](https://docs.astral.sh/uv/) for dependency management
-- An agent CLI installed locally (any of: [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Aider](https://aider.chat/), [OpenCode](https://github.com/sst/opencode), [pi](https://github.com/badlogicgames/pi))
+- An agent backend available locally: the Claude Agent SDK (pulled in by `uv sync`), and optionally [pi](https://github.com/badlogicgames/pi) if you want the `pi` harness
 
 ### 2. Get a Telegram bot
 
