@@ -6,47 +6,30 @@
 #     "uvicorn[standard]",
 #     "python-multipart",
 #     "faster-whisper",
-#     "httpx",
 # ]
 # ///
 """
-Voice-chat demo server — runs on the Mac, exposed to the phone via cloudflared.
+Voice-chat demo server — pi backend, multi-chat, Tailscale-hosted.
 
-Pipeline for one press-to-talk turn:
-
-    phone records audio (hold button)
-        -> POST /api/talk  (multipart audio blob)
-        -> faster-whisper transcribes locally
-        -> litellm "small" alias (OpenAI-compatible proxy) generates a reply
-        -> macOS `say` synthesizes the reply to audio (afconvert -> m4a/aac)
-        -> JSON {transcript, reply, audio_url} back to the phone
-        -> phone plays /audio/<id> in an <audio> element
-
-This is a *prototype* to prove the loop. It is deliberately single-process and
-stateless-per-turn. The eventual goal (per the patchbay-relay vision) is to let
-this "speak with a repo" and one day drive a narrowly-scoped coding agent.
+Pipeline per press-to-talk turn:
+    phone records → POST /api/talk
+        → faster-whisper (local ASR)
+        → pi --provider litellm --model small (local proxy, per-chat session)
+        → macOS say → AAC/m4a
+    → audio streamed back, plays via AudioContext
 
 Run:
-    uv run server.py
-    # then in another terminal:
-    cloudflared tunnel --url http://localhost:8800
+    cd voice-demo && uv run server.py
 
-Config via env (all optional, sane defaults for a Mac):
-    VOICE_HOST              bind host           (default 127.0.0.1)
-    VOICE_PORT             bind port           (default 8800)
-    WHISPER_MODEL          faster-whisper size (default base.en)
-    WHISPER_DEVICE         cpu|cuda|auto       (default auto)
-    WHISPER_COMPUTE        compute type        (default int8)
-    LITELLM_BASE_URL       OpenAI-compatible    (default http://localhost:4000)
-    LITELLM_MODEL          model/alias name    (default small)
-    LITELLM_API_KEY        bearer token        (default "sk-anything")
-    VOICE_SYSTEM_PROMPT    system prompt        (has a default)
-    TTS_VOICE              macOS `say` voice    (default system voice)
+Then expose via Tailscale (provides HTTPS — required for mic access):
+    tailscale serve --bg http://localhost:8800
+    # page is now at https://bajor.<tailnet>.ts.net
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import shutil
 import subprocess
@@ -54,10 +37,10 @@ import sys
 import tempfile
 import time
 import uuid
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-import httpx
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -72,19 +55,22 @@ WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "base.en")
 WHISPER_DEVICE = os.environ.get("WHISPER_DEVICE", "auto")
 WHISPER_COMPUTE = os.environ.get("WHISPER_COMPUTE", "int8")
 
-LITELLM_BASE_URL = os.environ.get("LITELLM_BASE_URL", "http://localhost:4000").rstrip("/")
-LITELLM_MODEL = os.environ.get("LITELLM_MODEL", "small")
-LITELLM_API_KEY = os.environ.get("LITELLM_API_KEY", "sk-anything")
+PI_BIN = os.environ.get("PI_BIN", shutil.which("pi") or "pi")
+PI_PROVIDER = os.environ.get("PI_PROVIDER", "litellm")
+PI_MODEL = os.environ.get("PI_MODEL", "small")
 
-SYSTEM_PROMPT = os.environ.get(
-    "VOICE_SYSTEM_PROMPT",
-    "You are a concise voice assistant. The user is speaking to you from their "
-    "phone, and your reply will be read aloud, so keep answers short, natural, "
-    "and free of markdown, lists, code blocks, or URLs. One or two sentences "
-    "unless more is truly needed.",
-)
+DEVELOPER_DIR = Path(os.environ.get("DEVELOPER_DIR", os.path.expanduser("~/Developer")))
+CHATS_FILE = Path(os.environ.get("CHATS_FILE", os.path.expanduser("~/.voice-demo-chats.json")))
 
 TTS_VOICE = os.environ.get("TTS_VOICE", "Samantha").strip()
+
+SYSTEM_PROMPT = """You are a voice coding assistant accessed from a mobile phone. The user speaks to you and your replies are read aloud by text-to-speech. Follow these rules strictly at all times:
+
+Speak in plain English only. Never use markdown, headings, bullet points, numbered lists, code blocks, backticks, bold, italics, URLs, or any other formatting meant for visual reading. Write exactly as you would speak to someone on a phone call.
+
+Keep answers short and conversational. One to three sentences unless the user clearly needs more. When referring to code, describe it in plain words rather than quoting syntax.
+
+If you need to write anything to disk, you may only create or edit files inside the docs/patchbay/ directory within the current project. Do not modify any source code or any files outside of docs/patchbay/. If asked to edit code directly, explain what change to make instead of doing it."""
 
 HERE = Path(__file__).resolve().parent
 STATIC_DIR = HERE / "static"
@@ -92,7 +78,154 @@ AUDIO_DIR = Path(tempfile.gettempdir()) / "voice-demo-audio"
 AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 
 # ---------------------------------------------------------------------------
-# Lazy whisper model (load once, on first use)
+# Chat persistence
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class Chat:
+    id: str  # stable UUID for this chat (used in API URLs)
+    name: str  # display name — basename of project_dir
+    project_dir: str  # absolute path under ~/Developer
+    # pi session UUID extracted from pi's first event; None until first turn
+    pi_session_id: str | None = None
+    created_at: float = field(default_factory=time.time)
+    last_active: float = field(default_factory=time.time)
+
+
+_chats: dict[str, Chat] = {}
+
+
+def _load_chats() -> None:
+    if not CHATS_FILE.exists():
+        return
+    try:
+        raw = json.loads(CHATS_FILE.read_text())
+        for c in raw.get("chats", []):
+            chat = Chat(**{k: c[k] for k in Chat.__dataclass_fields__ if k in c})
+            _chats[chat.id] = chat
+    except Exception as exc:
+        print(f"[chats] load failed: {exc}", file=sys.stderr)
+
+
+def _save_chats() -> None:
+    CHATS_FILE.write_text(json.dumps({"chats": [asdict(c) for c in _chats.values()]}, indent=2))
+
+
+def _chat_json(c: Chat) -> dict:
+    return {
+        "id": c.id,
+        "name": c.name,
+        "project_dir": c.project_dir,
+        "created_at": c.created_at,
+        "last_active": c.last_active,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Pi runner
+# ---------------------------------------------------------------------------
+
+
+def _parse_pi_events(stdout: str) -> list[dict]:
+    events = []
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+            if isinstance(obj, dict):
+                events.append(obj)
+        except json.JSONDecodeError:
+            pass
+    return events
+
+
+def _find_session_id(events: list[dict]) -> str | None:
+    for ev in events:
+        if ev.get("type") == "session":
+            sid = ev.get("id")
+            if isinstance(sid, str):
+                return sid
+    return None
+
+
+def _extract_text(events: list[dict]) -> str:
+    texts: list[str] = []
+    pending: dict[int, list[str]] = {}
+    for ev in events:
+        if ev.get("type") != "message_update":
+            continue
+        ame = ev.get("assistantMessageEvent") or {}
+        kind = ame.get("type")
+        idx = ame.get("contentIndex", 0)
+        if kind == "text_delta":
+            delta = ame.get("delta", "")
+            if isinstance(delta, str) and delta:
+                pending.setdefault(idx, []).append(delta)
+        elif kind == "text_end":
+            content = ame.get("content")
+            if isinstance(content, str) and content:
+                texts.append(content)
+                pending.pop(idx, None)
+            elif idx in pending:
+                texts.append("".join(pending.pop(idx)))
+    for chunk in pending.values():
+        texts.append("".join(chunk))
+    return "\n".join(t for t in texts if t).strip()
+
+
+def _find_error(events: list[dict]) -> str | None:
+    for ev in events:
+        if ev.get("type") in ("message_start", "message_end"):
+            msg = ev.get("message") or {}
+            if msg.get("stopReason") == "error":
+                return msg.get("errorMessage") or "unknown pi error"
+    return None
+
+
+async def run_pi(user_text: str, chat: Chat) -> str:
+    cmd = [PI_BIN, "-p", "--mode", "json", "--provider", PI_PROVIDER, "--model", PI_MODEL]
+    if chat.pi_session_id:
+        cmd.extend(["--session", chat.pi_session_id])
+    cmd.extend(["--append-system-prompt", SYSTEM_PROMPT])
+    cmd.extend(["--tools", "read,grep,find,ls,write"])
+    cmd.append(user_text)
+
+    def _run() -> tuple[str, str, int]:
+        result = subprocess.run(
+            cmd,
+            cwd=chat.project_dir,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        return result.stdout, result.stderr, result.returncode
+
+    stdout, stderr, rc = await asyncio.to_thread(_run)
+    events = _parse_pi_events(stdout)
+
+    # Store session ID from first turn so subsequent turns resume it.
+    new_sid = _find_session_id(events)
+    if new_sid and new_sid != chat.pi_session_id:
+        chat.pi_session_id = new_sid
+        _save_chats()
+
+    err = _find_error(events)
+    if err:
+        print(f"[pi] error: {err}", file=sys.stderr)
+        raise HTTPException(status_code=502, detail=f"pi error: {err}")
+
+    text = _extract_text(events)
+    if not text and rc != 0:
+        raise HTTPException(status_code=502, detail=f"pi exited {rc}: {stderr[:300]}")
+
+    return text or "(no response)"
+
+
+# ---------------------------------------------------------------------------
+# Whisper (lazy load on first use)
 # ---------------------------------------------------------------------------
 
 _whisper_model = None
@@ -106,76 +239,33 @@ async def get_whisper():
             if _whisper_model is None:
                 from faster_whisper import WhisperModel
 
-                print(
-                    f"[whisper] loading model={WHISPER_MODEL} device={WHISPER_DEVICE} compute={WHISPER_COMPUTE} ...",
-                    flush=True,
-                )
+                print(f"[whisper] loading model={WHISPER_MODEL} ...", flush=True)
                 t0 = time.time()
-                _whisper_model = WhisperModel(
-                    WHISPER_MODEL,
-                    device=WHISPER_DEVICE,
-                    compute_type=WHISPER_COMPUTE,
-                )
+                _whisper_model = WhisperModel(WHISPER_MODEL, device=WHISPER_DEVICE, compute_type=WHISPER_COMPUTE)
                 print(f"[whisper] loaded in {time.time() - t0:.1f}s", flush=True)
     return _whisper_model
-
-
-# ---------------------------------------------------------------------------
-# Pipeline steps
-# ---------------------------------------------------------------------------
 
 
 async def transcribe(audio_path: Path) -> str:
     model = await get_whisper()
 
     def _run() -> str:
-        segments, _info = model.transcribe(str(audio_path), vad_filter=True)
+        segments, _ = model.transcribe(str(audio_path), vad_filter=True)
         return " ".join(seg.text.strip() for seg in segments).strip()
 
     return await asyncio.to_thread(_run)
 
 
-async def generate_reply(user_text: str) -> str:
-    payload = {
-        "model": LITELLM_MODEL,
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_text},
-        ],
-        "temperature": 0.6,
-    }
-    headers = {"Authorization": f"Bearer {LITELLM_API_KEY}"}
-    url = f"{LITELLM_BASE_URL}/v1/chat/completions"
-    async with httpx.AsyncClient(timeout=60) as client:
-        resp = await client.post(url, json=payload, headers=headers)
-    if resp.status_code != 200:
-        raise HTTPException(
-            status_code=502,
-            detail=f"litellm {resp.status_code}: {resp.text[:300]}",
-        )
-    data = resp.json()
-    return data["choices"][0]["message"]["content"].strip()
-
-
 async def synthesize(text: str) -> Path:
-    """macOS `say` -> .aiff, then afconvert -> .m4a (AAC) for Safari playback."""
     if not shutil.which("say"):
-        raise HTTPException(
-            status_code=500,
-            detail="`say` not found — this server must run on macOS for TTS.",
-        )
+        raise HTTPException(status_code=500, detail="`say` not found — macOS only")
     uid = uuid.uuid4().hex
     aiff = AUDIO_DIR / f"{uid}.aiff"
     out = AUDIO_DIR / f"{uid}.m4a"
-
-    say_cmd = ["say", "-o", str(aiff)]
-    if TTS_VOICE:
-        say_cmd += ["-v", TTS_VOICE]
-    say_cmd += [text]
+    say_cmd = ["say", "-v", TTS_VOICE, "-o", str(aiff), text]
 
     def _run() -> Path:
         subprocess.run(say_cmd, check=True, capture_output=True)
-        # Prefer afconvert (always present on macOS) -> AAC/m4a (small, Safari-native).
         if shutil.which("afconvert"):
             subprocess.run(
                 ["afconvert", str(aiff), str(out), "-f", "m4af", "-d", "aac"],
@@ -184,7 +274,6 @@ async def synthesize(text: str) -> Path:
             )
             aiff.unlink(missing_ok=True)
             return out
-        # Fallback: hand back the raw aiff (Safari can play AIFF too).
         return aiff
 
     return await asyncio.to_thread(_run)
@@ -195,6 +284,13 @@ async def synthesize(text: str) -> Path:
 # ---------------------------------------------------------------------------
 
 app = FastAPI(title="voice-demo")
+
+
+@app.on_event("startup")
+async def startup():
+    _load_chats()
+    print(f"[voice-demo] http://{HOST}:{PORT}  pi={PI_PROVIDER}/{PI_MODEL}", flush=True)
+    print(f"[voice-demo] {len(_chats)} chat(s) loaded from {CHATS_FILE}", flush=True)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -208,15 +304,77 @@ async def healthz():
         "ok": True,
         "whisper_model": WHISPER_MODEL,
         "whisper_loaded": _whisper_model is not None,
-        "litellm_base_url": LITELLM_BASE_URL,
-        "litellm_model": LITELLM_MODEL,
-        "tts_voice": TTS_VOICE or "(system default)",
-        "say_available": bool(shutil.which("say")),
+        "pi_bin": PI_BIN,
+        "pi_provider": PI_PROVIDER,
+        "pi_model": PI_MODEL,
+        "tts_voice": TTS_VOICE,
+        "chat_count": len(_chats),
+        "developer_dir": str(DEVELOPER_DIR),
     }
 
 
+# ---- Chat management ----
+
+
+@app.get("/api/chats")
+async def list_chats():
+    ordered = sorted(_chats.values(), key=lambda c: -c.last_active)
+    return {"chats": [_chat_json(c) for c in ordered]}
+
+
+@app.post("/api/chats")
+async def create_chat(body: dict):
+    rel = body.get("project_dir", "").strip()
+    if not rel:
+        raise HTTPException(status_code=400, detail="project_dir required")
+    path = Path(rel) if Path(rel).is_absolute() else DEVELOPER_DIR / rel
+    if not path.is_dir():
+        raise HTTPException(status_code=400, detail=f"Not a directory: {path}")
+    chat = Chat(id=uuid.uuid4().hex, name=path.name, project_dir=str(path))
+    _chats[chat.id] = chat
+    _save_chats()
+    return _chat_json(chat)
+
+
+@app.delete("/api/chats/{chat_id}")
+async def close_chat(chat_id: str):
+    if chat_id not in _chats:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    del _chats[chat_id]
+    _save_chats()
+    return {"ok": True}
+
+
+@app.post("/api/chats/{chat_id}/reset")
+async def reset_chat(chat_id: str):
+    if chat_id not in _chats:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    _chats[chat_id].pi_session_id = None  # cleared — next turn starts fresh
+    _save_chats()
+    return _chat_json(_chats[chat_id])
+
+
+# ---- Project listing ----
+
+
+@app.get("/api/projects")
+async def list_projects():
+    try:
+        dirs = sorted(d.name for d in DEVELOPER_DIR.iterdir() if d.is_dir() and not d.name.startswith("."))
+        return {"projects": dirs, "base": str(DEVELOPER_DIR)}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+# ---- Talk ----
+
+
 @app.post("/api/talk")
-async def talk(audio: UploadFile = File(...)):
+async def talk(audio: UploadFile = File(...), chat_id: str = Form(...)):
+    if chat_id not in _chats:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    chat = _chats[chat_id]
+
     t0 = time.time()
     suffix = Path(audio.filename or "clip.webm").suffix or ".webm"
     tmp = AUDIO_DIR / f"in-{uuid.uuid4().hex}{suffix}"
@@ -225,19 +383,23 @@ async def talk(audio: UploadFile = File(...)):
     try:
         transcript = await transcribe(tmp)
         t_asr = time.time()
+
         if not transcript:
             return JSONResponse({"transcript": "", "reply": "", "audio_url": None, "note": "No speech detected."})
 
-        reply = await generate_reply(transcript)
+        reply = await run_pi(transcript, chat)
         t_llm = time.time()
 
         audio_path = await synthesize(reply)
         t_tts = time.time()
 
+        chat.last_active = time.time()
+        _save_chats()
+
         print(
-            f"[turn] asr={t_asr - t0:.1f}s llm={t_llm - t_asr:.1f}s "
-            f"tts={t_tts - t_llm:.1f}s total={t_tts - t0:.1f}s | "
-            f"q={transcript!r} a={reply!r}",
+            f"[turn] chat={chat.name} "
+            f"asr={t_asr - t0:.1f}s llm={t_llm - t_asr:.1f}s tts={t_tts - t_llm:.1f}s "
+            f"total={t_tts - t0:.1f}s | q={transcript!r} a={reply[:80]!r}",
             flush=True,
         )
 
@@ -258,9 +420,11 @@ async def talk(audio: UploadFile = File(...)):
         tmp.unlink(missing_ok=True)
 
 
+# ---- Audio serving ----
+
+
 @app.get("/audio/{name}")
 async def get_audio(name: str):
-    # Guard against path traversal — only serve files we generated.
     safe = Path(name).name
     path = AUDIO_DIR / safe
     if not path.exists():
@@ -276,13 +440,6 @@ if STATIC_DIR.exists():
 def main():
     import uvicorn
 
-    print(f"[voice-demo] http://{HOST}:{PORT}  (model={WHISPER_MODEL})", flush=True)
-    print(
-        f"[voice-demo] litellm={LITELLM_BASE_URL} model={LITELLM_MODEL}",
-        flush=True,
-    )
-    if not shutil.which("say"):
-        print("[voice-demo] WARNING: `say` not found — TTS will fail off-macOS.", file=sys.stderr, flush=True)
     uvicorn.run(app, host=HOST, port=PORT, log_level="info")
 
 

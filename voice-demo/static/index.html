@@ -6,7 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <meta name="theme-color" content="#0b0d12" />
-<title>Voice Demo</title>
+<title>Voice</title>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -17,98 +17,231 @@
     color: #e7e9ee;
     display: flex;
     flex-direction: column;
-    align-items: center;
-    justify-content: space-between;
-    padding: env(safe-area-inset-top) 20px env(safe-area-inset-bottom);
     overflow: hidden;
     touch-action: none;
   }
-  header { width: 100%; text-align: center; padding-top: 24px; }
-  header h1 { font-size: 17px; font-weight: 600; margin: 0; opacity: .7; letter-spacing: .3px; }
 
+  /* ---- Header ---- */
+  header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: env(safe-area-inset-top) 16px 0;
+    padding-top: calc(env(safe-area-inset-top) + 10px);
+    padding-bottom: 10px;
+    background: #0b0d12;
+    border-bottom: 1px solid #1a1f2e;
+    flex-shrink: 0;
+    min-height: 52px;
+  }
+  .icon-btn {
+    background: none;
+    border: none;
+    color: #9aa3b5;
+    font-size: 20px;
+    padding: 6px 8px;
+    border-radius: 8px;
+    cursor: pointer;
+    flex-shrink: 0;
+    line-height: 1;
+  }
+  .icon-btn:active { background: #1b2030; }
+  .icon-btn:disabled { opacity: .35; }
+  #chatName {
+    flex: 1;
+    font-size: 15px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-align: center;
+  }
+  #chatName.none { opacity: .4; font-weight: 400; }
+
+  /* ---- Conversation ---- */
   .convo {
     flex: 1;
-    width: 100%;
-    max-width: 560px;
     overflow-y: auto;
-    padding: 18px 4px;
+    padding: 16px 16px 8px;
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 10px;
     touch-action: pan-y;
   }
   .bubble {
-    padding: 11px 14px;
+    padding: 10px 13px;
     border-radius: 16px;
-    max-width: 82%;
-    line-height: 1.4;
+    max-width: 84%;
+    line-height: 1.45;
     font-size: 16px;
     word-wrap: break-word;
   }
-  .me  { align-self: flex-end; background: #2b5cff; color: #fff; border-bottom-right-radius: 5px; }
-  .bot { align-self: flex-start; background: #1b2030; border-bottom-left-radius: 5px; }
-  .bubble-text { white-space: pre-wrap; }
+  .me  { align-self: flex-end; background: #2b5cff; color: #fff; border-bottom-right-radius: 4px; }
+  .bot { align-self: flex-start; background: #1b2030; border-bottom-left-radius: 4px; }
+  .bubble-text { white-space: pre-wrap; display: block; }
   .bubble-play {
     display: block;
     margin-top: 8px;
-    background: rgba(255,255,255,0.1);
-    border: 1px solid rgba(255,255,255,0.15);
+    background: rgba(255,255,255,.09);
+    border: 1px solid rgba(255,255,255,.13);
     border-radius: 999px;
-    color: #e7e9ee;
-    font-size: 14px;
+    color: #cdd3e0;
+    font-size: 13px;
     padding: 5px 14px;
     cursor: pointer;
     width: 100%;
     text-align: center;
   }
-  .bubble-play:active { background: rgba(255,255,255,0.2); }
-  .meta { font-size: 12px; opacity: .45; align-self: center; }
+  .bubble-play:active { background: rgba(255,255,255,.17); }
+  .meta { font-size: 12px; opacity: .4; align-self: center; text-align: center; }
 
-  .stage { width: 100%; display: flex; flex-direction: column; align-items: center; gap: 14px; padding-bottom: 26px; }
-  .status { font-size: 14px; min-height: 20px; opacity: .8; text-align: center; }
-
+  /* ---- Stage ---- */
+  .stage {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    padding: 18px 20px calc(env(safe-area-inset-bottom) + 24px);
+  }
+  .status { font-size: 14px; min-height: 20px; opacity: .75; text-align: center; }
   .talk {
-    width: 168px; height: 168px; border-radius: 50%;
+    width: 152px; height: 152px; border-radius: 50%;
     border: none; outline: none;
     background: radial-gradient(circle at 50% 35%, #3a6bff, #1f49d6);
-    color: #fff; font-size: 19px; font-weight: 600;
-    box-shadow: 0 10px 40px rgba(43,92,255,.35);
-    display: flex; align-items: center; justify-content: center;
+    color: #fff; font-size: 18px; font-weight: 600;
+    box-shadow: 0 8px 32px rgba(43,92,255,.35);
     user-select: none; -webkit-user-select: none;
     transition: transform .08s ease, box-shadow .15s ease, background .15s ease;
+    display: flex; align-items: center; justify-content: center;
   }
-  .talk:disabled { opacity: .55; }
+  .talk:disabled { opacity: .45; background: #2a3146; box-shadow: none; }
   .talk.recording {
     background: radial-gradient(circle at 50% 35%, #ff5a6b, #d61f33);
     transform: scale(1.06);
-    box-shadow: 0 0 0 14px rgba(255,90,107,.12), 0 10px 40px rgba(214,31,51,.4);
+    box-shadow: 0 0 0 14px rgba(255,90,107,.12), 0 8px 32px rgba(214,31,51,.4);
     animation: pulse 1.1s ease-in-out infinite;
   }
-  @keyframes pulse { 50% { box-shadow: 0 0 0 22px rgba(255,90,107,.05), 0 10px 40px rgba(214,31,51,.4); } }
-  .hint { font-size: 13px; opacity: .45; }
+  @keyframes pulse { 50% { box-shadow: 0 0 0 22px rgba(255,90,107,.05), 0 8px 32px rgba(214,31,51,.4); } }
+  .hint { font-size: 12px; opacity: .4; text-align: center; min-height: 16px; }
+
+  /* ---- Overlays ---- */
+  .overlay {
+    position: fixed; inset: 0;
+    background: #0b0d12;
+    display: flex; flex-direction: column;
+    z-index: 100;
+    transition: opacity .18s ease, transform .18s ease;
+  }
+  .overlay.hidden { opacity: 0; pointer-events: none; transform: translateY(8px); }
+  .overlay-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: calc(env(safe-area-inset-top) + 12px) 16px 12px;
+    border-bottom: 1px solid #1a1f2e;
+    flex-shrink: 0;
+  }
+  .overlay-title { flex: 1; font-size: 16px; font-weight: 600; }
+  .pill-btn {
+    background: #2b5cff;
+    color: #fff;
+    border: none;
+    border-radius: 999px;
+    padding: 6px 14px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .pill-btn:active { background: #1f49d6; }
+  .overlay-scroll { flex: 1; overflow-y: auto; touch-action: pan-y; }
+
+  /* ---- Chat list ---- */
+  .chat-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 16px;
+    border-bottom: 1px solid #13171f;
+    cursor: pointer;
+  }
+  .chat-item:active { background: #111520; }
+  .chat-item.active { background: #131928; }
+  .chat-info { flex: 1; min-width: 0; }
+  .chat-info-name { font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .chat-info-path { font-size: 12px; opacity: .45; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+  .chat-actions { display: flex; gap: 6px; flex-shrink: 0; }
+  .chat-act-btn {
+    background: #1b2030;
+    border: none;
+    border-radius: 8px;
+    color: #9aa3b5;
+    font-size: 16px;
+    padding: 6px 9px;
+    cursor: pointer;
+    line-height: 1;
+  }
+  .chat-act-btn:active { background: #252e44; }
+  .no-chats { padding: 40px 20px; text-align: center; opacity: .4; font-size: 14px; }
+
+  /* ---- Project list ---- */
+  .project-item {
+    padding: 15px 16px;
+    border-bottom: 1px solid #13171f;
+    font-size: 15px;
+    cursor: pointer;
+  }
+  .project-item:active { background: #111520; }
 </style>
 </head>
 <body>
-  <header><h1>● voice demo</h1></header>
 
-  <div class="convo" id="convo">
-    <div class="meta">Hold the button, speak, release to send.</div>
-  </div>
+<!-- Main view -->
+<header>
+  <button class="icon-btn" id="btnChats" title="Chats">≡</button>
+  <span id="chatName" class="none">no chat</span>
+  <button class="icon-btn" id="btnReset" title="Reset chat" disabled>↺</button>
+</header>
 
-  <div class="stage">
-    <div class="status" id="status">Tap-and-hold to talk</div>
-    <button class="talk" id="talk">HOLD</button>
-    <div class="hint" id="hint"></div>
+<div class="convo" id="convo"></div>
+
+<div class="stage">
+  <div class="status" id="status">Open or create a chat to start</div>
+  <button class="talk" id="talk" disabled>HOLD</button>
+  <div class="hint" id="hint"></div>
+</div>
+
+<!-- Chats overlay -->
+<div class="overlay hidden" id="overlayChats">
+  <div class="overlay-header">
+    <span class="overlay-title">Chats</span>
+    <button class="pill-btn" id="btnNewChat">+ New</button>
+    <button class="icon-btn" id="btnCloseChats">✕</button>
   </div>
+  <div class="overlay-scroll" id="chatList"></div>
+</div>
+
+<!-- New chat / project picker overlay -->
+<div class="overlay hidden" id="overlayNew">
+  <div class="overlay-header">
+    <button class="icon-btn" id="btnCancelNew">←</button>
+    <span class="overlay-title">Pick a project</span>
+  </div>
+  <div class="overlay-scroll" id="projectList"></div>
+</div>
 
 <script>
-const convo  = document.getElementById('convo');
-const talk   = document.getElementById('talk');
-const status = document.getElementById('status');
-const hint   = document.getElementById('hint');
-
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+let currentChatId = null;
+let chats = {};          // id -> chat object
 let audioCtx = null;
 
+// ---------------------------------------------------------------------------
+// Audio context (unlocked on first touchstart of talk button)
+// ---------------------------------------------------------------------------
 function unlockAudio() {
   if (audioCtx) return;
   audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -131,11 +264,10 @@ async function playAudioUrl(url) {
   }
 }
 
-let mediaRecorder = null;
-let chunks = [];
-let stream = null;
-let recording = false;
-let busy = false;
+// ---------------------------------------------------------------------------
+// Conversation UI
+// ---------------------------------------------------------------------------
+const convo = document.getElementById('convo');
 
 function addBubble(cls, text) {
   const div = document.createElement('div');
@@ -143,21 +275,16 @@ function addBubble(cls, text) {
   div.textContent = text;
   convo.appendChild(div);
   convo.scrollTop = convo.scrollHeight;
-  return div;
 }
 
 function addBotBubble(text, audioUrl) {
   const div = document.createElement('div');
   div.className = 'bubble bot';
-
   const span = document.createElement('span');
   span.className = 'bubble-text';
   span.textContent = text;
   div.appendChild(span);
-
   if (audioUrl) {
-    // Auto-play via AudioContext (already unlocked from first hold).
-    // Show a replay button as fallback if AudioContext isn't ready yet.
     playAudioUrl(audioUrl).then(played => {
       if (!played) {
         const btn = document.createElement('button');
@@ -165,17 +292,200 @@ function addBotBubble(text, audioUrl) {
         btn.textContent = '▶ play reply';
         btn.addEventListener('click', () => {
           unlockAudio();
-          playAudioUrl(audioUrl);
-          btn.remove();
+          playAudioUrl(audioUrl).then(() => btn.remove());
         });
         div.appendChild(btn);
       }
     });
   }
-
   convo.appendChild(div);
   convo.scrollTop = convo.scrollHeight;
-  return div;
+}
+
+function addMeta(text) {
+  const div = document.createElement('div');
+  div.className = 'meta';
+  div.textContent = text;
+  convo.appendChild(div);
+  convo.scrollTop = convo.scrollHeight;
+}
+
+function clearConvo() {
+  convo.innerHTML = '';
+}
+
+// ---------------------------------------------------------------------------
+// Chat management
+// ---------------------------------------------------------------------------
+const chatName   = document.getElementById('chatName');
+const btnReset   = document.getElementById('btnReset');
+const talk       = document.getElementById('talk');
+const status     = document.getElementById('status');
+const hint       = document.getElementById('hint');
+
+async function loadChats() {
+  const data = await fetch('/api/chats').then(r => r.json());
+  chats = {};
+  data.chats.forEach(c => { chats[c.id] = c; });
+  renderChatList();
+}
+
+function setCurrentChat(chat) {
+  currentChatId = chat ? chat.id : null;
+  chatName.textContent = chat ? chat.name : 'no chat';
+  chatName.className = chat ? '' : 'none';
+  btnReset.disabled = !chat;
+  talk.disabled = !chat;
+  status.textContent = chat ? 'Tap-and-hold to talk' : 'Open or create a chat to start';
+  clearConvo();
+  if (chat) addMeta(`📁 ${chat.project_dir}`);
+}
+
+async function createChat(projectDir) {
+  const chat = await fetch('/api/chats', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({project_dir: projectDir}),
+  }).then(r => r.json());
+  chats[chat.id] = chat;
+  renderChatList();
+  setCurrentChat(chat);
+  closeOverlay('overlayNew');
+  closeOverlay('overlayChats');
+}
+
+async function deleteChat(id) {
+  await fetch(`/api/chats/${id}`, {method: 'DELETE'});
+  delete chats[id];
+  if (currentChatId === id) setCurrentChat(null);
+  renderChatList();
+}
+
+async function resetChat(id) {
+  const updated = await fetch(`/api/chats/${id}/reset`, {method: 'POST'}).then(r => r.json());
+  chats[id] = updated;
+  if (currentChatId === id) {
+    clearConvo();
+    addMeta(`📁 ${updated.project_dir}`);
+    addMeta('Chat reset — new session started.');
+    status.textContent = 'Tap-and-hold to talk';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Chat list rendering
+// ---------------------------------------------------------------------------
+const chatList = document.getElementById('chatList');
+
+function renderChatList() {
+  chatList.innerHTML = '';
+  const ordered = Object.values(chats).sort((a, b) => b.last_active - a.last_active);
+  if (ordered.length === 0) {
+    const div = document.createElement('div');
+    div.className = 'no-chats';
+    div.textContent = 'No chats yet. Tap + New to start.';
+    chatList.appendChild(div);
+    return;
+  }
+  ordered.forEach(chat => {
+    const row = document.createElement('div');
+    row.className = 'chat-item' + (chat.id === currentChatId ? ' active' : '');
+
+    const info = document.createElement('div');
+    info.className = 'chat-info';
+    const name = document.createElement('div');
+    name.className = 'chat-info-name';
+    name.textContent = chat.name;
+    const path = document.createElement('div');
+    path.className = 'chat-info-path';
+    path.textContent = chat.project_dir;
+    info.appendChild(name);
+    info.appendChild(path);
+
+    const actions = document.createElement('div');
+    actions.className = 'chat-actions';
+
+    const resetBtn = document.createElement('button');
+    resetBtn.className = 'chat-act-btn';
+    resetBtn.title = 'Reset session';
+    resetBtn.textContent = '↺';
+    resetBtn.addEventListener('click', e => { e.stopPropagation(); resetChat(chat.id); });
+
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'chat-act-btn';
+    closeBtn.title = 'Close chat';
+    closeBtn.textContent = '✕';
+    closeBtn.addEventListener('click', e => { e.stopPropagation(); deleteChat(chat.id); });
+
+    actions.appendChild(resetBtn);
+    actions.appendChild(closeBtn);
+
+    row.appendChild(info);
+    row.appendChild(actions);
+    row.addEventListener('click', () => {
+      setCurrentChat(chat);
+      closeOverlay('overlayChats');
+    });
+    chatList.appendChild(row);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Project picker
+// ---------------------------------------------------------------------------
+const projectList = document.getElementById('projectList');
+
+async function loadProjects() {
+  projectList.innerHTML = '<div class="no-chats">Loading…</div>';
+  const data = await fetch('/api/projects').then(r => r.json());
+  projectList.innerHTML = '';
+  data.projects.forEach(name => {
+    const row = document.createElement('div');
+    row.className = 'project-item';
+    row.textContent = name;
+    row.addEventListener('click', () => createChat(name));
+    projectList.appendChild(row);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Overlays
+// ---------------------------------------------------------------------------
+function openOverlay(id) {
+  document.getElementById(id).classList.remove('hidden');
+}
+function closeOverlay(id) {
+  document.getElementById(id).classList.add('hidden');
+}
+
+document.getElementById('btnChats').addEventListener('click', () => {
+  renderChatList();
+  openOverlay('overlayChats');
+});
+document.getElementById('btnCloseChats').addEventListener('click', () => closeOverlay('overlayChats'));
+document.getElementById('btnNewChat').addEventListener('click', () => {
+  loadProjects();
+  openOverlay('overlayNew');
+});
+document.getElementById('btnCancelNew').addEventListener('click', () => closeOverlay('overlayNew'));
+document.getElementById('btnReset').addEventListener('click', () => {
+  if (currentChatId) resetChat(currentChatId);
+});
+
+// ---------------------------------------------------------------------------
+// Recording
+// ---------------------------------------------------------------------------
+let mediaRecorder = null;
+let chunks = [];
+let stream = null;
+let recording = false;
+let busy = false;
+
+function pickMime() {
+  for (const m of ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm']) {
+    if (window.MediaRecorder && MediaRecorder.isTypeSupported(m)) return m;
+  }
+  return '';
 }
 
 async function ensureStream() {
@@ -184,27 +494,15 @@ async function ensureStream() {
   return stream;
 }
 
-function pickMime() {
-  const prefs = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm'];
-  for (const m of prefs) {
-    if (window.MediaRecorder && MediaRecorder.isTypeSupported(m)) return m;
-  }
-  return '';
-}
-
 async function startRecording() {
-  if (busy || recording) return;
-  try {
-    await ensureStream();
-  } catch (e) {
+  if (busy || recording || !currentChatId) return;
+  try { await ensureStream(); } catch (e) {
     status.textContent = 'Mic permission denied';
-    hint.textContent = String(e);
     return;
   }
   const mime = pickMime();
   chunks = [];
-  mediaRecorder = mime ? new MediaRecorder(stream, { mimeType: mime })
-                       : new MediaRecorder(stream);
+  mediaRecorder = mime ? new MediaRecorder(stream, {mimeType: mime}) : new MediaRecorder(stream);
   mediaRecorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
   mediaRecorder.onstop = handleStop;
   mediaRecorder.start();
@@ -225,7 +523,7 @@ function stopRecording() {
 
 async function handleStop() {
   const type = mediaRecorder.mimeType || 'audio/webm';
-  const blob = new Blob(chunks, { type });
+  const blob = new Blob(chunks, {type});
   if (blob.size < 1200) {
     status.textContent = 'Too short — hold and speak';
     return;
@@ -246,8 +544,9 @@ async function sendClip(blob, type) {
   status.textContent = 'Thinking…';
   const fd = new FormData();
   fd.append('audio', blob, 'clip.' + extFor(type));
+  fd.append('chat_id', currentChatId);
   try {
-    const res = await fetch('/api/talk', { method: 'POST', body: fd });
+    const res = await fetch('/api/talk', {method: 'POST', body: fd});
     if (!res.ok) {
       const txt = await res.text();
       status.textContent = 'Error ' + res.status;
@@ -261,31 +560,36 @@ async function sendClip(blob, type) {
     }
     if (data.transcript) addBubble('me', data.transcript);
     if (data.reply)      addBotBubble(data.reply, data.audio_url || null);
-    if (data.timing) {
-      hint.textContent =
-        `asr ${data.timing.asr}s · llm ${data.timing.llm}s · tts ${data.timing.tts}s`;
-    }
+    if (data.timing) hint.textContent =
+      `asr ${data.timing.asr}s · pi ${data.timing.llm}s · tts ${data.timing.tts}s`;
     status.textContent = 'Tap-and-hold to talk';
   } catch (e) {
     status.textContent = 'Network error';
     hint.textContent = String(e);
   } finally {
     busy = false;
-    talk.disabled = false;
+    talk.disabled = !currentChatId;
   }
 }
 
-// --- press & hold wiring (touch + mouse) ---
-talk.addEventListener('touchstart', e => { e.preventDefault(); unlockAudio(); startRecording(); }, { passive: false });
-talk.addEventListener('touchend',   e => { e.preventDefault(); stopRecording();  }, { passive: false });
-talk.addEventListener('touchcancel',e => { e.preventDefault(); stopRecording();  }, { passive: false });
-talk.addEventListener('mousedown',  e => { e.preventDefault(); startRecording(); });
-window.addEventListener('mouseup',  () => stopRecording());
+// ---------------------------------------------------------------------------
+// Press & hold wiring
+// ---------------------------------------------------------------------------
+talk.addEventListener('touchstart', e => { e.preventDefault(); unlockAudio(); startRecording(); }, {passive: false});
+talk.addEventListener('touchend',   e => { e.preventDefault(); stopRecording(); }, {passive: false});
+talk.addEventListener('touchcancel',e => { e.preventDefault(); stopRecording(); }, {passive: false});
+talk.addEventListener('mousedown',  e => { e.preventDefault(); unlockAudio(); startRecording(); });
+window.addEventListener('mouseup', () => stopRecording());
 
 if (!navigator.mediaDevices || !window.MediaRecorder) {
   status.textContent = 'This browser cannot record audio';
   talk.disabled = true;
 }
+
+// ---------------------------------------------------------------------------
+// Init
+// ---------------------------------------------------------------------------
+loadChats();
 </script>
 </body>
 </html>
