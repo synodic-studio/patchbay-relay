@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="theme-color" content="#0b0d12" />
+<title>Voice Demo</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    background: #0b0d12;
+    color: #e7e9ee;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: space-between;
+    padding: env(safe-area-inset-top) 20px env(safe-area-inset-bottom);
+    overflow: hidden;
+    touch-action: none;
+  }
+  header { width: 100%; text-align: center; padding-top: 24px; }
+  header h1 { font-size: 17px; font-weight: 600; margin: 0; opacity: .7; letter-spacing: .3px; }
+
+  .convo {
+    flex: 1;
+    width: 100%;
+    max-width: 560px;
+    overflow-y: auto;
+    padding: 18px 4px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    touch-action: pan-y;
+  }
+  .bubble {
+    padding: 11px 14px;
+    border-radius: 16px;
+    max-width: 82%;
+    line-height: 1.4;
+    font-size: 16px;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+  }
+  .me  { align-self: flex-end; background: #2b5cff; color: #fff; border-bottom-right-radius: 5px; }
+  .bot { align-self: flex-start; background: #1b2030; border-bottom-left-radius: 5px; }
+  .meta { font-size: 12px; opacity: .45; align-self: center; }
+
+  .stage { width: 100%; display: flex; flex-direction: column; align-items: center; gap: 14px; padding-bottom: 26px; }
+  .status { font-size: 14px; min-height: 20px; opacity: .8; text-align: center; }
+
+  .talk {
+    width: 168px; height: 168px; border-radius: 50%;
+    border: none; outline: none;
+    background: radial-gradient(circle at 50% 35%, #3a6bff, #1f49d6);
+    color: #fff; font-size: 19px; font-weight: 600;
+    box-shadow: 0 10px 40px rgba(43,92,255,.35);
+    display: flex; align-items: center; justify-content: center;
+    user-select: none; -webkit-user-select: none;
+    transition: transform .08s ease, box-shadow .15s ease, background .15s ease;
+  }
+  .talk:disabled { opacity: .55; }
+  .talk.recording {
+    background: radial-gradient(circle at 50% 35%, #ff5a6b, #d61f33);
+    transform: scale(1.06);
+    box-shadow: 0 0 0 14px rgba(255,90,107,.12), 0 10px 40px rgba(214,31,51,.4);
+    animation: pulse 1.1s ease-in-out infinite;
+  }
+  @keyframes pulse { 50% { box-shadow: 0 0 0 22px rgba(255,90,107,.05), 0 10px 40px rgba(214,31,51,.4); } }
+  .hint { font-size: 13px; opacity: .45; }
+  audio { display: none; }
+  .replay {
+    background: #1b2030; color: #cdd3e0; border: 1px solid #2a3146;
+    border-radius: 999px; padding: 8px 16px; font-size: 14px;
+  }
+  .replay[hidden] { display: none; }
+</style>
+</head>
+<body>
+  <header><h1>● voice demo</h1></header>
+
+  <div class="convo" id="convo">
+    <div class="meta">Hold the button, speak, release to send.</div>
+  </div>
+
+  <div class="stage">
+    <div class="status" id="status">Tap-and-hold to talk</div>
+    <button class="talk" id="talk">HOLD</button>
+    <button class="replay" id="replay" hidden>▶ replay last reply</button>
+    <div class="hint" id="hint"></div>
+  </div>
+
+  <audio id="player" playsinline></audio>
+
+<script>
+const convo  = document.getElementById('convo');
+const talk   = document.getElementById('talk');
+const status = document.getElementById('status');
+const hint   = document.getElementById('hint');
+const player = document.getElementById('player');
+const replay = document.getElementById('replay');
+
+let mediaRecorder = null;
+let chunks = [];
+let stream = null;
+let recording = false;
+let busy = false;
+let lastAudioUrl = null;
+
+function addBubble(cls, text) {
+  const div = document.createElement('div');
+  div.className = 'bubble ' + cls;
+  div.textContent = text;
+  convo.appendChild(div);
+  convo.scrollTop = convo.scrollHeight;
+  return div;
+}
+
+async function ensureStream() {
+  if (stream) return stream;
+  stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  return stream;
+}
+
+function pickMime() {
+  // Safari -> audio/mp4; Chrome/FF -> audio/webm. Let the browser choose if unsure.
+  const prefs = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm'];
+  for (const m of prefs) {
+    if (window.MediaRecorder && MediaRecorder.isTypeSupported(m)) return m;
+  }
+  return '';
+}
+
+async function startRecording() {
+  if (busy || recording) return;
+  try {
+    await ensureStream();
+  } catch (e) {
+    status.textContent = 'Mic permission denied';
+    hint.textContent = String(e);
+    return;
+  }
+  const mime = pickMime();
+  chunks = [];
+  mediaRecorder = mime ? new MediaRecorder(stream, { mimeType: mime })
+                       : new MediaRecorder(stream);
+  mediaRecorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+  mediaRecorder.onstop = handleStop;
+  mediaRecorder.start();
+  recording = true;
+  talk.classList.add('recording');
+  talk.textContent = 'RELEASE';
+  status.textContent = 'Listening…';
+  hint.textContent = '';
+}
+
+function stopRecording() {
+  if (!recording) return;
+  recording = false;
+  talk.classList.remove('recording');
+  talk.textContent = 'HOLD';
+  try { mediaRecorder.stop(); } catch (_) {}
+}
+
+async function handleStop() {
+  const type = mediaRecorder.mimeType || 'audio/webm';
+  const blob = new Blob(chunks, { type });
+  if (blob.size < 1200) {           // basically silence / too short
+    status.textContent = 'Too short — hold and speak';
+    return;
+  }
+  await sendClip(blob, type);
+}
+
+function extFor(type) {
+  if (type.includes('mp4'))  return 'mp4';
+  if (type.includes('webm')) return 'webm';
+  if (type.includes('ogg'))  return 'ogg';
+  return 'bin';
+}
+
+async function sendClip(blob, type) {
+  busy = true;
+  talk.disabled = true;
+  status.textContent = 'Thinking…';
+  const fd = new FormData();
+  fd.append('audio', blob, 'clip.' + extFor(type));
+  try {
+    const res = await fetch('/api/talk', { method: 'POST', body: fd });
+    if (!res.ok) {
+      const txt = await res.text();
+      status.textContent = 'Error ' + res.status;
+      hint.textContent = txt.slice(0, 200);
+      return;
+    }
+    const data = await res.json();
+    if (data.note && !data.transcript) {
+      status.textContent = data.note;
+      return;
+    }
+    if (data.transcript) addBubble('me', data.transcript);
+    if (data.reply)      addBubble('bot', data.reply);
+    if (data.timing) {
+      hint.textContent =
+        `asr ${data.timing.asr}s · llm ${data.timing.llm}s · tts ${data.timing.tts}s`;
+    }
+    if (data.audio_url) {
+      lastAudioUrl = data.audio_url;
+      playAudio(data.audio_url);
+    }
+    status.textContent = 'Tap-and-hold to talk';
+  } catch (e) {
+    status.textContent = 'Network error';
+    hint.textContent = String(e);
+  } finally {
+    busy = false;
+    talk.disabled = false;
+  }
+}
+
+function playAudio(url) {
+  player.src = url;
+  replay.hidden = true;
+  const p = player.play();
+  if (p && p.catch) {
+    p.catch(() => {
+      // iOS blocked autoplay — offer a manual replay button.
+      replay.hidden = false;
+      status.textContent = 'Tap ▶ to hear the reply';
+    });
+  }
+}
+
+replay.addEventListener('click', () => { if (lastAudioUrl) player.play(); });
+
+// --- press & hold wiring (touch + mouse) ---
+talk.addEventListener('touchstart', e => { e.preventDefault(); startRecording(); }, { passive: false });
+talk.addEventListener('touchend',   e => { e.preventDefault(); stopRecording();  }, { passive: false });
+talk.addEventListener('touchcancel',e => { e.preventDefault(); stopRecording();  }, { passive: false });
+talk.addEventListener('mousedown',  e => { e.preventDefault(); startRecording(); });
+window.addEventListener('mouseup',  () => stopRecording());
+
+if (!navigator.mediaDevices || !window.MediaRecorder) {
+  status.textContent = 'This browser cannot record audio';
+  talk.disabled = true;
+}
+</script>
+</body>
+</html>
