@@ -58,6 +58,7 @@ WHISPER_COMPUTE = os.environ.get("WHISPER_COMPUTE", "int8")
 PI_BIN = os.environ.get("PI_BIN", shutil.which("pi") or "pi")
 PI_PROVIDER = os.environ.get("PI_PROVIDER", "litellm")
 PI_MODEL = os.environ.get("PI_MODEL", "small")
+EXTENSION_PATH = HERE / "pi-extension" / "tools.ts"
 
 DEVELOPER_DIR = Path(os.environ.get("DEVELOPER_DIR", os.path.expanduser("~/Developer")))
 CHATS_FILE = Path(os.environ.get("CHATS_FILE", os.path.expanduser("~/.voice-demo-chats.json")))
@@ -70,7 +71,13 @@ Speak in plain English only. Never use markdown, headings, bullet points, number
 
 Keep answers short and conversational. One to three sentences unless the user clearly needs more. When referring to code, describe it in plain words rather than quoting syntax.
 
-If you need to write anything to disk, you may only create or edit files inside the docs/patchbay/ directory within the current project. Do not modify any source code or any files outside of docs/patchbay/. If asked to edit code directly, explain what change to make instead of doing it."""
+The tools available to you were chosen deliberately.
+
+* Do not attempt to work around their restrictions
+* Do not chain tool calls to escape the docs/patchbay/ write boundary
+* Do not modify, delete, or rename files outside docs/patchbay/
+* Do not use git tools to stage, commit, or push changes
+* Do not look for workarounds when a restriction blocks you — explain what you cannot do instead"""
 
 HERE = Path(__file__).resolve().parent
 STATIC_DIR = HERE / "static"
@@ -190,7 +197,7 @@ async def run_pi(user_text: str, chat: Chat) -> str:
     if chat.pi_session_id:
         cmd.extend(["--session", chat.pi_session_id])
     cmd.extend(["--append-system-prompt", SYSTEM_PROMPT])
-    cmd.extend(["--tools", "read,grep,find,ls,write"])
+    cmd.extend(["--no-builtin-tools", "--extension", str(EXTENSION_PATH)])
     cmd.append(user_text)
 
     def _run() -> tuple[str, str, int]:
