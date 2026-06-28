@@ -43,11 +43,25 @@
     max-width: 82%;
     line-height: 1.4;
     font-size: 16px;
-    white-space: pre-wrap;
     word-wrap: break-word;
   }
   .me  { align-self: flex-end; background: #2b5cff; color: #fff; border-bottom-right-radius: 5px; }
   .bot { align-self: flex-start; background: #1b2030; border-bottom-left-radius: 5px; }
+  .bubble-text { white-space: pre-wrap; }
+  .bubble-play {
+    display: block;
+    margin-top: 8px;
+    background: rgba(255,255,255,0.1);
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 999px;
+    color: #e7e9ee;
+    font-size: 14px;
+    padding: 5px 14px;
+    cursor: pointer;
+    width: 100%;
+    text-align: center;
+  }
+  .bubble-play:active { background: rgba(255,255,255,0.2); }
   .meta { font-size: 12px; opacity: .45; align-self: center; }
 
   .stage { width: 100%; display: flex; flex-direction: column; align-items: center; gap: 14px; padding-bottom: 26px; }
@@ -72,12 +86,6 @@
   }
   @keyframes pulse { 50% { box-shadow: 0 0 0 22px rgba(255,90,107,.05), 0 10px 40px rgba(214,31,51,.4); } }
   .hint { font-size: 13px; opacity: .45; }
-  audio { display: none; }
-  .replay {
-    background: #1b2030; color: #cdd3e0; border: 1px solid #2a3146;
-    border-radius: 999px; padding: 8px 16px; font-size: 14px;
-  }
-  .replay[hidden] { display: none; }
 </style>
 </head>
 <body>
@@ -90,31 +98,81 @@
   <div class="stage">
     <div class="status" id="status">Tap-and-hold to talk</div>
     <button class="talk" id="talk">HOLD</button>
-    <button class="replay" id="replay" hidden>▶ replay last reply</button>
     <div class="hint" id="hint"></div>
   </div>
-
-  <audio id="player" playsinline></audio>
 
 <script>
 const convo  = document.getElementById('convo');
 const talk   = document.getElementById('talk');
 const status = document.getElementById('status');
 const hint   = document.getElementById('hint');
-const player = document.getElementById('player');
-const replay = document.getElementById('replay');
+
+let audioCtx = null;
+
+function unlockAudio() {
+  if (audioCtx) return;
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+}
+
+async function playAudioUrl(url) {
+  if (!audioCtx) return false;
+  try {
+    const buf = await (await fetch(url)).arrayBuffer();
+    const decoded = await audioCtx.decodeAudioData(buf);
+    const src = audioCtx.createBufferSource();
+    src.buffer = decoded;
+    src.connect(audioCtx.destination);
+    src.start(0);
+    return true;
+  } catch (err) {
+    console.warn('AudioContext play failed:', err);
+    return false;
+  }
+}
 
 let mediaRecorder = null;
 let chunks = [];
 let stream = null;
 let recording = false;
 let busy = false;
-let lastAudioUrl = null;
 
 function addBubble(cls, text) {
   const div = document.createElement('div');
   div.className = 'bubble ' + cls;
   div.textContent = text;
+  convo.appendChild(div);
+  convo.scrollTop = convo.scrollHeight;
+  return div;
+}
+
+function addBotBubble(text, audioUrl) {
+  const div = document.createElement('div');
+  div.className = 'bubble bot';
+
+  const span = document.createElement('span');
+  span.className = 'bubble-text';
+  span.textContent = text;
+  div.appendChild(span);
+
+  if (audioUrl) {
+    // Auto-play via AudioContext (already unlocked from first hold).
+    // Show a replay button as fallback if AudioContext isn't ready yet.
+    playAudioUrl(audioUrl).then(played => {
+      if (!played) {
+        const btn = document.createElement('button');
+        btn.className = 'bubble-play';
+        btn.textContent = '▶ play reply';
+        btn.addEventListener('click', () => {
+          unlockAudio();
+          playAudioUrl(audioUrl);
+          btn.remove();
+        });
+        div.appendChild(btn);
+      }
+    });
+  }
+
   convo.appendChild(div);
   convo.scrollTop = convo.scrollHeight;
   return div;
@@ -127,7 +185,6 @@ async function ensureStream() {
 }
 
 function pickMime() {
-  // Safari -> audio/mp4; Chrome/FF -> audio/webm. Let the browser choose if unsure.
   const prefs = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm'];
   for (const m of prefs) {
     if (window.MediaRecorder && MediaRecorder.isTypeSupported(m)) return m;
@@ -169,7 +226,7 @@ function stopRecording() {
 async function handleStop() {
   const type = mediaRecorder.mimeType || 'audio/webm';
   const blob = new Blob(chunks, { type });
-  if (blob.size < 1200) {           // basically silence / too short
+  if (blob.size < 1200) {
     status.textContent = 'Too short — hold and speak';
     return;
   }
@@ -203,14 +260,10 @@ async function sendClip(blob, type) {
       return;
     }
     if (data.transcript) addBubble('me', data.transcript);
-    if (data.reply)      addBubble('bot', data.reply);
+    if (data.reply)      addBotBubble(data.reply, data.audio_url || null);
     if (data.timing) {
       hint.textContent =
         `asr ${data.timing.asr}s · llm ${data.timing.llm}s · tts ${data.timing.tts}s`;
-    }
-    if (data.audio_url) {
-      lastAudioUrl = data.audio_url;
-      playAudio(data.audio_url);
     }
     status.textContent = 'Tap-and-hold to talk';
   } catch (e) {
@@ -222,23 +275,8 @@ async function sendClip(blob, type) {
   }
 }
 
-function playAudio(url) {
-  player.src = url;
-  replay.hidden = true;
-  const p = player.play();
-  if (p && p.catch) {
-    p.catch(() => {
-      // iOS blocked autoplay — offer a manual replay button.
-      replay.hidden = false;
-      status.textContent = 'Tap ▶ to hear the reply';
-    });
-  }
-}
-
-replay.addEventListener('click', () => { if (lastAudioUrl) player.play(); });
-
 // --- press & hold wiring (touch + mouse) ---
-talk.addEventListener('touchstart', e => { e.preventDefault(); startRecording(); }, { passive: false });
+talk.addEventListener('touchstart', e => { e.preventDefault(); unlockAudio(); startRecording(); }, { passive: false });
 talk.addEventListener('touchend',   e => { e.preventDefault(); stopRecording();  }, { passive: false });
 talk.addEventListener('touchcancel',e => { e.preventDefault(); stopRecording();  }, { passive: false });
 talk.addEventListener('mousedown',  e => { e.preventDefault(); startRecording(); });

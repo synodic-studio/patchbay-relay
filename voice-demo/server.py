@@ -84,7 +84,7 @@ SYSTEM_PROMPT = os.environ.get(
     "unless more is truly needed.",
 )
 
-TTS_VOICE = os.environ.get("TTS_VOICE", "").strip()
+TTS_VOICE = os.environ.get("TTS_VOICE", "Samantha").strip()
 
 HERE = Path(__file__).resolve().parent
 STATIC_DIR = HERE / "static"
@@ -107,8 +107,7 @@ async def get_whisper():
                 from faster_whisper import WhisperModel
 
                 print(
-                    f"[whisper] loading model={WHISPER_MODEL} "
-                    f"device={WHISPER_DEVICE} compute={WHISPER_COMPUTE} ...",
+                    f"[whisper] loading model={WHISPER_MODEL} device={WHISPER_DEVICE} compute={WHISPER_COMPUTE} ...",
                     flush=True,
                 )
                 t0 = time.time()
@@ -227,10 +226,7 @@ async def talk(audio: UploadFile = File(...)):
         transcript = await transcribe(tmp)
         t_asr = time.time()
         if not transcript:
-            return JSONResponse(
-                {"transcript": "", "reply": "", "audio_url": None,
-                 "note": "No speech detected."}
-            )
+            return JSONResponse({"transcript": "", "reply": "", "audio_url": None, "note": "No speech detected."})
 
         reply = await generate_reply(transcript)
         t_llm = time.time()
@@ -286,8 +282,7 @@ def main():
         flush=True,
     )
     if not shutil.which("say"):
-        print("[voice-demo] WARNING: `say` not found — TTS will fail off-macOS.",
-              file=sys.stderr, flush=True)
+        print("[voice-demo] WARNING: `say` not found — TTS will fail off-macOS.", file=sys.stderr, flush=True)
     uvicorn.run(app, host=HOST, port=PORT, log_level="info")
 
 
