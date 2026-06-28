@@ -325,11 +325,12 @@ async def list_chats():
 @app.post("/api/chats")
 async def create_chat(body: dict):
     rel = body.get("project_dir", "").strip()
-    if not rel:
-        raise HTTPException(status_code=400, detail="project_dir required")
-    path = Path(rel) if Path(rel).is_absolute() else DEVELOPER_DIR / rel
-    if not path.is_dir():
-        raise HTTPException(status_code=400, detail=f"Not a directory: {path}")
+    if not rel or Path(rel).is_absolute() or ".." in Path(rel).parts:
+        raise HTTPException(status_code=400, detail="project_dir must be a name under DEVELOPER_DIR")
+    base = DEVELOPER_DIR.resolve()
+    path = (base / rel).resolve()
+    if not path.is_dir() or (base not in path.parents and path != base):
+        raise HTTPException(status_code=400, detail="project_dir must resolve under DEVELOPER_DIR")
     chat = Chat(id=uuid.uuid4().hex, name=path.name, project_dir=str(path))
     _chats[chat.id] = chat
     _save_chats()
