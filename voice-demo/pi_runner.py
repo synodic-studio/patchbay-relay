@@ -36,28 +36,22 @@ def _find_session_id(events: list[dict]) -> str | None:
 
 
 def _extract_text(events: list[dict]) -> str:
-    texts: list[str] = []
-    pending: dict[int, list[str]] = {}
-    for ev in events:
-        if ev.get("type") != "message_update":
+    # agent_end carries the fully assembled messages — simpler and more reliable
+    # than assembling streaming text_delta events.
+    for ev in reversed(events):
+        if ev.get("type") != "agent_end":
             continue
-        ame = ev.get("assistantMessageEvent") or {}
-        kind = ame.get("type")
-        idx = ame.get("contentIndex", 0)
-        if kind == "text_delta":
-            delta = ame.get("delta", "")
-            if isinstance(delta, str) and delta:
-                pending.setdefault(idx, []).append(delta)
-        elif kind == "text_end":
-            content = ame.get("content")
-            if isinstance(content, str) and content:
-                texts.append(content)
-                pending.pop(idx, None)
-            elif idx in pending:
-                texts.append("".join(pending.pop(idx)))
-    for chunk in pending.values():
-        texts.append("".join(chunk))
-    return "\n".join(t for t in texts if t).strip()
+        for msg in reversed(ev.get("messages") or []):
+            if msg.get("role") != "assistant":
+                continue
+            parts = [
+                block["text"]
+                for block in (msg.get("content") or [])
+                if block.get("type") == "text" and block.get("text")
+            ]
+            if parts:
+                return "\n".join(parts).strip()
+    return ""
 
 
 def _find_error(events: list[dict]) -> str | None:
