@@ -8,7 +8,7 @@ import sys
 from fastapi import HTTPException
 
 from chats import Chat, save_chats
-from config import EXTENSION_PATH, PI_BIN, PI_MODEL, PI_PROVIDER, SYSTEM_PROMPT
+from config import EXTENSION_PATH, PI_BIN, PI_MODEL, PI_PROVIDER, SYSTEM_PROMPT_TEMPLATE
 
 
 def _parse_events(stdout: str) -> list[dict]:
@@ -36,8 +36,6 @@ def _find_session_id(events: list[dict]) -> str | None:
 
 
 def _extract_text(events: list[dict]) -> str:
-    # agent_end carries the fully assembled messages — simpler and more reliable
-    # than assembling streaming text_delta events.
     for ev in reversed(events):
         if ev.get("type") != "agent_end":
             continue
@@ -63,11 +61,14 @@ def _find_error(events: list[dict]) -> str | None:
     return None
 
 
-async def run_pi(user_text: str, chat: Chat, model: str | None = None) -> str:
+async def run_pi(user_text: str, chat: Chat, model: str | None = None, save_path: str | None = None) -> str:
+    effective_path = save_path or "docs/patchbay/"
+    prompt = SYSTEM_PROMPT_TEMPLATE.format(save_path=effective_path)
+
     cmd = [PI_BIN, "-p", "--mode", "json", "--provider", PI_PROVIDER, "--model", model or PI_MODEL]
     if chat.pi_session_id:
         cmd.extend(["--session", chat.pi_session_id])
-    cmd.extend(["--append-system-prompt", SYSTEM_PROMPT])
+    cmd.extend(["--append-system-prompt", prompt])
     cmd.extend(["--no-builtin-tools", "--extension", str(EXTENSION_PATH)])
     cmd.append(user_text)
 

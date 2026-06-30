@@ -25,11 +25,14 @@ PI_BIN = os.environ.get("PI_BIN", shutil.which("pi") or "pi")
 PI_PROVIDER = os.environ.get("PI_PROVIDER", "litellm")
 PI_MODEL = os.environ.get("PI_MODEL", "small")
 
+TTS_PROVIDER = os.environ.get("TTS_PROVIDER", "say")
+TTS_VOICE = os.environ.get("TTS_VOICE", "Samantha").strip()
+GOOGLE_TTS_VOICE = os.environ.get("GOOGLE_TTS_VOICE", "en-US-Studio-O")
+
 DEVELOPER_DIR = Path(os.environ.get("DEVELOPER_DIR", os.path.expanduser("~/Developer")))
 CHATS_FILE = Path(os.environ.get("CHATS_FILE", os.path.expanduser("~/.voice-demo-chats.json")))
-TTS_VOICE = os.environ.get("TTS_VOICE", "Samantha").strip()
 
-SYSTEM_PROMPT = """You are a voice coding assistant accessed from a mobile phone. The user speaks to you and your replies are read aloud by text-to-speech. Follow these rules strictly at all times:
+SYSTEM_PROMPT_TEMPLATE = """You are a voice coding assistant accessed from a mobile phone. The user speaks to you and your replies are read aloud by text-to-speech. Follow these rules strictly at all times:
 
 Speak in plain English only. Never use markdown, headings, bullet points, numbered lists, code blocks, backticks, bold, italics, URLs, or any other formatting meant for visual reading. Write exactly as you would speak to someone on a phone call.
 
@@ -42,11 +45,13 @@ The write_file tool is for saving notes, plans, and anything the user asks you t
 The tools available to you were chosen deliberately.
 
 * Do not attempt to work around their restrictions
-* Do not chain tool calls to escape the docs/patchbay/ write boundary
-* Do not modify, delete, or rename files outside docs/patchbay/
+* Do not chain tool calls to escape the {save_path} write boundary
+* Do not modify, delete, or rename files outside {save_path}
 * Do not use git tools to stage, commit, or push changes
 * Do not proactively create documents to convey information — speak instead
 * Do not look for workarounds when a restriction blocks you — explain what you cannot do instead"""
+
+SYSTEM_PROMPT = SYSTEM_PROMPT_TEMPLATE.format(save_path="docs/patchbay/")
 
 HERE = Path(__file__).resolve().parent
 STATIC_DIR = HERE / "static"

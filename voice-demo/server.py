@@ -6,6 +6,7 @@
 #     "uvicorn[standard]",
 #     "python-multipart",
 #     "faster-whisper",
+#     "google-cloud-texttospeech",
 # ]
 # ///
 """
