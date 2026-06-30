@@ -17,7 +17,7 @@ router = APIRouter()
 
 
 @router.post("/api/talk")
-async def talk(audio: UploadFile = File(...), chat_id: str = Form(...)):
+async def talk(audio: UploadFile = File(...), chat_id: str = Form(...), model: str | None = Form(None)):
     if chat_id not in _chats:
         raise HTTPException(status_code=404, detail="Chat not found")
     chat = _chats[chat_id]
@@ -34,7 +34,7 @@ async def talk(audio: UploadFile = File(...), chat_id: str = Form(...)):
         if not transcript:
             return JSONResponse({"transcript": "", "reply": "", "audio_url": None, "note": "No speech detected."})
 
-        reply = await run_pi(transcript, chat)
+        reply = await run_pi(transcript, chat, model=model)
         t_llm = time.time()
 
         audio_path = await tts_mod.synthesize(reply)

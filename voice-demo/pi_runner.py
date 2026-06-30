@@ -63,8 +63,8 @@ def _find_error(events: list[dict]) -> str | None:
     return None
 
 
-async def run_pi(user_text: str, chat: Chat) -> str:
-    cmd = [PI_BIN, "-p", "--mode", "json", "--provider", PI_PROVIDER, "--model", PI_MODEL]
+async def run_pi(user_text: str, chat: Chat, model: str | None = None) -> str:
+    cmd = [PI_BIN, "-p", "--mode", "json", "--provider", PI_PROVIDER, "--model", model or PI_MODEL]
     if chat.pi_session_id:
         cmd.extend(["--session", chat.pi_session_id])
     cmd.extend(["--append-system-prompt", SYSTEM_PROMPT])
