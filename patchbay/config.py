@@ -61,8 +61,7 @@ def _env_with_legacy(new_key: str, legacy_key: str, default: str) -> str:
         # stderr-only one-line warning; bridge logging may not be wired yet
         # at config import time.
         print(
-            f"WARNING: {legacy_key} is set; rename to {new_key}. "
-            "Legacy name still works for now.",
+            f"WARNING: {legacy_key} is set; rename to {new_key}. Legacy name still works for now.",
             file=sys.stderr,
         )
         return os.environ[legacy_key]
@@ -204,13 +203,9 @@ MAX_WORKERS = _env_int("MAX_WORKERS", "4", min_value=1)
 # (multi-model). Per-chat override lives in chat_projects.json under the
 # "harness" key; this value is the fallback when a topic has no override.
 VALID_HARNESSES = ("cc-sdk", "cc-sdk-mop", "pi")
-DEFAULT_HARNESS = _env_with_legacy(
-    "PATCHBAY_DEFAULT_HARNESS", "STARGATE_DEFAULT_HARNESS", "cc-sdk"
-)
+DEFAULT_HARNESS = _env_with_legacy("PATCHBAY_DEFAULT_HARNESS", "STARGATE_DEFAULT_HARNESS", "cc-sdk")
 if DEFAULT_HARNESS not in VALID_HARNESSES:
-    raise SystemExit(
-        f"PATCHBAY_DEFAULT_HARNESS={DEFAULT_HARNESS!r} is not one of {VALID_HARNESSES}"
-    )
+    raise SystemExit(f"PATCHBAY_DEFAULT_HARNESS={DEFAULT_HARNESS!r} is not one of {VALID_HARNESSES}")
 
 # /usage weekly-cap estimate. Anthropic does not publish a weekly token cap
 # for Max plans — the closest public data (Portkey's community-measured
@@ -229,6 +224,45 @@ TYPING_INTERVAL = 2  # seconds between typing indicators
 SEND_RETRY_ATTEMPTS = 3
 SEND_RETRY_BASE_DELAY = 1.0  # seconds; doubles each retry
 MAX_QUEUED_MESSAGES = 20  # max pending messages per session before dropping
+
+# --- Heartbeat bubble ---
+# After HEARTBEAT_DELAY seconds of silence (no Telegram reply yet), send an
+# edit-in-place "⏳ Working — N min" message. Edited every HEARTBEAT_INTERVAL
+# seconds thereafter. Deleted automatically on successful turn delivery.
+# Per-chat toggle stored in chat_projects.json under "heartbeat" (default on).
+HEARTBEAT_DELAY = _env_int("HEARTBEAT_DELAY", "180", min_value=10)
+HEARTBEAT_INTERVAL = _env_int("HEARTBEAT_INTERVAL", "60", min_value=10)
+
+# --- Reply-text store ---
+# Stores sent-message text by (chat_id, message_id) so inbound replies to bot
+# messages can carry quoted context into the prompt.
+REPLY_STORE_FILE = BASE_DIR / "reply_store.json"
+
+# --- Auto-compact ---
+# Trigger automatic context compaction after a turn when usage crosses a
+# threshold. Set AUTO_COMPACT_PCT (0–100, exclusive) and/or
+# AUTO_COMPACT_TOKENS (positive integer). Either crossing triggers compact.
+# Only supported on cc-sdk and cc-sdk-mop; no-op on pi.
+AUTO_COMPACT_PCT: float | None = None
+AUTO_COMPACT_TOKENS: int | None = None
+_raw_compact_pct = os.environ.get("AUTO_COMPACT_PCT", "")
+_raw_compact_tokens = os.environ.get("AUTO_COMPACT_TOKENS", "")
+if _raw_compact_pct:
+    try:
+        _pct_val = float(_raw_compact_pct)
+        if not (0 < _pct_val < 100):
+            _fatal_config(f"AUTO_COMPACT_PCT={_raw_compact_pct!r} must be between 0 and 100 (exclusive).")
+        AUTO_COMPACT_PCT = _pct_val
+    except ValueError:
+        _fatal_config(f"AUTO_COMPACT_PCT={_raw_compact_pct!r} is not a valid float.")
+if _raw_compact_tokens:
+    try:
+        _tok_val = int(_raw_compact_tokens)
+        if _tok_val < 1:
+            _fatal_config(f"AUTO_COMPACT_TOKENS={_raw_compact_tokens!r} must be a positive integer.")
+        AUTO_COMPACT_TOKENS = _tok_val
+    except ValueError:
+        _fatal_config(f"AUTO_COMPACT_TOKENS={_raw_compact_tokens!r} is not a valid integer.")
 
 # --- Stall detection ---
 # Claude CLI is API-bound, so CPU hovers near zero during normal operation.

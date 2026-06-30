@@ -113,6 +113,31 @@ def set_chat_harness(session_key: str, harness: str | None) -> None:
         _save_chat_projects(projects)
 
 
+def get_chat_heartbeat(session_key: str) -> bool:
+    """Return whether the heartbeat bubble is enabled for this chat (default True)."""
+    projects = _load_chat_projects()
+    entry = projects.get(session_key)
+    if isinstance(entry, dict):
+        val = entry.get("heartbeat")
+        if isinstance(val, bool):
+            return val
+    return True
+
+
+def set_chat_heartbeat(session_key: str, enabled: bool) -> None:
+    """Enable or disable the heartbeat bubble for this chat. Uses file locking."""
+    with _projects_lock():
+        projects = _load_chat_projects()
+        entry = projects.get(session_key)
+        if isinstance(entry, str):
+            entry = {"path": entry}
+        elif not isinstance(entry, dict):
+            entry = {}
+        entry["heartbeat"] = enabled
+        projects[session_key] = entry
+        _save_chat_projects(projects)
+
+
 def get_chat_title(session_key: str) -> str | None:
     """Return the cached display title for this chat (forum topic name, etc.)."""
     projects = _load_chat_projects()

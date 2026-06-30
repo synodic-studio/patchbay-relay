@@ -25,6 +25,7 @@ than a per-module logger.
 from __future__ import annotations
 
 import asyncio
+import re
 
 from telegram.constants import ParseMode
 from telegram.error import ChatMigrated, Forbidden, RetryAfter
@@ -33,6 +34,39 @@ import bridge
 
 
 TYPING_MAX_FAILURES = 5
+
+# ---------------------------------------------------------------------------
+# Response filters (Feature 3 + Feature 6)
+# ---------------------------------------------------------------------------
+
+_SILENCE_NARRATION_RE = re.compile(
+    r"^[\s*_~`]*\(?\s*(?:silent|silence|no\s+response|no\s+reply)\s*\.?\)?[\s*_~`]*$"
+    r"|^[\s*_~`]*[\U0001F507\.…]+[\s*_~`]*$",
+    re.IGNORECASE,
+)
+
+_NOISY_STATUS_RE = re.compile(
+    r"^compacting\s+context(?:\s*[—\-]\s*summariz\w*(?:\s+\w+)*)?[\s.…]*$"
+    r"|^rate\s+limited[,.]?\s+waiting\s+\d+\s*s?[\s.…]*$"
+    r"|^retrying\s+in\s+\d+\s*s[\s.…]*$",
+    re.IGNORECASE,
+)
+
+
+def _is_silence_narration(text: str) -> bool:
+    """Return True if `text` is purely a silence-narration token (e.g. *(silent)*, 🔇)."""
+    stripped = text.strip()
+    if not stripped or len(stripped) > 64:
+        return False
+    return bool(_SILENCE_NARRATION_RE.match(stripped))
+
+
+def _is_noisy_status(text: str) -> bool:
+    """Return True if `text` is pure internal-status chatter that shouldn't reach the user."""
+    stripped = text.strip()
+    if not stripped or len(stripped) > 200:
+        return False
+    return bool(_NOISY_STATUS_RE.match(stripped))
 
 
 async def keep_typing(
@@ -114,6 +148,65 @@ async def keep_typing(
             continue
 
 
+async def _run_heartbeat(
+    chat_id: int,
+    thread_id: int | None,
+    stop_event: asyncio.Event,
+    bot,
+    start_time: float,
+    msg_holder: list,
+    *,
+    delay: float,
+    interval: float,
+) -> None:
+    """Send an edit-in-place ⏳ Working — N min bubble after a delay.
+
+    Waits `delay` seconds; if the turn finishes before then (stop_event set),
+    exits silently. After the delay, sends the bubble and appends its
+    message_id to `msg_holder` so the caller can delete it on success.
+    Edits the bubble every `interval` seconds thereafter. All Telegram errors
+    are swallowed — the heartbeat is best-effort and must never affect delivery.
+    """
+    import time as _time
+
+    send_kwargs: dict = {"chat_id": chat_id}
+    if thread_id is not None:
+        send_kwargs["message_thread_id"] = thread_id
+
+    try:
+        await asyncio.wait_for(stop_event.wait(), timeout=delay)
+        return  # turn finished before first bubble
+    except asyncio.TimeoutError:
+        pass
+
+    elapsed_min = int(((_time.time() - start_time) / 60) + 0.5)
+    try:
+        msg = await bot.send_message(text=f"⏳ Working — {elapsed_min} min", **send_kwargs)
+        msg_holder.append(msg.message_id)
+        msg_id = msg.message_id
+    except Exception as exc:
+        bridge.logger.debug("heartbeat send failed for chat=%s: %s", chat_id, exc)
+        return
+
+    while True:
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=interval)
+            return  # turn finished during edit loop
+        except asyncio.TimeoutError:
+            pass
+
+        elapsed_min = int(((_time.time() - start_time) / 60) + 0.5)
+        try:
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=msg_id,
+                text=f"⏳ Working — {elapsed_min} min",
+            )
+        except Exception as exc:
+            bridge.logger.debug("heartbeat edit failed for chat=%s: %s", chat_id, exc)
+            return
+
+
 _MARKDOWN_FAILURE_TEXT_LIMIT = 800
 
 
@@ -176,6 +269,30 @@ async def _send_response(bot, chat_id: int, thread_id: int | None, response: str
     if not response and not file_requests:
         return
 
+    # Feature 6: drop pure-silence narration (*(silent)*, 🔇, etc.)
+    if response and _is_silence_narration(response):
+        bridge._log_activity(
+            "silence_narration_filtered",
+            session_key=audit_session_key,
+            text=response[:80],
+        )
+        bridge.logger.info("Filtered silence narration for %s: %r", audit_session_key, response[:40])
+        response = ""
+        if not file_requests:
+            return
+
+    # Feature 3: drop pure internal-status chatter (compaction narration, etc.)
+    if response and _is_noisy_status(response):
+        bridge._log_activity(
+            "noisy_status_filtered",
+            session_key=audit_session_key,
+            text=response[:80],
+        )
+        bridge.logger.info("Filtered noisy status for %s: %r", audit_session_key, response[:40])
+        response = ""
+        if not file_requests:
+            return
+
     # Convert the whole response once, then split the converted MarkdownV2
     # text on paragraph/line/word boundaries so chunks never cut mid-entity.
     # The parity check is defense-in-depth: the 2026-05-11 heading-prefix
@@ -237,13 +354,20 @@ async def _send_response(bot, chat_id: int, thread_id: int | None, response: str
             sent_as_md = md_chunk is not None
             try:
                 if sent_as_md:
-                    await bot.send_message(
+                    sent_msg = await bot.send_message(
                         text=md_chunk,
                         parse_mode=ParseMode.MARKDOWN_V2,
                         **send_kwargs,
                     )
                 else:
-                    await bot.send_message(text=chunk, **send_kwargs)
+                    sent_msg = await bot.send_message(text=chunk, **send_kwargs)
+                # Feature 5: record sent text for reply-context injection
+                try:
+                    from patchbay.reply_store import record as _rs_record
+
+                    _rs_record(chat_id, sent_msg.message_id, chunk)
+                except Exception:
+                    pass
                 last_exc = None
                 try:
                     bridge.log_outbound_response(

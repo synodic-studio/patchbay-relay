@@ -67,11 +67,15 @@ configure_telegramify()
 from patchbay.config import (  # noqa: E402
     ACTIVITY_LOG,  # noqa: F401 — used by tests via bridge.ACTIVITY_LOG
     ANSI_RE,
+    AUTO_COMPACT_PCT,
+    AUTO_COMPACT_TOKENS,
     BOT_TOKEN,
     CHAT_PROJECTS_FILE,
     CLAUDE_PATH,
     DEFAULT_HARNESS,
     FORGE_QUEUE_DIR,  # noqa: F401 — used by tests via bridge.FORGE_QUEUE_DIR
+    HEARTBEAT_DELAY,
+    HEARTBEAT_INTERVAL,
     MAX_QUEUED_MESSAGES,
     MAX_TIMEOUT,
     MAX_TURNS,
@@ -157,6 +161,7 @@ from patchbay.projects import (  # noqa: E402
     get_all_projects as _get_all_projects,
     get_chat_agent,
     get_chat_harness,
+    get_chat_heartbeat,
     get_chat_title,
     get_chat_working_dir,
     set_chat_harness,
@@ -205,7 +210,9 @@ class SessionState:
 
     proc: subprocess.Popen | None = None  # subprocess harnesses (pi) only; mirrored by harness's proc_setter
     harness: object | None = None  # whichever harness instance is driving the active turn
-    worker_loop: asyncio.AbstractEventLoop | None = None  # loop owned by _drive_harness_sync; needed for cross-loop cancel of SDK-based harnesses
+    worker_loop: asyncio.AbstractEventLoop | None = (
+        None  # loop owned by _drive_harness_sync; needed for cross-loop cancel of SDK-based harnesses
+    )
     started_at: float | None = None  # time.time() when processing began
     last_event_at: float | None = None  # last time stall-detector saw activity
     queue: list[QueuedMessage] = field(default_factory=list)  # debounced messages awaiting processing
@@ -252,11 +259,7 @@ def _iter_active_sessions() -> list[tuple[str, "SessionState"]]:
     (subprocess harnesses) or `state.harness` is set (SDK harnesses).
     Either signal alone is sufficient.
     """
-    return [
-        (k, s)
-        for k, s in _sessions.items()
-        if s.proc is not None or s.harness is not None
-    ]
+    return [(k, s) for k, s in _sessions.items() if s.proc is not None or s.harness is not None]
 
 
 async def _interrupt_session_async(state: "SessionState") -> None:
@@ -462,6 +465,7 @@ def _start_remote_drain(proc: subprocess.Popen) -> None:
     t = threading.Thread(target=_drain, name="remote-control-drain", daemon=True)
     t.start()
     _remote_drain_thread = t
+
 
 # Message debounce: batch messages that arrive while Claude is processing
 
@@ -836,9 +840,7 @@ def run_claude(
             cli_path=CLAUDE_PATH,
             max_timeout_seconds=MAX_TIMEOUT,
             on_progress=_on_progress,
-            max_turns_default=(
-                max_turns_override if max_turns_override is not None else MAX_TURNS
-            ),
+            max_turns_default=(max_turns_override if max_turns_override is not None else MAX_TURNS),
         )
     elif effective_harness == "pi":
         # Pi (badlogicgames/pi) — multi-model coding agent. Uses its own
@@ -852,9 +854,7 @@ def run_claude(
             proc_setter=_proc_setter,
         )
     else:
-        raise RuntimeError(
-            f"Unhandled harness {effective_harness!r} after validation. Bug."
-        )
+        raise RuntimeError(f"Unhandled harness {effective_harness!r} after validation. Bug.")
     req = TurnRequest(
         prompt=message,
         session_key=session_key,
@@ -913,10 +913,7 @@ def run_claude(
                 elapsed_ms=int(duration * 1000),
                 harness=effective_harness,
             )
-            return (
-                f"[Timed out after {MAX_TIMEOUT // 60} min] "
-                "Session preserved — send your message again to resume."
-            )
+            return f"[Timed out after {MAX_TIMEOUT // 60} min] Session preserved — send your message again to resume."
 
         if final.kind == "corrupt_session" and not _retry:
             stale = final.metadata.get("stale_session_id") or session_id
@@ -934,6 +931,7 @@ def run_claude(
                 OOM_RETRY_PROMPT_TRIM,
                 dispatch_repair,
             )
+
             rc = final.metadata.get("exit_code", 0)
             result = dispatch_repair(
                 "claude_oom_137",
@@ -1219,9 +1217,7 @@ async def replay_pending(bot) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _maybe_handoff_quota(
-    response: str, session_key: str, chat_id: int, thread_id: int | None
-) -> str:
+def _maybe_handoff_quota(response: str, session_key: str, chat_id: int, thread_id: int | None) -> str:
     """If `response` is a quota-hit sentinel, hand the original message off
     to Forge and return a user-facing replacement. Otherwise return the
     response unchanged. Only message-shaped turns invoke this; photo /
@@ -1246,10 +1242,85 @@ def _maybe_handoff_quota(
             "it'll pick up where this left off and send the response "
             "back here when done."
         )
-    return (
-        "Hit a quota/rate limit. Tried to hand off to Forge but "
-        "failed to write the queue file. Try again later."
+    return "Hit a quota/rate limit. Tried to hand off to Forge but failed to write the queue file. Try again later."
+
+
+async def _auto_compact_if_needed(bot, chat_id: int, thread_id: int | None, session_key: str) -> None:
+    """Check context usage after a turn and compact if over threshold.
+
+    Fires only when AUTO_COMPACT_PCT or AUTO_COMPACT_TOKENS is configured.
+    Supported on cc-sdk and cc-sdk-mop (both backed by the same Claude
+    session). No-op on pi. Errors are swallowed — auto-compact must never
+    affect the main turn lifecycle.
+    """
+    if AUTO_COMPACT_PCT is None and AUTO_COMPACT_TOKENS is None:
+        return
+
+    session_id = get_session_id(session_key)
+    if not session_id:
+        return
+
+    harness_name = get_chat_harness(session_key) or DEFAULT_HARNESS
+    if harness_name not in ("cc-sdk", "cc-sdk-mop"):
+        return
+
+    from patchbay.efforts import resolve_effort
+
+    harness = ClaudeSdkHarness(cli_path=CLAUDE_PATH, max_timeout_seconds=MAX_TIMEOUT)
+    req = TurnRequest(
+        prompt="",
+        session_key=session_key,
+        project_dir=Path(get_chat_working_dir(session_key)),
+        system_prompt="",
+        resume_session_id=session_id,
+        model=get_chat_model(session_key),
+        effort=resolve_effort(session_key),
+        allowed_tools=None,
+        disallowed_tools=None,
+        max_turns=None,
+        plugin_dir=None,
     )
+
+    try:
+        usage = await harness.get_context(req)
+    except Exception as exc:
+        logger.debug("auto-compact context check failed for %s: %s", session_key, exc)
+        return
+
+    needs_compact = False
+    if AUTO_COMPACT_PCT is not None and usage.percentage >= AUTO_COMPACT_PCT:
+        needs_compact = True
+    if AUTO_COMPACT_TOKENS is not None and usage.used_tokens >= AUTO_COMPACT_TOKENS:
+        needs_compact = True
+
+    if not needs_compact:
+        return
+
+    pct_before = f"{usage.percentage:.0f}%"
+    logger.info("Auto-compacting context for %s (%s full)", session_key, pct_before)
+    _log_activity(
+        "auto_compact_triggered",
+        session_key=session_key,
+        used_pct=usage.percentage,
+        used_tokens=usage.used_tokens,
+        threshold_pct=AUTO_COMPACT_PCT,
+        threshold_tokens=AUTO_COMPACT_TOKENS,
+    )
+
+    try:
+        result = await harness.compact(req)
+    except Exception as exc:
+        logger.warning("auto-compact failed for %s: %s", session_key, exc)
+        return
+
+    send_kwargs: dict = {"chat_id": chat_id}
+    if thread_id is not None:
+        send_kwargs["message_thread_id"] = thread_id
+    try:
+        await bot.send_message(text=f"↩️ Auto-compacted ({pct_before} → done)", **send_kwargs)
+        logger.info("Auto-compact done for %s: %s", session_key, result.message)
+    except Exception as exc:
+        logger.debug("auto-compact notification failed: %s", exc)
 
 
 async def _process_with_claude_turn(
@@ -1322,12 +1393,29 @@ async def _process_with_claude_turn(
     stop_typing = asyncio.Event()
     typing_task = asyncio.create_task(keep_typing(chat_id, thread_id, stop_typing, context.bot))
 
+    # Feature 1: heartbeat bubble — send ⏳ Working — N min after HEARTBEAT_DELAY
+    # seconds if the turn is still in flight. msg_holder accumulates the sent
+    # message_id so the main path can delete the bubble on success (Feature 2).
+    heartbeat_holder: list[int] = []
+    heartbeat_task: asyncio.Task | None = None
+    if get_chat_heartbeat(session_key):
+        heartbeat_task = asyncio.create_task(
+            _run_heartbeat(
+                chat_id,
+                thread_id,
+                stop_typing,
+                context.bot,
+                time.time(),
+                heartbeat_holder,
+                delay=float(HEARTBEAT_DELAY),
+                interval=float(HEARTBEAT_INTERVAL),
+            )
+        )
+
     try:
         loop = asyncio.get_running_loop()
         try:
-            response = await loop.run_in_executor(
-                _executor, lambda: run_claude(prompt, session_key, model=model)
-            )
+            response = await loop.run_in_executor(_executor, lambda: run_claude(prompt, session_key, model=model))
         except Exception as e:
             logger.error("Error running claude for %s %s: %s", label, session_key, e)
             response = f"Error: {e}"
@@ -1345,6 +1433,13 @@ async def _process_with_claude_turn(
         try:
             await _send_response(context.bot, chat_id, thread_id, response)
             delivered = True
+            # Feature 2: delete heartbeat bubble on successful delivery
+            if heartbeat_holder:
+                try:
+                    await context.bot.delete_message(chat_id=chat_id, message_id=heartbeat_holder[0])
+                    heartbeat_holder.clear()
+                except Exception:
+                    pass
         except Exception as e:
             logger.error("Failed to send %s response for %s: %s", label, session_key, e)
             await _notify_delivery_failure(context.bot, chat_id, thread_id, session_key)
@@ -1362,9 +1457,7 @@ async def _process_with_claude_turn(
             combined = (
                 batch[0].text
                 if len(batch) == 1
-                else "\n\n---\n\n".join(
-                    f"[Follow-up {i + 1}]\n{item.text}" for i, item in enumerate(batch)
-                )
+                else "\n\n---\n\n".join(f"[Follow-up {i + 1}]\n{item.text}" for i, item in enumerate(batch))
             )
             try:
                 response = await loop.run_in_executor(_executor, run_claude, combined, session_key)
@@ -1375,6 +1468,12 @@ async def _process_with_claude_turn(
             try:
                 await _send_response(context.bot, chat_id, thread_id, response)
                 batch_delivered = True
+                if heartbeat_holder:
+                    try:
+                        await context.bot.delete_message(chat_id=chat_id, message_id=heartbeat_holder[0])
+                        heartbeat_holder.clear()
+                    except Exception:
+                        pass
             except Exception as e:
                 logger.error("Failed to send queued response for %s: %s", session_key, e)
                 await _notify_delivery_failure(context.bot, chat_id, thread_id, session_key)
@@ -1382,6 +1481,10 @@ async def _process_with_claude_turn(
                 if batch_delivered:
                     for item in batch:
                         clear_pending(item.pending_id)
+
+        # Auto-compact: check context after a successful main turn
+        if delivered:
+            await _auto_compact_if_needed(context.bot, chat_id, thread_id, session_key)
     except Exception:
         # Defensive: ensure processing flag is cleared on any uncaught
         # exception escaping the drain loop.
@@ -1390,6 +1493,12 @@ async def _process_with_claude_turn(
     finally:
         stop_typing.set()
         await typing_task
+        if heartbeat_task is not None and not heartbeat_task.done():
+            heartbeat_task.cancel()
+            try:
+                await heartbeat_task
+            except asyncio.CancelledError:
+                pass
         if on_finish is not None:
             on_finish()
 
@@ -1411,6 +1520,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     _log_activity("message", user_id=user_id, session_key=key, text_len=len(text))
 
     msg_model, clean_text = extract_model_prefix(text)
+
+    # Feature 5: inject quoted text when replying to a bot message
+    reply_msg = update.message.reply_to_message
+    if reply_msg is not None:
+        from patchbay.reply_store import lookup as _rs_lookup
+
+        quoted = _rs_lookup(chat_id, reply_msg.message_id)
+        if quoted:
+            clean_text = f"[Replying to: {quoted[:500]}]\n\n{clean_text}"
+
     await _process_with_claude_turn(
         update,
         context,
@@ -1419,10 +1538,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         thread_id=thread_id,
         prompt=clean_text,
         label="message",
-        drop_message=(
-            f"Queue full ({MAX_QUEUED_MESSAGES}) — message dropped. "
-            "Wait for current response to finish."
-        ),
+        drop_message=(f"Queue full ({MAX_QUEUED_MESSAGES}) — message dropped. Wait for current response to finish."),
         queued_message="Queued ({depth}) — will send when current response finishes.",
         model=msg_model,
         quota_handoff=True,
@@ -1461,10 +1577,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         thread_id=thread_id,
         prompt=prompt,
         label="photo",
-        drop_message=(
-            f"Queue full ({MAX_QUEUED_MESSAGES}) — photo dropped. "
-            "Wait for current response to finish."
-        ),
+        drop_message=(f"Queue full ({MAX_QUEUED_MESSAGES}) — photo dropped. Wait for current response to finish."),
         queued_message="Photo queued ({depth}) — will send when current response finishes.",
         on_drop=_cleanup,
         on_finish=_cleanup,
@@ -1512,10 +1625,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         thread_id=thread_id,
         prompt=prompt,
         label="document",
-        drop_message=(
-            f"Queue full ({MAX_QUEUED_MESSAGES}) — file dropped. "
-            "Wait for current response to finish."
-        ),
+        drop_message=(f"Queue full ({MAX_QUEUED_MESSAGES}) — file dropped. Wait for current response to finish."),
         queued_message="File queued ({depth}) — will process when current response finishes.",
         on_drop=_cleanup,
     )
@@ -1553,8 +1663,6 @@ async def _drain_active_turns(deadline_seconds: int) -> None:
     )
 
 
-
-
 def _session_display_label(session_key: str) -> str:
     """Resolve a human-friendly label for a session key.
 
@@ -1576,9 +1684,7 @@ def _session_display_label(session_key: str) -> str:
     return session_key
 
 
-async def handle_forum_topic_event(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
+async def handle_forum_topic_event(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Cache forum topic names from create/edit service messages.
 
     Telegram only exposes topic names through these events — regular
@@ -1907,7 +2013,10 @@ def _graceful_shutdown(signum: int, frame) -> None:
 from patchbay.telegram_send import (  # noqa: E402, F401
     TYPING_MAX_FAILURES,
     _MARKDOWN_FAILURE_TEXT_LIMIT,
+    _is_noisy_status,
+    _is_silence_narration,
     _notify_delivery_failure,
+    _run_heartbeat,
     _send_response,
     _to_markdownv2,
     keep_typing,
@@ -1961,6 +2070,10 @@ from patchbay.commands.project import (  # noqa: E402, F401
     cmd_remote_control,
     cmd_setproject,
 )
+from patchbay.commands.heartbeat import (  # noqa: E402, F401
+    callback_heartbeat,
+    cmd_heartbeat,
+)
 
 
 def main() -> None:
@@ -1995,6 +2108,8 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(callback_model, pattern=r"^model:"))
     app.add_handler(CommandHandler("effort", cmd_effort))
     app.add_handler(CommandHandler("harness", cmd_harness))
+    app.add_handler(CommandHandler("heartbeat", cmd_heartbeat))
+    app.add_handler(CallbackQueryHandler(callback_heartbeat, pattern=r"^heartbeat:"))
     app.add_handler(CallbackQueryHandler(callback_effort, pattern=r"^effort:"))
     app.add_handler(CommandHandler("remote_control", cmd_remote_control))
     app.add_handler(CommandHandler("restart", cmd_restart))
@@ -2007,8 +2122,7 @@ def main() -> None:
     app.add_handler(CommandHandler("usage", cmd_usage))
     app.add_handler(
         MessageHandler(
-            filters.StatusUpdate.FORUM_TOPIC_CREATED
-            | filters.StatusUpdate.FORUM_TOPIC_EDITED,
+            filters.StatusUpdate.FORUM_TOPIC_CREATED | filters.StatusUpdate.FORUM_TOPIC_EDITED,
             handle_forum_topic_event,
         )
     )

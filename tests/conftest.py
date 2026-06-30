@@ -96,6 +96,14 @@ _PRODUCTION_PATH_GROUPS = [
         # every test's setup.
         [("patchbay.config", "MOP_AUDIT_DIR")],
     ),
+    (
+        "reply_store_file",
+        "file",
+        [
+            ("patchbay.config", "REPLY_STORE_FILE"),
+            ("patchbay.reply_store", "REPLY_STORE_FILE"),
+        ],
+    ),
 ]
 
 
@@ -143,6 +151,8 @@ def mock_bot():
     bot.send_photo = AsyncMock()
     bot.send_document = AsyncMock()
     bot.answer_callback_query = AsyncMock()
+    bot.delete_message = AsyncMock()
+    bot.edit_message_text = AsyncMock()
 
     application = MagicMock()
     application.bot = bot
