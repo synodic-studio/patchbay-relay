@@ -10,8 +10,8 @@ The bridge extracts these sentinels before sending the response, strips
 them from the user-visible text, and uploads each file via Telegram's
 sendPhoto (image/* MIME) or sendDocument (everything else).
 
-Why a text sentinel: it works for every harness (cc-sdk, cc-sdk-mop, pi)
-because every harness can produce text. No tool-call plumbing required.
+Why a text sentinel: it works for pi (and any future harness) because
+every harness can produce text. No tool-call plumbing required.
 """
 
 from __future__ import annotations

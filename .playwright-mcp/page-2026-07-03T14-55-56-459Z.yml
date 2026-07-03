@@ -1,0 +1,37 @@
+- generic [ref=f1e79]:
+  - generic [ref=f1e80]:
+    - generic [ref=f1e81]: Settings
+    - button "Done" [ref=f1e82] [cursor=pointer]
+  - generic [ref=f1e83]:
+    - generic [ref=f1e84]:
+      - generic [ref=f1e85]: Voice
+      - generic [ref=f1e86]:
+        - generic [ref=f1e87]:
+          - generic [ref=f1e88]: TTS provider
+          - combobox "TTS provider" [ref=f1e89] [cursor=pointer]:
+            - option "macOS say" [selected]
+            - option "Google Cloud"
+        - generic [ref=f1e90]:
+          - generic [ref=f1e91]: Speaking rate
+          - slider [ref=f1e92]: "1"
+          - generic [ref=f1e93]: 1.0×
+        - generic [ref=f1e94]:
+          - generic [ref=f1e95]: Spoken replies
+          - generic [ref=f1e96]:
+            - checkbox "Spoken replies" [checked]
+    - generic [ref=f1e98]:
+      - generic [ref=f1e99]: Agent
+      - generic [ref=f1e100]:
+        - generic [ref=f1e101]:
+          - generic [ref=f1e102]: Model
+          - textbox "Model" [ref=f1e103]:
+            - /placeholder: small
+        - generic [ref=f1e104]:
+          - generic [ref=f1e105]: Save path
+          - textbox "Save path" [ref=f1e106]:
+            - /placeholder: docs/patchbay/
+            - text: docs/patchbay/
+        - generic [ref=f1e107]:
+          - generic [ref=f1e108]: Auto commit
+          - generic [ref=f1e109]:
+            - checkbox "Auto commit"

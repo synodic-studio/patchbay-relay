@@ -1,0 +1,19 @@
+- generic [ref=e47]:
+  - generic [ref=e48]:
+    - button "Back" [ref=e49] [cursor=pointer]:
+      - img [ref=e50]
+    - generic [ref=e52]:
+      - heading "patchbay-voice" [level=2] [ref=e53]
+      - paragraph [ref=e54]:
+        - generic [ref=e56]: patchbay-voice
+    - button "Reset" [ref=e57] [cursor=pointer]
+  - generic [ref=e59]:
+    - generic [ref=e60]: 🎤
+    - paragraph [ref=e61]: Hold the mic to talk.
+  - generic [ref=e63]:
+    - button "Keyboard" [ref=e64] [cursor=pointer]:
+      - img [ref=e65]
+    - button "Hold to talk" [ref=e68] [cursor=pointer]:
+      - img [ref=e69]
+    - button "Toggle audio" [ref=e72] [cursor=pointer]:
+      - img [ref=e73]

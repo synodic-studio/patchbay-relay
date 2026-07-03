@@ -89,18 +89,18 @@ def test_load_events_filters_by_session(soak_module, tmp_path):
 def test_bucket_counts_invokes_per_harness(soak_module):
     events = [
         {"event": "turn_invoke", "session_key": "-1000000000001_1", "harness": "cc-cli"},
-        {"event": "turn_invoke", "session_key": "-1000000000002_2", "harness": "cc-sdk"},
-        {"event": "turn_invoke", "session_key": "-1000000000002_2", "harness": "cc-sdk"},
+        {"event": "turn_invoke", "session_key": "-1000000000002_2", "harness": "pi"},
+        {"event": "turn_invoke", "session_key": "-1000000000002_2", "harness": "pi"},
     ]
     b = soak_module.bucket_by_harness(events)
     assert b["cc-cli"]["invokes"] == 1
-    assert b["cc-sdk"]["invokes"] == 2
+    assert b["pi"]["invokes"] == 2
 
 
 def test_bucket_attaches_followups_to_invoke_harness(soak_module):
     """A complete event without harness inherits the invoke's harness."""
     events = [
-        {"event": "turn_invoke", "session_key": "-1000000000001_1", "harness": "cc-sdk"},
+        {"event": "turn_invoke", "session_key": "-1000000000001_1", "harness": "pi"},
         {
             "event": "turn_complete",
             "session_key": "-1000000000001_1",
@@ -109,8 +109,8 @@ def test_bucket_attaches_followups_to_invoke_harness(soak_module):
         },
     ]
     b = soak_module.bucket_by_harness(events)
-    assert b["cc-sdk"]["completes"] == 1
-    assert b["cc-sdk"]["durations"] == [30.0]
+    assert b["pi"]["completes"] == 1
+    assert b["pi"]["durations"] == [30.0]
 
 
 def test_bucket_uses_explicit_harness_when_present(soak_module):
@@ -122,46 +122,46 @@ def test_bucket_uses_explicit_harness_when_present(soak_module):
             "session_key": "-1000000000001_1",
             "duration": 5.0,
             "response_len": 50,
-            "harness": "cc-sdk",
+            "harness": "pi",
         },
     ]
     b = soak_module.bucket_by_harness(events)
     assert b["cc-cli"]["completes"] == 0
-    assert b["cc-sdk"]["completes"] == 1
+    assert b["pi"]["completes"] == 1
 
 
 def test_bucket_classifies_outcomes(soak_module):
     events = [
-        {"event": "turn_invoke", "session_key": "-1000000000000_0", "harness": "cc-sdk"},
-        {"event": "turn_error", "session_key": "-1000000000000_0", "harness": "cc-sdk"},
-        {"event": "turn_timeout", "session_key": "-1000000000000_0", "harness": "cc-sdk"},
+        {"event": "turn_invoke", "session_key": "-1000000000000_0", "harness": "pi"},
+        {"event": "turn_error", "session_key": "-1000000000000_0", "harness": "pi"},
+        {"event": "turn_timeout", "session_key": "-1000000000000_0", "harness": "pi"},
         {
             "event": "process_kill",
             "session_key": "-1000000000000_0",
-            "harness": "cc-sdk",
+            "harness": "pi",
             "reason": "stalled",
         },
         {
             "event": "process_kill",
             "session_key": "-1000000000000_0",
-            "harness": "cc-sdk",
+            "harness": "pi",
             "reason": "user_kill",
         },
-        {"event": "forge_handoff", "session_key": "-1000000000000_0", "harness": "cc-sdk"},
+        {"event": "forge_handoff", "session_key": "-1000000000000_0", "harness": "pi"},
         {
             "event": "self_heal",
             "session_key": "-1000000000000_0",
-            "harness": "cc-sdk",
+            "harness": "pi",
             "kind": "claude_oom_137",
         },
         {
             "event": "self_heal",
             "session_key": "-1000000000000_0",
-            "harness": "cc-sdk",
+            "harness": "pi",
             "kind": "corrupt_session_json",
         },
     ]
-    b = soak_module.bucket_by_harness(events)["cc-sdk"]
+    b = soak_module.bucket_by_harness(events)["pi"]
     assert b["errors"] == 1
     assert b["timeouts"] == 1
     assert b["stall_kills"] == 1
@@ -205,7 +205,7 @@ def test_load_events_drops_test_fixture_session_keys(soak_module, tmp_path):
             {"ts": 2.0, "event": "process_kill", "session_key": "1_2", "reason": "manual", "harness": "cc-cli"},
             {"ts": 3.0, "event": "process_kill", "session_key": "100_200", "reason": "stalled"},
             {"ts": 4.0, "event": "process_kill", "session_key": "stalled", "reason": "stalled"},
-            {"ts": 5.0, "event": "turn_invoke", "session_key": "aaa-bbb-ccc", "harness": "cc-sdk"},
+            {"ts": 5.0, "event": "turn_invoke", "session_key": "aaa-bbb-ccc", "harness": "pi"},
             {"ts": 6.0, "event": "turn_invoke", "session_key": "100", "harness": "cc-cli"},
             {"ts": 7.0, "event": "lifecycle"},  # legitimately missing session_key
         ],
@@ -279,7 +279,7 @@ def test_render_table_handles_empty(soak_module):
 
 def test_render_table_basic(soak_module):
     events = [
-        {"event": "turn_invoke", "session_key": "-1000000000000_0", "harness": "cc-sdk"},
+        {"event": "turn_invoke", "session_key": "-1000000000000_0", "harness": "pi"},
         {
             "event": "turn_complete",
             "session_key": "-1000000000000_0",
@@ -288,7 +288,7 @@ def test_render_table_basic(soak_module):
         },
     ]
     table = soak_module.render_table(soak_module.bucket_by_harness(events))
-    assert "cc-sdk" in table
+    assert "pi" in table
     assert "invokes" in table
     assert "completes" in table
 
@@ -301,7 +301,7 @@ def test_main_emits_json(soak_module, tmp_path, capsys, monkeypatch):
                 "ts": time.time(),
                 "event": "turn_invoke",
                 "session_key": "-1000000000000_0",
-                "harness": "cc-sdk",
+                "harness": "pi",
             }
         ],
     )
@@ -312,8 +312,8 @@ def test_main_emits_json(soak_module, tmp_path, capsys, monkeypatch):
     assert rc == 0
     out = capsys.readouterr().out
     parsed = json.loads(out)
-    assert "cc-sdk" in parsed
-    assert parsed["cc-sdk"]["invokes"] == 1
+    assert "pi" in parsed
+    assert parsed["pi"]["invokes"] == 1
 
 
 def test_main_table(soak_module, tmp_path, capsys, monkeypatch):
@@ -324,7 +324,7 @@ def test_main_table(soak_module, tmp_path, capsys, monkeypatch):
                 "ts": time.time(),
                 "event": "turn_invoke",
                 "session_key": "-1000000000000_0",
-                "harness": "cc-sdk",
+                "harness": "pi",
             }
         ],
     )
@@ -333,7 +333,7 @@ def test_main_table(soak_module, tmp_path, capsys, monkeypatch):
     assert rc == 0
     out = capsys.readouterr().out
     assert "Harness soak" in out
-    assert "cc-sdk" in out
+    assert "pi" in out
 
 
 def test_bucket_reads_legacy_claude_event_names(soak_module):
@@ -349,16 +349,16 @@ def test_bucket_reads_legacy_claude_event_names(soak_module):
             "response_len": 100,
             "harness": "cc-cli",
         },
-        {"event": "claude_invoke", "session_key": "-1000000000002_2", "harness": "cc-sdk"},
-        {"event": "claude_error", "session_key": "-1000000000002_2", "harness": "cc-sdk"},
-        {"event": "claude_timeout", "session_key": "-1000000000002_2", "harness": "cc-sdk"},
+        {"event": "claude_invoke", "session_key": "-1000000000002_2", "harness": "pi"},
+        {"event": "claude_error", "session_key": "-1000000000002_2", "harness": "pi"},
+        {"event": "claude_timeout", "session_key": "-1000000000002_2", "harness": "pi"},
     ]
     b = soak_module.bucket_by_harness(events)
     assert b["cc-cli"]["invokes"] == 1
     assert b["cc-cli"]["completes"] == 1
-    assert b["cc-sdk"]["invokes"] == 1
-    assert b["cc-sdk"]["errors"] == 1
-    assert b["cc-sdk"]["timeouts"] == 1
+    assert b["pi"]["invokes"] == 1
+    assert b["pi"]["errors"] == 1
+    assert b["pi"]["timeouts"] == 1
 
 
 def test_main_hides_noise_by_default(soak_module, tmp_path, capsys, monkeypatch):
@@ -376,13 +376,13 @@ def test_main_hides_noise_by_default(soak_module, tmp_path, capsys, monkeypatch)
                 "ts": time.time(),
                 "event": "turn_invoke",
                 "session_key": "-1000000000000_0",
-                "harness": "cc-sdk",
+                "harness": "pi",
             },
         ],
     )
     monkeypatch.setattr("sys.argv", ["harness_soak.py", "--log", str(log)])
     soak_module.main()
     out = capsys.readouterr().out
-    assert "cc-sdk" in out
+    assert "pi" in out
     assert "legacy" not in out
     assert "unknown" not in out

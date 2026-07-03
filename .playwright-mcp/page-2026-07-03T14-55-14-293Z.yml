@@ -1,0 +1,25 @@
+- generic [ref=f1e2]:
+  - generic [ref=f1e3]:
+    - generic [ref=f1e4]: Patchbay Voice
+    - button "Settings" [ref=f1e5] [cursor=pointer]:
+      - img [ref=f1e6]
+    - button "New" [ref=f1e9] [cursor=pointer]
+  - generic [ref=f1e10]:
+    - generic [ref=f1e11] [cursor=pointer]:
+      - generic [ref=f1e13]:
+        - generic [ref=f1e14]: synodic-co
+        - generic [ref=f1e15]: 19h ago
+      - button "↺" [ref=f1e16]
+      - button "✕" [ref=f1e17]
+    - generic [ref=f1e18] [cursor=pointer]:
+      - generic [ref=f1e20]:
+        - generic [ref=f1e21]: podwash
+        - generic [ref=f1e22]: 22h ago
+      - button "↺" [ref=f1e23]
+      - button "✕" [ref=f1e24]
+    - generic [ref=f1e25] [cursor=pointer]:
+      - generic [ref=f1e27]:
+        - generic [ref=f1e28]: patchbay-voice
+        - generic [ref=f1e29]: 1d ago
+      - button "↺" [ref=f1e30]
+      - button "✕" [ref=f1e31]

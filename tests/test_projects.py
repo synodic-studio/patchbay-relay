@@ -200,14 +200,14 @@ class TestChatHarness:
         assert patchbay.projects.get_chat_harness("chat_1") is None
 
     def test_set_then_get_roundtrip(self):
-        patchbay.projects.set_chat_harness("chat_1", "cc-sdk")
-        assert patchbay.projects.get_chat_harness("chat_1") == "cc-sdk"
+        patchbay.projects.set_chat_harness("chat_1", "pi")
+        assert patchbay.projects.get_chat_harness("chat_1") == "pi"
 
     def test_set_promotes_string_entry_to_dict_preserving_path(self):
         patchbay.projects._save_chat_projects({"chat_1": "Fanta"})
-        patchbay.projects.set_chat_harness("chat_1", "cc-sdk")
+        patchbay.projects.set_chat_harness("chat_1", "pi")
         loaded = patchbay.projects._load_chat_projects()
-        assert loaded["chat_1"] == {"path": "Fanta", "harness": "cc-sdk"}
+        assert loaded["chat_1"] == {"path": "Fanta", "harness": "pi"}
 
     def test_set_lands_alongside_path_and_agent(self):
         patchbay.projects._save_chat_projects(
@@ -223,14 +223,14 @@ class TestChatHarness:
 
     def test_set_none_clears_only_harness_key(self):
         patchbay.projects._save_chat_projects(
-            {"chat_1": {"path": "Fanta", "harness": "cc-sdk"}}
+            {"chat_1": {"path": "Fanta", "harness": "pi"}}
         )
         patchbay.projects.set_chat_harness("chat_1", None)
         loaded = patchbay.projects._load_chat_projects()
         assert loaded["chat_1"] == {"path": "Fanta"}
 
     def test_clearing_harness_on_harness_only_entry_drops_entry(self):
-        patchbay.projects._save_chat_projects({"chat_1": {"harness": "cc-sdk"}})
+        patchbay.projects._save_chat_projects({"chat_1": {"harness": "pi"}})
         patchbay.projects.set_chat_harness("chat_1", None)
         loaded = patchbay.projects._load_chat_projects()
         assert "chat_1" not in loaded
@@ -261,14 +261,14 @@ class TestChatTitle:
 
     def test_set_lands_alongside_path_agent_harness(self):
         patchbay.projects._save_chat_projects(
-            {"chat_1": {"path": "Fanta", "agent": "ernest", "harness": "cc-sdk"}}
+            {"chat_1": {"path": "Fanta", "agent": "ernest", "harness": "pi"}}
         )
         patchbay.projects.set_chat_title("chat_1", "Ernest")
         loaded = patchbay.projects._load_chat_projects()
         assert loaded["chat_1"] == {
             "path": "Fanta",
             "agent": "ernest",
-            "harness": "cc-sdk",
+            "harness": "pi",
             "title": "Ernest",
         }
 
@@ -299,7 +299,7 @@ class TestSetChatProjectPreservesSiblings:
                 "chat_1": {
                     "path": "Fanta",
                     "agent": "ernest",
-                    "harness": "cc-sdk",
+                    "harness": "pi",
                     "title": "Ernest",
                 }
             }
@@ -309,7 +309,7 @@ class TestSetChatProjectPreservesSiblings:
         assert loaded["chat_1"] == {
             "path": "patchbay-relay",
             "agent": "ernest",
-            "harness": "cc-sdk",
+            "harness": "pi",
             "title": "Ernest",
         }
 

@@ -1,0 +1,20 @@
+- generic [ref=f2e32]:
+  - generic [ref=f2e33]:
+    - button "Back" [ref=f2e34] [cursor=pointer]:
+      - img [ref=f2e35]
+    - generic [ref=f2e37]: patchbay-voice
+    - button "Reset" [ref=f2e38] [cursor=pointer]
+  - generic [ref=f2e39]:
+    - generic [ref=f2e59]: say hello
+    - generic [ref=f2e61]: Hello!
+  - generic [ref=f2e43]:
+    - generic [ref=f2e44]:
+      - button "Toggle keyboard" [ref=f2e45] [cursor=pointer]:
+        - img [ref=f2e46]
+      - button "Hold to talk" [ref=f2e49] [cursor=pointer]:
+        - generic [ref=f2e50]: 🎤
+      - button "Toggle audio" [ref=f2e51] [cursor=pointer]:
+        - img [ref=f2e52]
+    - generic [ref=f2e55]:
+      - textbox "Type a message…" [ref=f2e56]
+      - button "Send" [active] [ref=f2e57] [cursor=pointer]

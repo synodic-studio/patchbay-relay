@@ -39,9 +39,9 @@ def test_heartbeat_preserves_other_keys(tmp_path, monkeypatch):
 
     monkeypatch.setattr(proj, "CHAT_PROJECTS_FILE", tmp_path / "chat_projects.json")
     monkeypatch.setattr("patchbay.config.CHAT_PROJECTS_FILE", tmp_path / "chat_projects.json")
-    proj.set_chat_harness("chat:1", "cc-sdk")
+    proj.set_chat_harness("chat:1", "pi")
     proj.set_chat_heartbeat("chat:1", False)
-    assert proj.get_chat_harness("chat:1") == "cc-sdk"
+    assert proj.get_chat_harness("chat:1") == "pi"
     assert proj.get_chat_heartbeat("chat:1") is False
 
 

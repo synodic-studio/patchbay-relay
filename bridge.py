@@ -67,11 +67,8 @@ configure_telegramify()
 from patchbay.config import (  # noqa: E402
     ACTIVITY_LOG,  # noqa: F401 — used by tests via bridge.ACTIVITY_LOG
     ANSI_RE,
-    AUTO_COMPACT_PCT,
-    AUTO_COMPACT_TOKENS,
     BOT_TOKEN,
     CHAT_PROJECTS_FILE,
-    CLAUDE_PATH,
     DEFAULT_HARNESS,
     FORGE_QUEUE_DIR,  # noqa: F401 — used by tests via bridge.FORGE_QUEUE_DIR
     HEARTBEAT_DELAY,
@@ -118,7 +115,7 @@ from patchbay.sessions import (  # noqa: E402
 )
 from patchbay.harness import (  # noqa: E402
     CAPABILITIES_BY_NAME,
-    ClaudeSdkHarness,
+    PiHarness,
     ToolUse,  # noqa: F401 — re-exported for tests
     TurnError,
     TurnFinal,
@@ -218,10 +215,6 @@ class SessionState:
     queue: list[QueuedMessage] = field(default_factory=list)  # debounced messages awaiting processing
     processing: bool = False  # True while a claude run is in flight for this key
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-    # cc-sdk-mop: holds the MOP instance for the lifetime of the SDK client
-    # so its in-process MCP tools and Stop-hook closure stay valid. Cleared
-    # after the turn completes.
-    mop: object | None = None
 
 
 # Owned by patchbay.runtime so command handlers (in patchbay/commands/) can
@@ -242,10 +235,8 @@ def _get_session_state(key: str) -> SessionState:
 def _iter_active_procs() -> list[tuple[str, subprocess.Popen]]:
     """Snapshot of (session_key, proc) for every session with a live subprocess.
 
-    Subprocess harnesses only (pi) — SDK-based sessions where the harness
-    owns its own subprocess (cc-sdk) won't appear here. Use
-    `_iter_active_sessions` for the backend-agnostic view (e.g. /ping,
-    stall detector).
+    Subprocess harnesses only (pi). Use `_iter_active_sessions` for the
+    view used by /ping, stall detector.
     """
     return [(k, s.proc) for k, s in _sessions.items() if s.proc is not None]
 
@@ -263,11 +254,9 @@ def _iter_active_sessions() -> list[tuple[str, "SessionState"]]:
 
 
 async def _interrupt_session_async(state: "SessionState") -> None:
-    """Soft interrupt — SIGINT for subprocess harnesses, task-cancel for SDK.
+    """Soft interrupt — SIGINT for the pi subprocess.
 
-    Subprocess harnesses (pi) get a chance to finish cleanly; SDK
-    harnesses behave the same as _cancel_session_async since the SDK
-    doesn't expose a gentler signal.
+    Gives pi a chance to finish cleanly. Use /kill for hard termination.
     """
     import signal as _signal
 
@@ -277,24 +266,14 @@ async def _interrupt_session_async(state: "SessionState") -> None:
             proc.send_signal(_signal.SIGINT)
         except OSError:
             pass
-        return
-
-    # SDK harness: no finer-grained interrupt available — fall through to cancel.
-    await _cancel_session_async(state)
 
 
 async def _cancel_session_async(state: "SessionState") -> None:
-    """Hard cancel — SIGKILL for subprocess harnesses, task-cancel for SDK.
+    """Hard cancel — SIGKILL the pi subprocess.
 
-    Backend-agnostic dispatch:
-      * subprocess harnesses (pi) — `state.proc` is set; SIGKILL via
-        `proc.kill()`. Sync, immediate; the harness's drain returns and
-        `_drive_harness_sync` exits naturally.
-      * SDK harnesses (cc-sdk, cc-sdk-mop) — no subprocess handle the
-        bridge can reach (the SDK owns it). Schedule `harness.cancel()`
-        on the worker-thread loop captured in `state.worker_loop` via
-        `run_coroutine_threadsafe`, await with a short timeout so a
-        wedged loop can't hang us.
+    `state.proc` holds the Popen handle; SIGKILL via `proc.kill()`.
+    Sync, immediate; the harness's drain returns and
+    `_drive_harness_sync` exits naturally.
 
     Idempotent and silent on error — callers (cmd_kill, stall detector,
     shutdown) treat this as a fire-and-forget request.
@@ -305,77 +284,6 @@ async def _cancel_session_async(state: "SessionState") -> None:
             proc.kill()
         except OSError:
             pass
-        return
-
-    harness = state.harness
-    loop = state.worker_loop
-    if harness is None or loop is None:
-        return
-    try:
-        future = asyncio.run_coroutine_threadsafe(harness.cancel(), loop)
-    except RuntimeError:
-        # Worker loop closed between our read and the schedule — nothing to do.
-        return
-    try:
-        await asyncio.wait_for(asyncio.wrap_future(future), timeout=5.0)
-    except (asyncio.TimeoutError, Exception):  # noqa: BLE001 — silence everything during cancel
-        pass
-
-
-async def _try_inflight_push(
-    state: SessionState,
-    text: str,
-    session_key: str,
-    label: str,
-) -> bool:
-    """Route `text` into the running session's live SDK client, if any.
-
-    Returns True iff the message was accepted by an in-flight cc-sdk turn
-    via `ClaudeSdkHarness.push()`. False means the caller should fall
-    back to the existing claim/queue path:
-      * no turn is processing for this session, OR
-      * the active harness isn't a ClaudeSdkHarness with a live client
-        (cc-sdk-mop, pi, between-turn states), OR
-      * push() raised — we don't want a broken inflight to swallow the
-        message silently.
-
-    Holds `state.lock` only long enough to read the harness + loop refs
-    so a concurrent _claim_or_queue can't slip a queued entry in
-    between our read and the push. The actual push happens off-lock
-    (it crosses event loops via run_coroutine_threadsafe and can block
-    briefly on the SDK transport write).
-    """
-    async with state.lock:
-        if not state.processing:
-            return False
-        harness = state.harness
-        worker_loop = state.worker_loop
-    if (
-        worker_loop is None
-        or worker_loop.is_closed()
-        or not isinstance(harness, ClaudeSdkHarness)
-        or harness._live_client is None
-    ):
-        return False
-    try:
-        future = asyncio.run_coroutine_threadsafe(harness.push(text), worker_loop)
-        accepted = await asyncio.wait_for(asyncio.wrap_future(future), timeout=5.0)
-    except (asyncio.TimeoutError, RuntimeError, Exception) as e:  # noqa: BLE001 — never let a failed push lose the message; bridge falls back to queue
-        logger.warning(
-            "Inflight push failed for %s (%s): %s — falling back to queue",
-            session_key,
-            label,
-            e,
-        )
-        return False
-    if accepted:
-        logger.info("Pushed %s inflight into running cc-sdk session for %s", label, session_key)
-        _log_activity(
-            f"{label}_pushed_inflight",
-            session_key=session_key,
-            text_len=len(text),
-        )
-    return bool(accepted)
 
 
 async def _claim_or_queue(state: SessionState, text: str, pending_id: str = "") -> tuple[str, int | None]:
@@ -476,11 +384,7 @@ _shutting_down = False
 # Bot instance (set in post_init)
 _bot_instance = None
 
-# Bridge's primary asyncio loop, captured in post_init. Used by the
-# cc-sdk-mop deliver closure to schedule `bot.send_message` on the loop
-# where the bot's httpx client was created — calling it from inside the
-# cc-sdk-mop dispatch's temporary `asyncio.run(...)` loop poisons the bot.
-_main_loop: asyncio.AbstractEventLoop | None = None
+
 
 # Captured once at runtime module import time — used by /health to report
 # process uptime. Local alias preserves existing _BRIDGE_STARTED_AT call sites.
@@ -507,10 +411,8 @@ def _drive_harness_sync(
 
     When `state` is given, we mirror the harness instance and the
     worker-thread's event loop into it for the duration of the turn.
-    `_cancel_session_async` reads those fields to dispatch a cancel:
-    subprocess harnesses are killed via `state.proc.kill()`, SDK
-    harnesses are cancelled via `run_coroutine_threadsafe(harness.cancel(),
-    state.worker_loop)`. The fields are cleared in `finally`.
+    `_cancel_session_async` uses `state.proc.kill()` for cancellation.
+    The fields are cleared in `finally`.
     """
     events: list = []
 
@@ -706,155 +608,14 @@ def run_claude(
         if st is not None:
             st.proc = proc
 
-    # ----- cc-sdk-mop dispatch (in-process MCP + Stop hook) -----
-    # MOP is wired into the SDK client itself: model output goes through
-    # `mcp__mop__submit_message`, which calls bot.send_message directly.
-    # Because MOP delivers the response itself, run_claude returns "" and
-    # the orchestrator's _send_response is a no-op (extract_file_sentinels
-    # short-circuits on empty). The MOP instance must outlive the SDK
-    # client so its Stop hook closure stays valid — pinned via state.mop
-    # and cleared in the finally block.
-    if effective_harness == "cc-sdk-mop":
-        from claude_agent_sdk import (
-            AssistantMessage,
-            ClaudeSDKClient,
-            ResultMessage,
-            SystemMessage,
-            TextBlock,
-        )
-        from patchbay.harness.claude_sdk_mop import ClaudeSdkMopHarness
-
-        # Parse session_key → chat_id, thread_id for build_options.
-        if "_" in session_key:
-            chat_id_str, thread_id_str = session_key.split("_", 1)
-            chat_id = int(chat_id_str)
-            thread_id = int(thread_id_str)
-        else:
-            chat_id = int(session_key)
-            thread_id = None
-
-        rules_dir_env = os.environ.get("MOP_RULES_DIR")
-        rules_dir = Path(rules_dir_env) if rules_dir_env else None
-
-        if _main_loop is None:
-            raise RuntimeError(
-                "cc-sdk-mop dispatch invoked before post_init captured "
-                "the bridge's main loop — bot would be poisoned. Bug."
-            )
-
-        harness = ClaudeSdkMopHarness()
-        options, mop = harness.build_options(
-            bot=_bot_instance,
-            chat_id=chat_id,
-            thread_id=thread_id,
-            main_loop=_main_loop,
-            rules_dir=rules_dir,
-            session_key=session_key,
-        )
-        # Resume the existing Claude session so each turn keeps history.
-        # build_options returns a generic ClaudeAgentOptions; the per-turn
-        # session_id is the bridge's responsibility to wire in.
-        if session_id:
-            options.resume = session_id
-        # Pin mop to session state so the GC doesn't reap its Stop-hook
-        # closure mid-turn.
-        state.mop = mop
-
-        captured_session_id: str | None = None
-        plain_text_fragments: list[str] = []
-
-        async def _drive_mop_session() -> None:
-            nonlocal captured_session_id
-            async with ClaudeSDKClient(options=options) as client:
-                await client.query(message)
-                async for msg in client.receive_response():
-                    _on_progress()
-                    if isinstance(msg, SystemMessage):
-                        sid = msg.data.get("session_id") if isinstance(msg.data, dict) else None
-                        if sid:
-                            captured_session_id = sid
-                    elif isinstance(msg, AssistantMessage):
-                        for block in getattr(msg, "content", []) or []:
-                            if isinstance(block, TextBlock):
-                                txt = getattr(block, "text", None)
-                                if txt:
-                                    plain_text_fragments.append(txt)
-                    elif isinstance(msg, ResultMessage):
-                        sid = getattr(msg, "session_id", None)
-                        if sid:
-                            captured_session_id = sid
-                        return
-
-        try:
-            asyncio.run(_drive_mop_session())
-        finally:
-            state.mop = None
-
-        duration = time.time() - invoke_start
-        if captured_session_id:
-            save_session_id(session_key, captured_session_id)
-
-        # Safety net: if MOP delivered nothing this turn (model didn't call
-        # submit_message and the Stop hook didn't compel it), fall back to
-        # the model's plain TextBlock output so the user never gets silence.
-        # The deliver closure carries `delivery_count`, incremented each time
-        # MOP successfully sent something to Telegram; checked here AFTER
-        # the SDK loop returns. Any positive count means user received
-        # something through MOP and we should NOT also send the plain text.
-        deliver_closure = getattr(mop, "_patchbay_deliver", None)
-        raw_count = getattr(deliver_closure, "delivery_count", 0) if deliver_closure else 0
-        delivery_count = raw_count if isinstance(raw_count, int) else 0
-        delivered = delivery_count > 0
-        fallback_text = ""
-        if not delivered and plain_text_fragments:
-            fallback_text = "\n\n".join(s.strip() for s in plain_text_fragments if s.strip())
-            if fallback_text:
-                logger.warning(
-                    "cc-sdk-mop fallback: MOP did not deliver but model produced %d chars of plain text — sending as regular reply",
-                    len(fallback_text),
-                )
-
-        _log_activity(
-            "turn_complete",
-            session_key=session_key,
-            duration=duration,
-            elapsed_ms=int(duration * 1000),
-            turns_used=None,
-            exit_code=0,
-            response_len=len(fallback_text),
-            harness=effective_harness,
-            mop_delivery_count=delivery_count,
-            fallback=bool(fallback_text),
-        )
-        # MOP delivered via Telegram itself — empty string suppresses the
-        # orchestrator's redundant _send_response. If MOP delivered nothing
-        # we return the plain text so _send_response sends it.
-        return fallback_text
-
-    if effective_harness == "cc-sdk":
-        # cc-sdk owns its subprocess internally — there's no Popen handle
-        # for the bridge to mirror, so /kill / stall detector / shutdown
-        # route through `harness.cancel()` via _cancel_session_async
-        # instead. `state.proc` stays None for the duration of this turn.
-        harness = ClaudeSdkHarness(
-            cli_path=CLAUDE_PATH,
-            max_timeout_seconds=MAX_TIMEOUT,
-            on_progress=_on_progress,
-            max_turns_default=(max_turns_override if max_turns_override is not None else MAX_TURNS),
-        )
-    elif effective_harness == "pi":
-        # Pi (badlogicgames/pi) — multi-model coding agent. Uses its own
-        # session storage (~/.pi/agent/sessions). Subprocess-based, so
-        # proc_setter mirrors into state.proc for /kill / stall.
-        from patchbay.harness import PiHarness
-
-        harness = PiHarness(
-            max_timeout_seconds=MAX_TIMEOUT,
-            on_progress=_on_progress,
-            proc_setter=_proc_setter,
-        )
-    else:
-        raise RuntimeError(f"Unhandled harness {effective_harness!r} after validation. Bug.")
+    # Pi (badlogicgames/pi) — multi-model coding agent. Uses its own
+    # session storage (~/.pi/agent/sessions). Subprocess-based, so
+    # proc_setter mirrors into state.proc for /kill / stall.
+    harness = PiHarness(
+        max_timeout_seconds=MAX_TIMEOUT,
+        on_progress=_on_progress,
+        proc_setter=_proc_setter,
+    )
     req = TurnRequest(
         prompt=message,
         session_key=session_key,
@@ -1027,24 +788,6 @@ def run_claude(
         )
         response = final.raw_text or "(no parseable response)"
 
-        # Empty-success: claude finished cleanly but produced no final text.
-        # One-shot summary retry against the freshly-saved session_id; gives
-        # the user a real reply instead of the "(Completed N turns…)" placeholder.
-        if is_empty_success_response(response) and not _retry:
-            new_session_id = get_session_id(session_key)
-            if new_session_id:
-                summary = _request_summary(session_key, new_session_id, chat_cwd)
-                if summary:
-                    _log_activity(
-                        "summary_retry_success",
-                        session_key=session_key,
-                        response_len=len(summary),
-                    )
-                    return summary
-                _log_activity("summary_retry_empty", session_key=session_key)
-            else:
-                _log_activity("summary_retry_skipped_no_session", session_key=session_key)
-
         return response
 
     # Defensive: harness didn't terminate properly. Treat as no output.
@@ -1057,46 +800,6 @@ def run_claude(
         harness=effective_harness,
     )
     return "(no output)"
-
-
-def _request_summary(session_key: str, session_id: str, chat_cwd: str) -> str | None:
-    """Re-invoke claude --resume <id> with a short summarize prompt.
-
-    Used when the primary invocation finished successfully but produced no
-    final text. Returns the summary string on success, or None if the
-    summary attempt also yielded no usable text. Bounded by --max-turns 5
-    and a 120s wall-clock timeout — this should be one quick text turn."""
-    summary_cmd = [
-        CLAUDE_PATH,
-        "-p",
-        "Summarize what you just did in 1-3 sentences. End with a plain text reply.",
-        "--output-format",
-        "json",
-        "--dangerously-skip-permissions",
-        "--max-turns",
-        "5",
-        "--resume",
-        session_id,
-    ]
-    logger.info("Empty-success retry for %s — requesting summary", session_key)
-    try:
-        proc = subprocess.run(
-            summary_cmd,
-            capture_output=True,
-            text=True,
-            timeout=120,
-            cwd=chat_cwd,
-        )
-    except subprocess.TimeoutExpired:
-        logger.warning("Summary retry for %s timed out", session_key)
-        return None
-    if proc.returncode != 0:
-        logger.warning("Summary retry for %s exited %d", session_key, proc.returncode)
-        return None
-    summary = parse_claude_response(proc.stdout, session_key)
-    if is_empty_success_response(summary) or summary.startswith("(no "):
-        return None
-    return summary
 
 
 # ---------------------------------------------------------------------------
@@ -1245,84 +948,6 @@ def _maybe_handoff_quota(response: str, session_key: str, chat_id: int, thread_i
     return "Hit a quota/rate limit. Tried to hand off to Forge but failed to write the queue file. Try again later."
 
 
-async def _auto_compact_if_needed(bot, chat_id: int, thread_id: int | None, session_key: str) -> None:
-    """Check context usage after a turn and compact if over threshold.
-
-    Fires only when AUTO_COMPACT_PCT or AUTO_COMPACT_TOKENS is configured.
-    Supported on cc-sdk and cc-sdk-mop (both backed by the same Claude
-    session). No-op on pi. Errors are swallowed — auto-compact must never
-    affect the main turn lifecycle.
-    """
-    if AUTO_COMPACT_PCT is None and AUTO_COMPACT_TOKENS is None:
-        return
-
-    session_id = get_session_id(session_key)
-    if not session_id:
-        return
-
-    harness_name = get_chat_harness(session_key) or DEFAULT_HARNESS
-    if harness_name not in ("cc-sdk", "cc-sdk-mop"):
-        return
-
-    from patchbay.efforts import resolve_effort
-
-    harness = ClaudeSdkHarness(cli_path=CLAUDE_PATH, max_timeout_seconds=MAX_TIMEOUT)
-    req = TurnRequest(
-        prompt="",
-        session_key=session_key,
-        project_dir=Path(get_chat_working_dir(session_key)),
-        system_prompt="",
-        resume_session_id=session_id,
-        model=get_chat_model(session_key),
-        effort=resolve_effort(session_key),
-        allowed_tools=None,
-        disallowed_tools=None,
-        max_turns=None,
-        plugin_dir=None,
-    )
-
-    try:
-        usage = await harness.get_context(req)
-    except Exception as exc:
-        logger.debug("auto-compact context check failed for %s: %s", session_key, exc)
-        return
-
-    needs_compact = False
-    if AUTO_COMPACT_PCT is not None and usage.percentage >= AUTO_COMPACT_PCT:
-        needs_compact = True
-    if AUTO_COMPACT_TOKENS is not None and usage.used_tokens >= AUTO_COMPACT_TOKENS:
-        needs_compact = True
-
-    if not needs_compact:
-        return
-
-    pct_before = f"{usage.percentage:.0f}%"
-    logger.info("Auto-compacting context for %s (%s full)", session_key, pct_before)
-    _log_activity(
-        "auto_compact_triggered",
-        session_key=session_key,
-        used_pct=usage.percentage,
-        used_tokens=usage.used_tokens,
-        threshold_pct=AUTO_COMPACT_PCT,
-        threshold_tokens=AUTO_COMPACT_TOKENS,
-    )
-
-    try:
-        result = await harness.compact(req)
-    except Exception as exc:
-        logger.warning("auto-compact failed for %s: %s", session_key, exc)
-        return
-
-    send_kwargs: dict = {"chat_id": chat_id}
-    if thread_id is not None:
-        send_kwargs["message_thread_id"] = thread_id
-    try:
-        await bot.send_message(text=f"↩️ Auto-compacted ({pct_before} → done)", **send_kwargs)
-        logger.info("Auto-compact done for %s: %s", session_key, result.message)
-    except Exception as exc:
-        logger.debug("auto-compact notification failed: %s", exc)
-
-
 async def _process_with_claude_turn(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -1354,17 +979,6 @@ async def _process_with_claude_turn(
     # queue until drain) survive a SIGTERM-mid-debounce — replay_pending()
     # picks up anything still on disk on the next bridge start.
     pending_id = save_pending(chat_id, thread_id, prompt, session_key)
-
-    # Inflight push: if a cc-sdk turn is already mid-stream for this
-    # session, route the new message straight into the live SDK client
-    # rather than queueing it. The receive loop in
-    # ClaudeSdkHarness.run_turn waits for every pushed query's
-    # ResultMessage before exiting, so the response to this prompt
-    # lands in the same Telegram delivery as the original turn — no
-    # second invocation, no "Queued (N)" reply.
-    if await _try_inflight_push(state, prompt, session_key, label):
-        clear_pending(pending_id)
-        return
 
     status, depth = await _claim_or_queue(state, prompt, pending_id)
 
@@ -1482,9 +1096,6 @@ async def _process_with_claude_turn(
                     for item in batch:
                         clear_pending(item.pending_id)
 
-        # Auto-compact: check context after a successful main turn
-        if delivered:
-            await _auto_compact_if_needed(context.bot, chat_id, thread_id, session_key)
     except Exception:
         # Defensive: ensure processing flag is cleared on any uncaught
         # exception escaping the drain loop.
@@ -1837,9 +1448,8 @@ async def _stall_detector() -> None:
 
 async def post_init(app: Application) -> None:
     """Register bot commands and replay any messages lost during previous crash."""
-    global _bot_instance, _main_loop
+    global _bot_instance
     _bot_instance = app.bot
-    _main_loop = asyncio.get_running_loop()
 
     from telegram import (
         BotCommand,
@@ -1869,7 +1479,7 @@ async def post_init(app: Application) -> None:
         BotCommand("clearnew", "Start a fresh conversation"),
         BotCommand("setproject", "Set project dir (relative to ~/Developer)"),
         BotCommand("project", "Show current project dir"),
-        BotCommand("harness", "Set agent backend (cc-sdk/cc-sdk-mop/pi)"),
+        BotCommand("harness", "Set agent backend (pi)"),
         BotCommand("model", "Set model (opus/sonnet/haiku)"),
         BotCommand("effort", "Set effort level (low/medium/high/xhigh/max)"),
         BotCommand("remote_control", "Start/stop claude remote-control in project dir"),
@@ -1968,20 +1578,6 @@ def _graceful_shutdown(signum: int, frame) -> None:
             logger.warning("Force-killing Claude process for %s (pid %d)", key, proc.pid)
             proc.kill()
             proc.wait()
-
-    # cc-sdk sessions own their subprocess via the SDK; we can't reach
-    # them from a sync signal handler. Log them so the operator knows
-    # what's outstanding; the SDK's child process will receive SIGHUP /
-    # see EOF on stdin once we exit and tear itself down.
-    for key, state in _iter_active_sessions():
-        if state.proc is not None:
-            continue
-        harness_name = getattr(state.harness, "name", "unknown")
-        logger.info(
-            "Active %s turn for %s during shutdown — relying on parent-exit cleanup",
-            harness_name,
-            key,
-        )
 
     if _remote_proc and _remote_proc.poll() is None:
         logger.info("Terminating remote-control process (pid %d)", _remote_proc.pid)

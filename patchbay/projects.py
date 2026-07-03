@@ -76,7 +76,7 @@ def get_chat_agent(session_key: str) -> str | None:
 
 
 def get_chat_harness(session_key: str) -> str | None:
-    """Return the per-chat harness name (e.g. "cc-sdk"), or None if unset.
+    """Return the per-chat harness name (e.g. "pi"), or None if unset.
 
     Stored on dict-form `chat_projects.json` entries under the optional
     "harness" key. String-form entries (legacy) carry no harness override

@@ -1,0 +1,121 @@
+- generic [ref=f1e1]:
+  - generic [ref=f1e2]:
+    - generic [ref=f1e3]:
+      - generic [ref=f1e4]: Patchbay Voice
+      - button "Settings" [ref=f1e5] [cursor=pointer]:
+        - img [ref=f1e6]
+      - button "New" [active] [ref=f1e9] [cursor=pointer]
+    - generic [ref=f1e10]:
+      - generic [ref=f1e58] [cursor=pointer]:
+        - generic [ref=f1e60]:
+          - generic [ref=f1e61]: synodic-co
+          - generic [ref=f1e62]: 19h ago
+        - button "↺" [ref=f1e63]
+        - button "✕" [ref=f1e64]
+      - generic [ref=f1e65] [cursor=pointer]:
+        - generic [ref=f1e67]:
+          - generic [ref=f1e68]: podwash
+          - generic [ref=f1e69]: 22h ago
+        - button "↺" [ref=f1e70]
+        - button "✕" [ref=f1e71]
+      - generic [ref=f1e72] [cursor=pointer]:
+        - generic [ref=f1e74]:
+          - generic [ref=f1e75]: patchbay-voice
+          - generic [ref=f1e76]: 1d ago
+        - button "↺" [ref=f1e77]
+        - button "✕" [ref=f1e78]
+  - generic [ref=f1e112]:
+    - generic [ref=f1e113]:
+      - heading "Select Project" [level=2] [ref=f1e114]
+      - button "✕" [ref=f1e115] [cursor=pointer]
+    - generic [ref=f1e116]:
+      - generic [ref=f1e209] [cursor=pointer]: alloy
+      - generic [ref=f1e210] [cursor=pointer]: archive
+      - generic [ref=f1e211] [cursor=pointer]: atls4120
+      - generic [ref=f1e212] [cursor=pointer]: awesome-timer
+      - generic [ref=f1e213] [cursor=pointer]: backhand
+      - generic [ref=f1e214] [cursor=pointer]: backseat
+      - generic [ref=f1e215] [cursor=pointer]: balloonists
+      - generic [ref=f1e216] [cursor=pointer]: bikestreets-umt
+      - generic [ref=f1e217] [cursor=pointer]: birbs-in-burbs
+      - generic [ref=f1e218] [cursor=pointer]: bird-bingo-cards
+      - generic [ref=f1e219] [cursor=pointer]: birding-flashcards
+      - generic [ref=f1e220] [cursor=pointer]: birds-web
+      - generic [ref=f1e221] [cursor=pointer]: birdscoffeedonuts-com
+      - generic [ref=f1e222] [cursor=pointer]: boost
+      - generic [ref=f1e223] [cursor=pointer]: briyan-cards
+      - generic [ref=f1e224] [cursor=pointer]: buddy
+      - generic [ref=f1e225] [cursor=pointer]: budgie
+      - generic [ref=f1e226] [cursor=pointer]: bz-alert
+      - generic [ref=f1e227] [cursor=pointer]: career
+      - generic [ref=f1e228] [cursor=pointer]: chromadb_data_chef_mir
+      - generic [ref=f1e229] [cursor=pointer]: claude-job-search
+      - generic [ref=f1e230] [cursor=pointer]: claude-session-db
+      - generic [ref=f1e231] [cursor=pointer]: Claude-Support
+      - generic [ref=f1e232] [cursor=pointer]: code-global-surveyor
+      - generic [ref=f1e233] [cursor=pointer]: compare-things
+      - generic [ref=f1e234] [cursor=pointer]: crew
+      - generic [ref=f1e235] [cursor=pointer]: CuttingListMaker
+      - generic [ref=f1e236] [cursor=pointer]: DeskDays
+      - generic [ref=f1e237] [cursor=pointer]: deskdays-web
+      - generic [ref=f1e238] [cursor=pointer]: documentarian
+      - generic [ref=f1e239] [cursor=pointer]: earth-wear
+      - generic [ref=f1e240] [cursor=pointer]: Fanta
+      - generic [ref=f1e241] [cursor=pointer]: fleet-mdm
+      - generic [ref=f1e242] [cursor=pointer]: for-sure
+      - generic [ref=f1e243] [cursor=pointer]: go-kj6-dev
+      - generic [ref=f1e244] [cursor=pointer]: gravelmap
+      - generic [ref=f1e245] [cursor=pointer]: gravity-well
+      - generic [ref=f1e246] [cursor=pointer]: gridfinity-rebuilt-openscad
+      - generic [ref=f1e247] [cursor=pointer]: hermes-state-backup
+      - generic [ref=f1e248] [cursor=pointer]: honcho
+      - generic [ref=f1e249] [cursor=pointer]: human-output-protocol
+      - generic [ref=f1e250] [cursor=pointer]: inline-relay
+      - generic [ref=f1e251] [cursor=pointer]: kj6-dev
+      - generic [ref=f1e252] [cursor=pointer]: kj6dev-profile
+      - generic [ref=f1e253] [cursor=pointer]: lander-11
+      - generic [ref=f1e254] [cursor=pointer]: LiftMetrics
+      - generic [ref=f1e255] [cursor=pointer]: maestro-italiano
+      - generic [ref=f1e256] [cursor=pointer]: mattpocock
+      - generic [ref=f1e257] [cursor=pointer]: mcp_agent_mail
+      - generic [ref=f1e258] [cursor=pointer]: model-output-protocol
+      - generic [ref=f1e259] [cursor=pointer]: moon-lander
+      - generic [ref=f1e260] [cursor=pointer]: No Place to Go
+      - generic [ref=f1e261] [cursor=pointer]: node_modules
+      - generic [ref=f1e262] [cursor=pointer]: on-the-ground
+      - generic [ref=f1e263] [cursor=pointer]: one-billion-one
+      - generic [ref=f1e264] [cursor=pointer]: patchbay-relay
+      - generic [ref=f1e265] [cursor=pointer]: patchbay-voice
+      - generic [ref=f1e266] [cursor=pointer]: peipl
+      - generic [ref=f1e267] [cursor=pointer]: personal-context-portfolio
+      - generic [ref=f1e268] [cursor=pointer]: pi-mono
+      - generic [ref=f1e269] [cursor=pointer]: picurious
+      - generic [ref=f1e270] [cursor=pointer]: podcast-pusher
+      - generic [ref=f1e271] [cursor=pointer]: podwash
+      - generic [ref=f1e272] [cursor=pointer]: pointrank
+      - generic [ref=f1e273] [cursor=pointer]: rto50-site
+      - generic [ref=f1e274] [cursor=pointer]: russ
+      - generic [ref=f1e275] [cursor=pointer]: scExoplanets
+      - generic [ref=f1e276] [cursor=pointer]: science-of-dieting
+      - generic [ref=f1e277] [cursor=pointer]: scripts
+      - generic [ref=f1e278] [cursor=pointer]: shapescript-projects
+      - generic [ref=f1e279] [cursor=pointer]: shoulder-pilot
+      - generic [ref=f1e280] [cursor=pointer]: skyglow
+      - generic [ref=f1e281] [cursor=pointer]: SoMuchCoffee
+      - generic [ref=f1e282] [cursor=pointer]: stargate
+      - generic [ref=f1e283] [cursor=pointer]: swift-quality-tools
+      - generic [ref=f1e284] [cursor=pointer]: synodic-certs
+      - generic [ref=f1e285] [cursor=pointer]: synodic-co
+      - generic [ref=f1e286] [cursor=pointer]: synodic-kit
+      - generic [ref=f1e287] [cursor=pointer]: synodic-marketplace
+      - generic [ref=f1e288] [cursor=pointer]: synodic-planning
+      - generic [ref=f1e289] [cursor=pointer]: synodic-style
+      - generic [ref=f1e290] [cursor=pointer]: synodic-tools
+      - generic [ref=f1e291] [cursor=pointer]: synodic-ui
+      - generic [ref=f1e292] [cursor=pointer]: taggery
+      - generic [ref=f1e293] [cursor=pointer]: test-results
+      - generic [ref=f1e294] [cursor=pointer]: untitled folder
+      - generic [ref=f1e295] [cursor=pointer]: venvs
+      - generic [ref=f1e296] [cursor=pointer]: whisper-keys
+      - generic [ref=f1e297] [cursor=pointer]: whisper-tool
+      - generic [ref=f1e298] [cursor=pointer]: wow

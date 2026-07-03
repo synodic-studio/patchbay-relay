@@ -36,9 +36,9 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/setproject <path> - Set project dir (relative to ~/Developer)\n"
         "/setproject - Clear project binding (use default)\n"
         "/project - Show current project dir\n"
-        "/model - Set model (opus/sonnet/haiku) or prefix with !s !o !h\n"
+        "/model - Set model (small/medium/large/gpt/opus/write/…) or prefix with !s !m !l\n"
         "/effort - Set effort level (low/medium/high/xhigh/max)\n"
-        "/harness - Show or set the agent backend (cc-sdk/cc-sdk-mop/pi)\n"
+        "/harness - Show or set the agent backend (pi)\n"
         "/remote-control - Start claude remote-control in this topic's project dir\n"
         "/remote-control stop - Stop remote-control\n"
         "/kill - Kill active Claude process\n"
@@ -47,8 +47,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/health - Disk, queues, uptime, counts\n"
         "/activity [event] [count] - Recent activity.jsonl entries (e.g. /activity self_heal)\n"
         "/soak [since] [session] - Compare harness backends (e.g. /soak 7d)\n"
-        "/context - Show context-window usage for this chat (cc-sdk only)\n"
-        "/compact [steering] - Compact the running context (cc-sdk only)\n"
+        "/context - Show context-window usage for this chat\n"
+        "/compact [steering] - Compact the running context\n"
         "/usage - Show Claude Code quota (tokens + block time remaining)\n\n"
         "Each forum topic runs as an independent Claude session."
     )
@@ -69,9 +69,9 @@ async def cmd_clearnew(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Soft interrupt — SIGINT for subprocess harnesses, task-cancel for SDK.
+    """Soft interrupt — SIGINT for the pi subprocess.
 
-    Gives Claude a chance to finish cleanly. Use /kill if this doesn't work.
+    Gives pi a chance to finish cleanly. Use /kill if this doesn't work.
     """
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
@@ -107,10 +107,9 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def cmd_kill(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Hard kill — SIGKILL for subprocess harnesses, task-cancel for SDK.
+    """Hard kill — SIGKILL the pi subprocess.
 
-    Backend-agnostic via `_cancel_session_async`. Use /cancel first for a
-    graceful interrupt; /kill when that doesn't work.
+    Use /cancel first for a graceful interrupt; /kill when that doesn't work.
     """
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
@@ -122,8 +121,6 @@ async def cmd_kill(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("No active Claude process in this chat.")
         return
 
-    # Capture pid before cancel for logging — SDK harnesses have no
-    # proc on the bridge side, log -1 in that case.
     proc = state.proc
     pid = proc.pid if proc is not None else -1
     harness_name = getattr(state.harness, "name", "unknown")
@@ -214,16 +211,6 @@ async def cmd_restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             proc.terminate()
             bridge.logger.info(
                 "Terminated Claude process for %s (pid %d)", key, proc.pid
-            )
-
-    for key, state in bridge._iter_active_sessions():
-        if state.proc is not None:
-            continue  # already terminated above
-        try:
-            await bridge._cancel_session_async(state)
-        except Exception:  # noqa: BLE001
-            bridge.logger.exception(
-                "Cancel for cc-sdk session %s during restart raised", key
             )
 
     if bridge._remote_proc and bridge._remote_proc.poll() is None:

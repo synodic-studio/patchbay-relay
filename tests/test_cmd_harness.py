@@ -1,8 +1,9 @@
 """Tests for the /harness Telegram command + harness=field on activity logs.
 
-Phase 1c of. /harness writes through `set_chat_harness` and reads
-through `get_chat_harness`; run_claude reads the per-chat selection (or
-`DEFAULT_HARNESS`) and tags every activity entry with `harness=...`.
+/writes through `set_chat_harness` and reads through `get_chat_harness`;
+run_claude reads the per-chat selection (or `DEFAULT_HARNESS`) and tags
+every activity entry with `harness=...`. With cc-sdk and cc-sdk-mop
+removed, only pi is available.
 """
 
 from __future__ import annotations
@@ -53,20 +54,19 @@ class TestCmdHarness:
         update, context = _make_update("/harness")
         await bridge.cmd_harness(update, context)
         sent = update.message.reply_text.call_args[0][0]
-        assert "default" in sent
-        assert bridge.DEFAULT_HARNESS in sent
+        assert "pi" in sent
 
     @pytest.mark.asyncio
-    async def test_set_cc_sdk_stores_value(self):
-        update, context = _make_update("/harness cc-sdk")
+    async def test_set_pi_stores_value(self):
+        update, context = _make_update("/harness pi")
         await bridge.cmd_harness(update, context)
-        assert patchbay.projects.get_chat_harness(SESSION_KEY) == "cc-sdk"
+        assert patchbay.projects.get_chat_harness(SESSION_KEY) == "pi"
         sent = update.message.reply_text.call_args[0][0]
-        assert "cc-sdk" in sent
+        assert "pi" in sent
 
     @pytest.mark.asyncio
     async def test_default_clears_override(self):
-        patchbay.projects.set_chat_harness(SESSION_KEY, "cc-sdk")
+        patchbay.projects.set_chat_harness(SESSION_KEY, "pi")
         update, context = _make_update("/harness default")
         await bridge.cmd_harness(update, context)
         assert patchbay.projects.get_chat_harness(SESSION_KEY) is None
@@ -105,11 +105,11 @@ def _bridge_run_claude_deps(monkeypatch):
 
 
 class TestHarnessActivityField:
-    def test_per_chat_cc_sdk_dispatches_to_sdk_harness(
+    def test_per_chat_pi_dispatches_to_pi_harness(
         self, _bridge_run_claude_deps
     ):
-        """When the per-chat selection is cc-sdk, run_claude instantiates
-        `ClaudeSdkHarness` and the activity log records `harness=cc-sdk`."""
+        """When the per-chat selection is pi, run_claude instantiates
+        `PiHarness` and the activity log records `harness=pi`."""
         from patchbay.harness import TextDelta, TurnFinal
 
         events = []
@@ -117,43 +117,40 @@ class TestHarnessActivityField:
         def _capture(event, **kwargs):
             events.append({"event": event, **kwargs})
 
-        # Fake harness records that ClaudeSdkHarness was instantiated
-        # and yields a minimal successful stream.
         instantiated = {"called": False}
 
-        class _FakeSdkHarness:
-            name = "cc-sdk"
+        class _FakePiHarness:
+            name = "pi"
 
             def __init__(self, **kwargs):
                 instantiated["called"] = True
                 instantiated["kwargs"] = kwargs
 
             async def run_turn(self, req):
-                yield TextDelta(text="hello from sdk", final=True)
+                yield TextDelta(text="hello from pi", final=True)
                 yield TurnFinal(
-                    session_id="sess-sdk-1",
+                    session_id="sess-pi-1",
                     num_turns=1,
                     total_cost_usd=0.001,
-                    raw_text="hello from sdk",
+                    raw_text="hello from pi",
                 )
 
-            async def cancel(self) -> None:
+            async def cancel(self):
                 pass
 
         with (
-            patch("bridge.ClaudeSdkHarness", _FakeSdkHarness),
+            patch("bridge.PiHarness", _FakePiHarness),
             patch("bridge._log_activity", side_effect=_capture),
-            patch("bridge.get_chat_harness", return_value="cc-sdk"),
+            patch("bridge.get_chat_harness", return_value="pi"),
         ):
             result = bridge.run_claude(MESSAGE, SESSION_KEY)
 
         assert instantiated["called"] is True
-        # on_progress was wired through (so the stall detector keeps working)
         assert "on_progress" in instantiated["kwargs"]
-        assert result == "hello from sdk"
+        assert result == "hello from pi"
 
         invoke = next(e for e in events if e["event"] == "turn_invoke")
         complete = next(e for e in events if e["event"] == "turn_complete")
-        assert invoke["harness"] == "cc-sdk"
-        assert invoke["harness_requested"] == "cc-sdk"
-        assert complete["harness"] == "cc-sdk"
+        assert invoke["harness"] == "pi"
+        assert invoke["harness_requested"] == "pi"
+        assert complete["harness"] == "pi"

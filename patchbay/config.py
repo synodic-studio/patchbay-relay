@@ -182,10 +182,6 @@ RESTART_NOTIFY_FILE = BASE_DIR / "restart_notify.json"
 CHAT_PROJECTS_FILE = BASE_DIR / "chat_projects.json"
 FORGE_QUEUE_DIR = Path(PA_PLUGIN_DIR) / "agents" / "dev" / "forge" / "queue"
 ACTIVITY_LOG = BASE_DIR / "activity.jsonl"
-# MOP audit log: one JSONL line per verdict (Accepted / Rewritten / Rejected /
-# AcceptedFailedOpen), rotated daily by date. Populated only when the
-# cc-sdk-mop harness is in use; other harnesses leave the dir empty.
-MOP_AUDIT_DIR = BASE_DIR / "mop-audit"
 PHOTO_DIR = Path(tempfile.gettempdir()) / "claude-telegram-photos"
 PHOTO_DIR.mkdir(exist_ok=True)
 DOC_DIR = Path(tempfile.gettempdir()) / "claude-telegram-docs"
@@ -198,12 +194,11 @@ MAX_TURNS = _env_int("MAX_TURNS", "500", min_value=1)
 MAX_WORKERS = _env_int("MAX_WORKERS", "4", min_value=1)
 
 # --- Harness ---
-# Pluggable agent backend. cc-sdk uses the Claude Agent SDK, cc-sdk-mop layers
-# Model Output Protocol filtering on top, pi wraps badlogicgames/pi
-# (multi-model). Per-chat override lives in chat_projects.json under the
+# Pluggable agent backend. pi wraps badlogicgames/pi (multi-model via
+# litellm). Per-chat override lives in chat_projects.json under the
 # "harness" key; this value is the fallback when a topic has no override.
-VALID_HARNESSES = ("cc-sdk", "cc-sdk-mop", "pi")
-DEFAULT_HARNESS = _env_with_legacy("PATCHBAY_DEFAULT_HARNESS", "STARGATE_DEFAULT_HARNESS", "cc-sdk")
+VALID_HARNESSES = ("pi",)
+DEFAULT_HARNESS = "pi"
 if DEFAULT_HARNESS not in VALID_HARNESSES:
     raise SystemExit(f"PATCHBAY_DEFAULT_HARNESS={DEFAULT_HARNESS!r} is not one of {VALID_HARNESSES}")
 
@@ -242,7 +237,8 @@ REPLY_STORE_FILE = BASE_DIR / "reply_store.json"
 # Trigger automatic context compaction after a turn when usage crosses a
 # threshold. Set AUTO_COMPACT_PCT (0–100, exclusive) and/or
 # AUTO_COMPACT_TOKENS (positive integer). Either crossing triggers compact.
-# Only supported on cc-sdk and cc-sdk-mop; no-op on pi.
+# Removed (was only relevant for cc-sdk/cc-sdk-mop). Pi handles
+# its own context window internally.
 AUTO_COMPACT_PCT: float | None = None
 AUTO_COMPACT_TOKENS: int | None = None
 _raw_compact_pct = os.environ.get("AUTO_COMPACT_PCT", "")
@@ -266,13 +262,10 @@ if _raw_compact_tokens:
 
 # --- Stall detection ---
 # Claude CLI is API-bound, so CPU hovers near zero during normal operation.
-# Stall detection watches stdout-event cadence, not CPU: claude -p in JSON
-# output mode streams events on every tool call / assistant chunk / result,
-# so a real hang (or a process blocked on a TCC dialog with no one to click
-# it) shows up as no-events-for-N-minutes regardless of CPU. Default 30 min:
-# 10 min was producing false-positive ghost-kills on cc-sdk during long
-# Bash/Read tool calls (test suites, large file scans) that legitimately
-# don't emit SDK messages while running.
+# Stall detection watches stdout-event cadence, not CPU: pi --mode json
+# streams events on every tool call / assistant chunk / result, so a
+# real hang (or a process blocked on a TCC dialog with no one to click
+# it) shows up as no-events-for-N-minutes regardless of CPU.
 STALL_POLL_INTERVAL = 60  # check every minute
 STALL_TIMEOUT = _env_int("STALL_TIMEOUT", "1800", min_value=1)  # 30 min
 

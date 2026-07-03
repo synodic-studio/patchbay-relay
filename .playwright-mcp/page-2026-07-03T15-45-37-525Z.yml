@@ -1,0 +1,38 @@
+- generic [ref=e104]:
+  - button "Done" [ref=e106] [cursor=pointer]
+  - generic [ref=e107]: Settings
+  - generic [ref=e108]:
+    - generic [ref=e109]: Voice
+    - generic [ref=e110]:
+      - generic [ref=e111]:
+        - generic [ref=e112]: Spoken replies
+        - generic [ref=e113] [cursor=pointer]:
+          - checkbox
+      - generic [ref=e115]:
+        - generic [ref=e116]: Provider
+        - combobox [ref=e117] [cursor=pointer]:
+          - option "macOS Say"
+          - option "Google Cloud" [selected]
+        - img [ref=e118]
+      - generic [ref=e120]:
+        - generic [ref=e121]: Speaking rate
+        - generic [ref=e122]:
+          - slider [ref=e123] [cursor=pointer]: "1.5"
+          - generic [ref=e124]: 1.5×
+    - generic [ref=e125]: Model
+    - generic [ref=e126]:
+      - generic [ref=e128] [cursor=pointer]: Small
+      - generic [ref=e130] [cursor=pointer]: Medium
+      - generic [ref=e131] [cursor=pointer]:
+        - generic [ref=e132]: Large
+        - generic [ref=e133]: ✓
+      - textbox "Custom LiteLLM alias…" [ref=e135]
+    - generic [ref=e136]: Files
+    - generic [ref=e137]:
+      - generic [ref=e138]:
+        - generic [ref=e139]: Save path
+        - textbox "docs/patchbay/" [ref=e140]
+      - generic [ref=e141]:
+        - generic [ref=e142]: Auto-commit to Git
+        - generic [ref=e143] [cursor=pointer]:
+          - checkbox

@@ -1,8 +1,8 @@
 """Context window commands: /context, /compact.
 
 These commands run a one-shot inquiry against the chat's active session
-to read or compact its context window. cc-sdk has native support; every
-other harness uses the two-turn fallback (summarize → clear → handoff).
+to read or compact its context window. Pi uses the two-turn fallback
+(summarize → clear → handoff) since it doesn't expose a native compact.
 """
 
 from __future__ import annotations
@@ -14,12 +14,9 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 import bridge
-from patchbay.config import CLAUDE_PATH, MAX_TIMEOUT, QUOTA_HIT_PREFIX
+from patchbay.config import MAX_TIMEOUT, QUOTA_HIT_PREFIX
 from patchbay.efforts import resolve_effort
 from patchbay.harness import (
-    CAPABILITIES_BY_NAME,
-    ClaudeSdkHarness,
-    ClaudeSdkMopHarness,
     TurnRequest,
 )
 from patchbay.models import get_chat_model
@@ -50,41 +47,22 @@ def _fmt_tokens(n: int) -> str:
 
 def _resolve_harness_for_inquiry(session_key: str):
     """Build a harness instance + TurnRequest suitable for one-shot inquiry
-    methods (get_context, compact). Mirrors the dispatch in run_claude
-    minus the proc-mirroring and per-turn callbacks. Returns
-    (harness_name, harness, req) or None if the chat's harness doesn't
-    exist or isn't suitable.
+    methods (get_context, compact). Only pi is available, which has no
+    native context query or compact, so this always falls through to
+    the run_claude-based fallback path.
     """
     from patchbay.config import DEFAULT_HARNESS, VALID_HARNESSES
+    from patchbay.harness import PiHarness
 
     chat_cwd = get_chat_working_dir(session_key)
     session_id = get_session_id(session_key)
     model = get_chat_model(session_key)
     effort = resolve_effort(session_key)
 
-    harness_name = get_chat_harness(session_key) or DEFAULT_HARNESS
-    if harness_name not in VALID_HARNESSES:
-        harness_name = DEFAULT_HARNESS
-
-    if harness_name == "cc-sdk":
-        harness = ClaudeSdkHarness(
-            cli_path=CLAUDE_PATH, max_timeout_seconds=MAX_TIMEOUT
-        )
-    elif harness_name == "cc-sdk-mop":
-        # cc-sdk-mop has no run_turn/get_context/compact — its dispatch
-        # lives in bridge.run_claude. Returning the instance here lets
-        # cmd_context render a "not supported on cc-sdk-mop" hint and lets
-        # cmd_compact fall through to the run_claude-based fallback path.
-        harness = ClaudeSdkMopHarness()
-    elif harness_name == "pi":
-        from patchbay.harness import PiHarness
-
-        harness = PiHarness(max_timeout_seconds=MAX_TIMEOUT)
-    else:
-        return None
+    harness = PiHarness(max_timeout_seconds=MAX_TIMEOUT)
 
     req = TurnRequest(
-        prompt="",  # /context and /compact set their own prompt
+        prompt="",
         session_key=session_key,
         project_dir=Path(chat_cwd),
         system_prompt="",
@@ -96,7 +74,7 @@ def _resolve_harness_for_inquiry(session_key: str):
         max_turns=None,
         plugin_dir=None,
     )
-    return harness_name, harness, req
+    return DEFAULT_HARNESS, harness, req
 
 
 def _build_handoff_prompt(summary: str) -> str:
@@ -181,49 +159,24 @@ async def _fallback_compact(
 async def cmd_context(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show current context-window usage for this chat's session.
 
-    cc-sdk only today (pi advertises supports_context_query=False;
-    cc-sdk-mop has no run_turn so context query routes through cc-sdk).
-    For unsupported harnesses, suggest /harness cc-sdk.
+    Pi doesn't expose a native context query, so this always suggests
+    using /compact instead.
     """
     chat_id = update.effective_chat.id
     thread_id = update.message.message_thread_id
     key = _session_key(chat_id, thread_id)
 
-    resolved = _resolve_harness_for_inquiry(key)
-    if resolved is None:
-        await update.message.reply_text("No harness configured for this chat.")
-        return
-    harness_name, harness, req = resolved
-
-    caps = CAPABILITIES_BY_NAME.get(harness_name)
-    if caps is None or not caps.supports_context_query:
-        await update.message.reply_text(
-            f"/context isn't supported on {harness_name} yet. "
-            f"Try /harness cc-sdk for this chat."
-        )
-        return
-
-    try:
-        usage = await harness.get_context(req)
-    except Exception as exc:  # noqa: BLE001
-        bridge.logger.exception("/context failed for %s", key)
-        await update.message.reply_text(f"Couldn't read context: {exc}")
-        return
-
-    used = _fmt_tokens(usage.used_tokens)
-    cap = _fmt_tokens(usage.max_tokens)
-    pct = f"{usage.percentage:.0f}%"
-    await update.message.reply_text(f"Context: {used} / {cap} ({pct})")
+    await update.message.reply_text(
+        f"/context isn't supported on pi (no native context query). "
+        f"Use /compact to get a summary."
+    )
 
 
 async def cmd_compact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Compact the running context. Optional steering text after the command.
 
-    Two paths:
-    - Native (cc-sdk): pushes claude's `/compact` slash command into a
-      transient SDK client and reports before/after token counts.
-    - Fallback (every other harness): runs a summarizer turn, clears the
-      session, then runs a handoff turn whose prompt IS the summary.
+    Uses the two-turn fallback (summarize → clear → handoff) since
+    pi doesn't have a native /compact command.
     """
     chat_id = update.effective_chat.id
     thread_id = update.message.message_thread_id
@@ -245,18 +198,4 @@ async def cmd_compact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         )
         return
 
-    caps = CAPABILITIES_BY_NAME.get(harness_name)
-    if caps is not None and caps.supports_compact:
-        # Native path.
-        await update.message.reply_text("Compacting context…")
-        try:
-            result = await harness.compact(req, instructions=instructions)
-        except Exception as exc:  # noqa: BLE001
-            bridge.logger.exception("/compact native failed for %s", key)
-            await update.message.reply_text(f"Compact failed: {exc}")
-            return
-        await update.message.reply_text(result.message)
-        return
-
-    # Fallback path: works on every harness via run_claude.
     await _fallback_compact(update=update, session_key=key, instructions=instructions)

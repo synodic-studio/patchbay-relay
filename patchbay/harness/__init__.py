@@ -24,17 +24,11 @@ from .base import (
     TurnFinal,
     TurnRequest,
 )
-from .claude_sdk import ClaudeSdkHarness
-from .claude_sdk import _CAPABILITIES as _CC_SDK_CAPS
-from .claude_sdk_mop import ClaudeSdkMopHarness
-from .claude_sdk_mop import _CAPABILITIES as _CC_SDK_MOP_CAPS
 from .pi import PiHarness
 from .pi import _CAPABILITIES as _PI_CAPS
 
 
 CAPABILITIES_BY_NAME: dict[str, HarnessCapabilities] = {
-    "cc-sdk": _CC_SDK_CAPS,
-    "cc-sdk-mop": _CC_SDK_MOP_CAPS,
     "pi": _PI_CAPS,
 }
 
@@ -42,8 +36,6 @@ __all__ = [
     "CAPABILITIES_BY_NAME",
     "ChannelCapableHarness",
     "ChannelHandle",
-    "ClaudeSdkHarness",
-    "ClaudeSdkMopHarness",
     "CompactCapableHarness",
     "CompactResult",
     "ContextQueryCapableHarness",

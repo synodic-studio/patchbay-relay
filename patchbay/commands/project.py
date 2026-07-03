@@ -160,7 +160,11 @@ async def cmd_project(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 async def cmd_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Set or show the model for this chat/topic."""
+    """Set or show the model for this chat/topic.
+
+    Shows available pi/litellm models. Run `pi --list-models` for the
+    full list of supported aliases.
+    """
     chat_id = update.effective_chat.id
     thread_id = update.message.message_thread_id
     key = _session_key(chat_id, thread_id)
@@ -177,7 +181,7 @@ async def cmd_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             return
         if choice not in VALID_MODELS:
             await update.message.reply_text(
-                "Invalid model. Choose: opus, sonnet, haiku, default"
+                f"Invalid model. Pick from: {', '.join(VALID_MODELS)}, default"
             )
             return
         set_chat_model(key, choice)
@@ -187,18 +191,27 @@ async def cmd_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         bridge.logger.info("Model set to %s for %s", choice, key)
         return
 
-    # No args: show buttons
+    # No args: show dynamic model picker via pi --list-models
+    from patchbay.models import list_available_models
+
     current = get_chat_model(key) or f"default ({DEFAULT_MODEL})"
-    buttons = [
-        [
-            InlineKeyboardButton("opus", callback_data="model:opus"),
-            InlineKeyboardButton("sonnet", callback_data="model:sonnet"),
-            InlineKeyboardButton("haiku", callback_data="model:haiku"),
-        ],
-        [InlineKeyboardButton("default", callback_data="model:__default__")],
-    ]
+    available = list_available_models()
+
+    # Build inline keyboard: up to 3 models per row
+    buttons = []
+    row = []
+    for name, details in available:
+        label = name
+        row.append(InlineKeyboardButton(label, callback_data=f"model:{name}"))
+        if len(row) >= 3:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+    buttons.append([InlineKeyboardButton("default", callback_data="model:__default__")])
+
     await update.message.reply_text(
-        f"Current model: {current}\nPick a model (or prefix any message with !s !o !h for one-shot):",
+        f"Current model: {current}\nPick a model (or prefix with !<shortcut> for one-shot):",
         reply_markup=InlineKeyboardMarkup(buttons),
     )
 
@@ -298,11 +311,9 @@ async def callback_effort(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 async def cmd_harness(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Set or show the agent backend harness for this chat/topic.
+    """Show the current agent backend harness for this chat/topic.
 
-    `/harness` shows the current selection (per-chat override or the
-    DEFAULT_HARNESS fallback). `/harness <name>` sets it for this topic;
-    `/harness default` clears the override.
+    Only pi is available. `/harness default` clears the override.
     """
     chat_id = update.effective_chat.id
     thread_id = update.message.message_thread_id
@@ -332,7 +343,7 @@ async def cmd_harness(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     current = get_chat_harness(key) or DEFAULT_HARNESS
     await update.message.reply_text(
-        f"Harness: {current}\nValid: {', '.join(VALID_HARNESSES)}, default"
+        f"Harness: {current}"
     )
 
 

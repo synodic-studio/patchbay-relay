@@ -1,0 +1,16 @@
+- generic [ref=f2e32]:
+  - generic [ref=f2e33]:
+    - button "Back" [ref=f2e34] [cursor=pointer]:
+      - img [ref=f2e35]
+    - generic [ref=f2e37]: patchbay-voice
+    - button "Reset" [ref=f2e38] [cursor=pointer]
+  - generic [ref=f2e40]:
+    - generic [ref=f2e41]: 🎤
+    - paragraph [ref=f2e42]: Hold the mic to talk.
+  - generic [ref=f2e44]:
+    - button "Toggle keyboard" [ref=f2e45] [cursor=pointer]:
+      - img [ref=f2e46]
+    - button "Hold to talk" [ref=f2e49] [cursor=pointer]:
+      - generic [ref=f2e50]: 🎤
+    - button "Toggle audio" [ref=f2e51] [cursor=pointer]:
+      - img [ref=f2e52]

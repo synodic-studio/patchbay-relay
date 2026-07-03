@@ -1,19 +1,49 @@
-"""Chat-to-model mapping and per-message model prefix parsing."""
+"""Chat-to-model mapping and per-message model prefix parsing.
+
+Pi uses litellm under the hood and supports model IDs in `provider/id` format
+(e.g. `openai/gpt-4o`, `anthropic/claude-sonnet-4-20250514`) as well as
+built-in aliases like `small`, `medium`, `large`, `gpt`, `opus`, `write`, etc.
+
+The default model is `small` — a fast, capable litellm alias.
+"""
 
 import json
 import re
+import subprocess
+from typing import Tuple
 
 from .config import BASE_DIR
 
 CHAT_MODELS_FILE = BASE_DIR / "chat_models.json"
-VALID_MODELS = {"opus", "sonnet", "haiku"}
-DEFAULT_MODEL = "sonnet"
 
-# Prefix pattern: message starts with !opus, !sonnet, !haiku (or !o, !s, !h)
-# followed by whitespace and the actual message.
-_MODEL_SHORTCUTS = {"o": "opus", "s": "sonnet", "h": "haiku"}
+# Pi's built-in litellm model aliases. These are the short names pi resolves
+# through its litellm backend. `small` is the default — fast and capable.
+_PI_LITELLM_ALIASES = (
+    "small",
+    "medium",
+    "large",
+    "gpt",
+    "opus",
+    "write",
+    "dsf",
+    "glm",
+)
+# Also accept shortcut single chars: s, m, l, g, o, w
+_PI_SHORTCUTS: dict[str, str] = {
+    "s": "small",
+    "m": "medium",
+    "l": "large",
+    "g": "gpt",
+    "o": "opus",
+    "w": "write",
+}
+# Everything we accept via /\model or prefix
+VALID_MODELS = _PI_LITELLM_ALIASES + tuple(_PI_SHORTCUTS.keys())
+DEFAULT_MODEL = "small"
+
+# Prefix pattern: message starts with !model_name followed by whitespace
 _PREFIX_RE = re.compile(
-    r"^!(" + "|".join(VALID_MODELS | set(_MODEL_SHORTCUTS.keys())) + r")\s+",
+    r"^!(" + "|".join(re.escape(m) for m in VALID_MODELS) + r")\s+",
     re.IGNORECASE,
 )
 
@@ -53,13 +83,59 @@ def resolve_model(session_key: str) -> str:
 
 
 def extract_model_prefix(message: str) -> tuple[str | None, str]:
-    """Check if message starts with a model prefix like !sonnet or !s.
+    """Check if message starts with a model prefix like !opus or !s.
 
     Returns (model_name, cleaned_message). If no prefix, returns (None, original).
+    Shortcuts (s, m, l, g, o, w) are expanded to their full alias.
     """
     m = _PREFIX_RE.match(message)
     if not m:
         return None, message
     tag = m.group(1).lower()
-    model = _MODEL_SHORTCUTS.get(tag, tag)
+    model = _PI_SHORTCUTS.get(tag, tag)
     return model, message[m.end() :]
+
+
+def list_available_models() -> list[tuple[str, str]]:
+    """Run `pi --list-models` and return (model, details) pairs.
+
+    Parses the tabular output from pi's model listing. Falls back to a
+    hardcoded list of known aliases if pi is not available or the call
+    fails.
+    """
+    try:
+        result = subprocess.run(
+            ["pi", "--list-models"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            models: list[tuple[str, str]] = []
+            lines = result.stdout.strip().splitlines()
+            # Skip header line: "provider  model   context  max-out  thinking  images"
+            for line in lines[1:]:
+                parts = line.split()
+                if len(parts) >= 6:
+                    provider = parts[0]
+                    model_name = parts[1]
+                    context = parts[2]
+                    thinking = parts[4]
+                    details = f"{provider}  ctx={context}  thinking={thinking}"
+                    models.append((model_name, details))
+            if models:
+                return models
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        pass
+
+    # Fallback: known pi litellm aliases with reasonable guesses
+    return [
+        ("small", "litellm  ctx=128K  thinking=yes"),
+        ("medium", "litellm  ctx=128K  thinking=no"),
+        ("large", "litellm  ctx=128K  thinking=yes"),
+        ("gpt", "litellm  ctx=128K  thinking=yes"),
+        ("opus", "litellm  ctx=200K  thinking=yes"),
+        ("write", "litellm  ctx=200K  thinking=yes"),
+        ("dsf", "litellm  ctx=128K  thinking=yes"),
+        ("glm", "litellm  ctx=128K  thinking=no"),
+    ]
