@@ -72,10 +72,10 @@ PI_PATH_DEFAULT = shutil.which("pi") or "/opt/homebrew/bin/pi"
 
 _CAPABILITIES = HarnessCapabilities(
     supports_resume=True,
-    supports_tool_streaming=True,   # toolcall_end + tool_execution_end events
-    supports_interrupt=False,        # SIGKILL on /kill
-    supports_effort=False,           # pi exposes --thinking but it's per-model
-    supports_mcp=False,              # pi has extensions, not MCP
+    supports_tool_streaming=True,  # toolcall_end + tool_execution_end events
+    supports_interrupt=False,  # SIGKILL on /kill
+    supports_effort=False,  # pi exposes --thinking but it's per-model
+    supports_mcp=False,  # pi has extensions, not MCP
 )
 
 _RATE_LIMIT_TOKENS = (
@@ -127,9 +127,7 @@ class PiHarness:
     async def run_turn(self, req: TurnRequest) -> AsyncIterator[TurnEvent]:
         cmd = self._build_cmd(req)
         loop = asyncio.get_running_loop()
-        result: _RunResult = await loop.run_in_executor(
-            None, lambda: self._run_subprocess(cmd, req.project_dir)
-        )
+        result: _RunResult = await loop.run_in_executor(None, lambda: self._run_subprocess(cmd, req.project_dir))
 
         if result.timed_out:
             yield TurnError(
@@ -151,9 +149,7 @@ class PiHarness:
                 return
             yield TurnError(
                 kind="unknown",
-                message=(
-                    f"(no output. stderr: {stderr[:500]})" if stderr else "(no output)"
-                ),
+                message=(f"(no output. stderr: {stderr[:500]})" if stderr else "(no output)"),
                 retryable=False,
                 metadata={"exit_code": result.returncode, "stderr": stderr[:500]},
             )
@@ -201,11 +197,7 @@ class PiHarness:
         # Error detection: stopReason=='error' on any assistant message.
         err_msg = _find_assistant_error(events)
         if err_msg is not None:
-            kind = (
-                "rate_limit"
-                if any(tok in err_msg.lower() for tok in _RATE_LIMIT_TOKENS)
-                else "unknown"
-            )
+            kind = "rate_limit" if any(tok in err_msg.lower() for tok in _RATE_LIMIT_TOKENS) else "unknown"
             yield TurnError(
                 kind=kind,
                 message=err_msg[:500],
@@ -249,9 +241,7 @@ class PiHarness:
         except OSError:
             pass
         try:
-            await asyncio.get_running_loop().run_in_executor(
-                None, lambda: proc.wait(timeout=2)
-            )
+            await asyncio.get_running_loop().run_in_executor(None, lambda: proc.wait(timeout=2))
         except subprocess.TimeoutExpired:
             pass
 
@@ -342,9 +332,7 @@ class PiHarness:
             timed_out=False,
         )
 
-    def _drain_streams(
-        self, proc: subprocess.Popen, timeout: float
-    ) -> tuple[str, str]:
+    def _drain_streams(self, proc: subprocess.Popen, timeout: float) -> tuple[str, str]:
         stdout_buf: list[str] = []
         stderr_buf: list[str] = []
 
@@ -365,12 +353,8 @@ class PiHarness:
                 except OSError:
                     pass
 
-        t_out = threading.Thread(
-            target=_drain, args=(proc.stdout, stdout_buf, True), daemon=True
-        )
-        t_err = threading.Thread(
-            target=_drain, args=(proc.stderr, stderr_buf, False), daemon=True
-        )
+        t_out = threading.Thread(target=_drain, args=(proc.stdout, stdout_buf, True), daemon=True)
+        t_err = threading.Thread(target=_drain, args=(proc.stderr, stderr_buf, False), daemon=True)
         t_out.start()
         t_err.start()
         proc.wait(timeout=timeout)
@@ -454,35 +438,30 @@ def _find_session_id(events: list[dict]) -> str | None:
 
 
 def _extract_text(events: list[dict]) -> str:
-    """Aggregate assistant text from message_update text_delta events.
+    """Extract assistant reply text from the final agent_end event.
 
-    We prefer the assembled text on `text_end` events when present (it's
-    the canonical content for the block); we fall back to summing
-    `text_delta`s if no text_end was seen.
+    Uses agent_end.messages[] — the canonical complete output — and filters
+    content blocks by type == "text" to exclude thinking blocks.  Skips any
+    agent_end with willRetry=True (mid-retry checkpoints) and takes the last
+    one (willRetry=False or absent), which is the terminal turn.
     """
-    texts: list[str] = []
-    pending: dict[int, list[str]] = {}
-    for ev in events:
-        if ev.get("type") != "message_update":
+    for ev in reversed(events):
+        if ev.get("type") != "agent_end" or ev.get("willRetry"):
             continue
-        ame = ev.get("assistantMessageEvent") or {}
-        kind = ame.get("type")
-        idx = ame.get("contentIndex", 0)
-        if kind == "text_delta":
-            delta = ame.get("delta", "")
-            if isinstance(delta, str) and delta:
-                pending.setdefault(idx, []).append(delta)
-        elif kind == "text_end":
-            content = ame.get("content")
-            if isinstance(content, str) and content:
-                texts.append(content)
-                pending.pop(idx, None)
-            elif idx in pending:
-                texts.append("".join(pending.pop(idx)))
-    # Any pending blocks that never saw text_end: flush the deltas.
-    for chunk in pending.values():
-        texts.append("".join(chunk))
-    return "\n".join(t for t in texts if t).strip()
+        parts: list[str] = []
+        for msg in ev.get("messages", []):
+            if msg.get("role") != "assistant":
+                continue
+            content = msg.get("content", [])
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        text = block.get("text", "")
+                        if text:
+                            parts.append(text)
+        if parts:
+            return "\n".join(parts).strip()
+    return ""
 
 
 def _extract_total_cost(events: list[dict]) -> float | None:

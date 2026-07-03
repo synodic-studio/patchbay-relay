@@ -43,9 +43,7 @@ def _write_fake_pi(tmp_path: Path, body: str) -> Path:
     fake.write_text(
         f"#!{sys.executable}\n"
         "import sys, time, json, os\n"
-        "if __name__ == '__main__':\n"
-        + textwrap.indent(body, "    ")
-        + "\n"
+        "if __name__ == '__main__':\n" + textwrap.indent(body, "    ") + "\n"
     )
     fake.chmod(fake.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
     return fake
@@ -90,13 +88,7 @@ def test_pi_harness_is_protocol_conformant():
 
 
 def test_parse_pi_events_skips_garbage():
-    stdout = (
-        '{"type":"session","id":"abc"}\n'
-        "not json\n"
-        "\n"
-        '{"type":"agent_end"}\n'
-        '"a string, not a dict"\n'
-    )
+    stdout = '{"type":"session","id":"abc"}\nnot json\n\n{"type":"agent_end"}\n"a string, not a dict"\n'
     out = list(_parse_pi_events(stdout))
     assert [e["type"] for e in out] == ["session", "agent_end"]
 
@@ -113,48 +105,58 @@ def test_find_session_id_returns_none_when_absent():
     assert _find_session_id([{"type": "agent_start"}]) is None
 
 
-def test_extract_text_aggregates_deltas_and_prefers_text_end():
-    events = [
-        {
-            "type": "message_update",
-            "assistantMessageEvent": {
-                "type": "text_delta",
-                "contentIndex": 0,
-                "delta": "Hello",
-            },
-        },
-        {
-            "type": "message_update",
-            "assistantMessageEvent": {
-                "type": "text_delta",
-                "contentIndex": 0,
-                "delta": " world",
-            },
-        },
-        {
-            "type": "message_update",
-            "assistantMessageEvent": {
-                "type": "text_end",
-                "contentIndex": 0,
-                "content": "Hello world!",
-            },
-        },
-    ]
+def _agent_end(messages: list[dict], *, will_retry: bool = False) -> dict:
+    ev: dict = {"type": "agent_end", "messages": messages}
+    if will_retry:
+        ev["willRetry"] = True
+    return ev
+
+
+def _assistant_msg(*blocks: dict) -> dict:
+    return {"role": "assistant", "content": list(blocks)}
+
+
+def _text_block(text: str) -> dict:
+    return {"type": "text", "text": text}
+
+
+def _thinking_block(thinking: str) -> dict:
+    return {"type": "thinking", "thinking": thinking, "thinkingSignature": "sig"}
+
+
+def test_extract_text_from_agent_end():
+    events = [_agent_end([_assistant_msg(_text_block("Hello world!"))])]
     assert _extract_text(events) == "Hello world!"
 
 
-def test_extract_text_falls_back_to_deltas_when_no_text_end():
+def test_extract_text_excludes_thinking_blocks():
     events = [
-        {
-            "type": "message_update",
-            "assistantMessageEvent": {
-                "type": "text_delta",
-                "contentIndex": 0,
-                "delta": "partial",
-            },
-        }
+        _agent_end(
+            [
+                _assistant_msg(
+                    _thinking_block("step 1: reason carefully"),
+                    _text_block("The answer is 42."),
+                )
+            ]
+        )
     ]
-    assert _extract_text(events) == "partial"
+    assert _extract_text(events) == "The answer is 42."
+
+
+def test_extract_text_ignores_will_retry_agent_end():
+    events = [
+        _agent_end([_assistant_msg(_text_block("attempt 1"))], will_retry=True),
+        _agent_end([_assistant_msg(_text_block("final answer"))]),
+    ]
+    assert _extract_text(events) == "final answer"
+
+
+def test_extract_text_empty_events():
+    assert _extract_text([]) == ""
+
+
+def test_extract_text_no_agent_end_returns_empty():
+    assert _extract_text([{"type": "agent_start"}, {"type": "turn_start"}]) == ""
 
 
 def test_extract_total_cost_sums_message_costs():
@@ -284,7 +286,7 @@ def test_run_turn_happy_path(tmp_path):
                     "type":"text_end","contentIndex":0,"content":"Hello!"}},
                 {"type":"message_end","message":{"role":"assistant","stopReason":"stop","usage":{"cost":{"total":0.0001}}}},
                 {"type":"turn_end","message":{"role":"assistant","stopReason":"stop","usage":{"cost":{"total":0.0001}}},"toolResults":[]},
-                {"type":"agent_end"},
+                {"type":"agent_end","messages":[{"role":"assistant","content":[{"type":"text","text":"Hello!"}],"stopReason":"stop","usage":{"cost":{"total":0.0001}}}]},
             ]:
                 print(json.dumps(ev), flush=True)
             """
@@ -401,9 +403,7 @@ def test_run_turn_handles_no_output_with_stale_session(tmp_path):
         ),
     )
     h = PiHarness(pi_path=str(fake))
-    events = asyncio.run(
-        _drain(h.run_turn(_make_req(tmp_path, resume_session_id="abc-123")))
-    )
+    events = asyncio.run(_drain(h.run_turn(_make_req(tmp_path, resume_session_id="abc-123"))))
     assert isinstance(events[-1], TurnError)
     assert events[-1].kind == "corrupt_session"
     assert events[-1].retryable is True
