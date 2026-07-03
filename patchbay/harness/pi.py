@@ -440,25 +440,35 @@ def _find_session_id(events: list[dict]) -> str | None:
 def _extract_text(events: list[dict]) -> str:
     """Extract assistant reply text from the final agent_end event.
 
-    Uses agent_end.messages[] — the canonical complete output — and filters
-    content blocks by type == "text" to exclude thinking blocks.  Skips any
-    agent_end with willRetry=True (mid-retry checkpoints) and takes the last
-    one (willRetry=False or absent), which is the terminal turn.
+    Uses agent_end.messages[] — the canonical complete output — but only
+    takes the LAST assistant message (the final response), not intermediate
+    tool-call or thinking turns.  Filters content blocks by type == "text"
+    to exclude thinking blocks.  Skips any agent_end with willRetry=True
+    (mid-retry checkpoints) and takes the last one (willRetry=False or
+    absent), which is the terminal turn.
     """
     for ev in reversed(events):
         if ev.get("type") != "agent_end" or ev.get("willRetry"):
             continue
+        messages = ev.get("messages", [])
+        if not isinstance(messages, list):
+            continue
+        # Find the last assistant message — that's the final response.
+        last_asst = None
+        for msg in messages:
+            if msg.get("role") == "assistant":
+                last_asst = msg
+        if last_asst is None:
+            continue
+        content = last_asst.get("content", [])
+        if not isinstance(content, list):
+            continue
         parts: list[str] = []
-        for msg in ev.get("messages", []):
-            if msg.get("role") != "assistant":
-                continue
-            content = msg.get("content", [])
-            if isinstance(content, list):
-                for block in content:
-                    if isinstance(block, dict) and block.get("type") == "text":
-                        text = block.get("text", "")
-                        if text:
-                            parts.append(text)
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                text = block.get("text", "")
+                if text:
+                    parts.append(text)
         if parts:
             return "\n".join(parts).strip()
     return ""

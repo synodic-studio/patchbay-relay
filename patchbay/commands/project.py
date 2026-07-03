@@ -95,7 +95,7 @@ async def cmd_setproject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     clear_session(key)
     chat_title = update.effective_chat.title or "DM"
     await update.message.reply_text(
-        f"Project set: ~/Developer/{rel_path}\nChat: {chat_title}\nSession reset. Claude will run from this directory."
+        f"Project set: ~/Developer/{rel_path}\nChat: {chat_title}\nSession reset. Agent will run from this directory."
     )
     bridge.logger.info("Project set to %s for %s (%s)", rel_path, key, chat_title)
 
@@ -139,7 +139,7 @@ async def callback_setproject(update: Update, context: ContextTypes.DEFAULT_TYPE
     clear_session(key)
     chat_title = update.effective_chat.title or "DM"
     await query.edit_message_text(
-        f"Project set: ~/Developer/{rel_path}\nChat: {chat_title}\nSession reset. Claude will run from this directory."
+        f"Project set: ~/Developer/{rel_path}\nChat: {chat_title}\nSession reset. Agent will run from this directory."
     )
     bridge.logger.info("Project set to %s for %s (%s)", rel_path, key, chat_title)
 
