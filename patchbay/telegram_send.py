@@ -269,6 +269,17 @@ async def _send_response(bot, chat_id: int, thread_id: int | None, response: str
     if not response and not file_requests:
         return
 
+    # MOP output gate. Owned by model-output-protocol (integrations/patchbay);
+    # log mode (default) is passthrough + audit, host-tagged "patchbay-relay".
+    # Fail-open — MOP must never withhold a response on its own error.
+    if response:
+        try:
+            from mop.host import filter_text
+
+            response = filter_text(response, host="patchbay-relay")
+        except Exception as _mop_err:
+            bridge.logger.warning("MOP gate failed, passing response through: %s", _mop_err)
+
     # Feature 6: drop pure-silence narration (*(silent)*, 🔇, etc.)
     if response and _is_silence_narration(response):
         bridge._log_activity(
