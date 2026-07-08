@@ -2,9 +2,9 @@
 
 **Run AI coding agents on your computer, from your phone.**
 
-> **Status: alpha, no longer actively developed.** Patchbay ran my studio for months and worked well, but it was never finished. I have since moved that workflow onto [Hermes](https://github.com/NousResearch/hermes-agent), Nous Research's self-hosted agent framework, which covers the same routing, scheduling, and recovery with less plumbing to maintain. This repo stays up as a working reference for the headless-first, harness-agnostic design. MIT-licensed; fork freely.
+> **Status: alpha, actively developed.** Patchbay has run my studio for months. It is currently **pi-only**: the Claude Agent SDK backends (`cc-sdk`, `cc-sdk-mop`) were removed because Anthropic is ending subscription (Max) coverage for embedded SDK use, so pi (multi-model via litellm) is the viable engine now. The `Harness` protocol is kept as an internal seam for adding a future non-Claude backend, so this stays a harness-agnostic design with one backend live today. MIT-licensed; fork freely.
 
-Patchbay bridges Telegram to AI coding agents running on your own machine — the Claude Agent SDK, the SDK with MOP output filtering, or pi — letting you develop software, manage infrastructure, and run autonomous agents from a mobile messaging app while your real workstation does the actual work.
+Patchbay bridges Telegram to a coding agent running on your own machine — currently [pi](https://github.com/badlogicgames/pi), a multi-model agent — letting you develop software, manage infrastructure, and run autonomous agents from a mobile messaging app while your real workstation does the actual work.
 
 ---
 
@@ -79,7 +79,7 @@ A single Telegram chat would force the user to pick "what project am I working o
 
 ### Pluggable harness, single transport
 
-The bridge does not care which agent runs the turn. The `Harness` protocol (`patchbay/harness/base.py`) is a streaming-event interface that all backends conform to. The current backends are the Claude Agent SDK (`cc-sdk`), the SDK with MOP output filtering (`cc-sdk-mop`), and badlogicgames/pi (`pi`); an earlier Claude Code CLI backend was retired once the SDK covered the same ground. New harnesses can be added by implementing one class. Capabilities (resume, mid-turn push, MCP, tool streaming) are advertised via `HarnessCapabilities` so the bridge can degrade gracefully when a backend doesn't support a feature.
+The bridge does not care which agent runs the turn. The `Harness` protocol (`patchbay/harness/base.py`) is a streaming-event interface that all backends conform to. Today there is exactly one live backend, badlogicgames/pi (`pi`, `patchbay/harness/pi.py`); the earlier Claude Agent SDK backends (`cc-sdk`, `cc-sdk-mop`) were removed when Anthropic ended embedded-subscription SDK use. The protocol is kept deliberately, so a future non-Claude framework can be added by implementing one class. Capabilities (resume, mid-turn push, MCP, tool streaming) are advertised via `HarnessCapabilities` so the bridge can degrade gracefully when a backend doesn't support a feature. Note pi already gives multi-*model* coverage via litellm; the harness seam is for a different *framework*, not a different model.
 
 ### Crash-loop self-heal
 
@@ -99,15 +99,14 @@ Test suite is 708 tests across 47 test files covering the bridge, the parser, ev
 
 ## Features
 
-- **Multi-harness** — `cc-sdk` (Claude Agent SDK), `cc-sdk-mop` (the SDK with MOP output filtering), and `pi` (badlogicgames/pi). Switch per topic via `/harness <name>`.
+- **Harness-agnostic (pi-only today)** — the `Harness` protocol is retained as an internal seam; the one live backend is `pi` (badlogicgames/pi, multi-model via litellm). The `cc-sdk`/`cc-sdk-mop` backends were removed under Anthropic's embedded-subscription change.
 - **Multi-project routing** — Each Telegram topic binds to a project directory via `chat_projects.json`. Each topic can target a different codebase.
 - **Per-topic agent identity** — Topics can load identity files (e.g. `SOUL.md`, `IDENTITY.md`, `AGENTS.md`) into the agent's system prompt to specialize behavior per persona.
-- **Crash recovery** — Self-healing crash-loop detection: 3+ crashes in 5 minutes triggers an autonomous repair session.
+- **Crash-loop detection + known-good rollback** — `validate.py` pre-flight rolls back to a known-good snapshot on a bad self-edit; 3+ crashes in 5 minutes backs off and logs the crash tail for fix-forward. (The old autonomous Claude-repair trigger was removed; rollback already covers the bricking case.)
 - **Pre-flight validation** — `validate.py` checks syntax, imports, and parser behavior before every bridge start. On failure, rolls back to a known-good snapshot.
 - **Quota handoff** — When the agent hits a rate limit, the task is written to a queue file for background processing.
 - **Rich messaging** — Markdown rendering, code blocks, photo and image handling with captions.
-- **Pending message batching** — Messages arriving while the agent is processing are queued and batched into a single follow-up invocation.
-- **Mid-turn push (cc-sdk only)** — On harnesses that support streaming input, follow-up messages are injected into the active turn at the next natural break — no queue, no friction reply.
+- **Pending message batching** — messages arriving mid-turn are queued and batched into a single follow-up invocation when the current turn finishes. (Mid-turn push was a `cc-sdk` streaming feature; with pi the debounce queue is the path.)
 - **Remote control** — Start `claude remote-control` sessions from Telegram for direct CLI access.
 - **Session persistence** — Sessions resume across messages and bridge restarts.
 
