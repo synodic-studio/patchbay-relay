@@ -1,16 +1,18 @@
 #!/bin/bash
-# Launch Patchbay with crash-loop detection and self-healing.
-# On CRASH_THRESHOLD crashes within CRASH_WINDOW seconds, fires a headless
-# Claude Code session to investigate and fix. The loop keeps respawning the
-# bridge regardless; CC fixes land on the next restart.
+# Launch Patchbay with crash-loop detection and known-good rollback.
+# Pre-flight validate.py + rollback to .bridge-known-good.py (below) is what
+# prevents a bad self-edit from bricking the bridge. On CRASH_THRESHOLD crashes
+# within CRASH_WINDOW seconds we back off and surface the crash loudly; we do
+# NOT auto-spawn a repair agent (that depended on the Claude CLI and fixed
+# forward unsupervised — rollback already covers the bricking case). Fix forward
+# by hand, or via pi from a Relay topic.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 "$SCRIPT_DIR/scripts/tcc/check.sh" || true
 
 CRASH_TIMESTAMPS="$SCRIPT_DIR/.crash-timestamps"
 CRASH_WINDOW=300       # seconds — sliding window for crash counting
-CRASH_THRESHOLD=3      # crashes in window before self-heal triggers
-HEAL_BACKOFF=60        # seconds to wait after triggering CC before next respawn
-CLAUDE_BIN="${CLAUDE_PATH:-$HOME/.local/bin/claude}"
+CRASH_THRESHOLD=3      # crashes in window before we back off and flag a loop
+HEAL_BACKOFF=60        # seconds to wait after a detected crash loop before respawn
 LOG="$SCRIPT_DIR/logs/bridge.err"
 
 # Resolve uv binary. launchd's PATH is fixed and doesn't include ~/.local/bin,
@@ -94,20 +96,14 @@ while true; do
     prune_timestamps
     recent=$(wc -l < "$CRASH_TIMESTAMPS" | tr -d ' ')
 
-    if [[ "$recent" -ge "$CRASH_THRESHOLD" ]] && [[ -x "$CLAUDE_BIN" ]]; then
-        # Clear timestamps so this doesn't re-trigger on the next crash
+    if [[ "$recent" -ge "$CRASH_THRESHOLD" ]]; then
+        # Crash loop. Known-good rollback (above) already guards against a bad
+        # self-edit bricking the bridge, so we don't auto-repair here — just
+        # save the crash tail for debugging, back off, and let the operator fix
+        # forward. Clear timestamps so this doesn't re-trigger every respawn.
         > "$CRASH_TIMESTAMPS"
-
-        error_tail=$(tail -80 "$LOG" 2>/dev/null)
-        nohup "$CLAUDE_BIN" \
-            --dangerously-skip-permissions \
-            -p "Patchbay (Telegram bridge) has crashed ${recent} times in ${CRASH_WINDOW}s. Investigate the crash, fix the root cause, and open a PR to the develop branch. Do NOT restart the bridge — run.sh respawns it automatically. Repo: $SCRIPT_DIR
-
-Recent bridge.err:
-${error_tail}" \
-            > "$SCRIPT_DIR/logs/self-heal.log" 2>&1 &
-
-        echo "Self-heal triggered (${recent} crashes). CC session started. Waiting ${HEAL_BACKOFF}s before next respawn." >&2
+        tail -80 "$LOG" 2>/dev/null > "$SCRIPT_DIR/logs/crash-loop.log" || true
+        echo "Crash loop: ${recent} crashes in ${CRASH_WINDOW}s. Tail saved to logs/crash-loop.log. Backing off ${HEAL_BACKOFF}s." >&2
         sleep "$HEAL_BACKOFF"
     else
         sleep 2
