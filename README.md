@@ -35,18 +35,14 @@ Each Telegram forum topic maps to an independent agent session. Multiple topics 
 ```mermaid
 flowchart TD
     TG["Telegram Bot API<br/>(long-polling)"] --> BR["bridge.py<br/>message router"]
-    BR --> CP["chat_projects.json<br/>topic → directory + agent"]
-    BR --> H{"harness backend<br/>(per topic)"}
-    H -->|cc-sdk| CC["Claude Agent SDK"]
-    H -->|cc-sdk-mop| MOP["Claude Agent SDK + MOP<br/>output filtering"]
-    H -->|pi| PI["pi"]
-    CC --> KIT["synodic-kit plugin<br/>hooks · skills · commands"]
-    MOP --> KIT
-    KIT --> AID["agent identity stack<br/>(if topic maps to an agent)"]
-    AID --> OUT["response chunking<br/>+ typing indicators"]
-    PI --> OUT
+    BR --> CP["chat_projects.json<br/>topic → directory + model"]
+    BR --> H{"harness<br/>(per topic)"}
+    H -->|pi| PI["pi<br/>(multi-model via litellm)"]
+    PI --> OUT["response chunking<br/>+ typing indicators"]
     OUT --> SEND["Telegram Bot API<br/>send response"]
 ```
+
+The `Harness` protocol allows other backends, but pi is the only one live today (see the status note above). New harnesses slot in at the `harness` node.
 
 ### Module map
 
@@ -56,19 +52,36 @@ patchbay/                 Core package
   config.py               Environment variables, paths, constants, logging
   sessions.py             Session persistence, sanitization, pending messages
   parser.py               Agent CLI output parsing (JSON array, NDJSON, single-object)
+  models.py               Per-chat pi model mapping (litellm aliases, default "small")
+  efforts.py              Per-chat thinking-effort setting
   quota.py                Quota/rate-limit detection and queue handoff
   activity.py             Structured JSON-lines activity logging
-  projects.py             Chat-to-project directory mapping
-  self_heal.py            Crash-loop / corrupt-session repair dispatcher
+  projects.py             Chat-to-project directory + harness mapping
+  self_heal.py            In-process repair handlers (corrupt session, OOM retry)
   singleton.py            Single-instance lock (avoids 409 getUpdates conflicts)
-  harness/                Pluggable agent backends
-    base.py               Protocol + TurnEvent types + ChannelHandle protocol
-    claude_sdk.py         Claude Agent SDK (typed messages, mid-turn push)
-    claude_sdk_channel.py Long-lived ClaudeSDKClient for inflight push
-    claude_sdk_mop.py     Claude Agent SDK + MOP output filtering (cc-sdk-mop)
-    pi.py                 badlogicgames/pi multi-model agent
+  outbound.py             Outbound send/queue plumbing
+  telegram_send.py        Telegram send helpers (chunking, markdown, media)
+  text_split.py           Message splitting
+  file_send.py            File / photo delivery
+  markdown_config.py      Markdown rendering config
+  log_filters.py          Log filtering
+  logrotate.py            Log rotation
+  runtime.py              Process runtime state
+  reply_store.py          Reply-text cache
+  commands/               Telegram command handlers
+    lifecycle.py          /start, /clearnew, /kill, /restart, /ping
+    project.py            /setproject, /project, /harness, /model, /effort, /remote_control
+    observability.py      /usage, /health, /activity, /soak
+    context.py            /context, /compact
+    heartbeat.py          /heartbeat
+    inquiry.py            Shared one-shot harness resolver (/context, /usage)
+  harness/                Pluggable agent backends (pi live; protocol kept as a seam)
+    base.py               Protocol + TurnEvent types + capability protocols
+    pi.py                 badlogicgames/pi multi-model agent (the live backend)
+    pi_session.py         Read context/usage from pi session transcripts
+    context_estimate.py   Client-side token/context estimator (litellm-backed)
 validate.py               Pre-flight validation (syntax, imports, parser smoke tests)
-run.sh                    Entry point with crash-loop detection and self-healing
+run.sh                    Entry point with crash-loop detection + known-good rollback
 ```
 
 ## Design decisions
@@ -93,9 +106,9 @@ Before every bridge start, `validate.py` runs syntax checks, import checks, and 
 
 Two bridge processes polling Telegram's `getUpdates` simultaneously will trigger 409 conflicts, log them 1000 times each, and never exit cleanly. `patchbay/singleton.py` holds an exclusive lock on `.bridge.lock`. If a stale PID is holding it (process is dead), the new bridge steals it and continues. If a live PID holds it, the new bridge waits for it to exit, then takes over. No babysitting required during launchd restarts.
 
-### 708 tests, all in plain pytest
+### 651 tests, all in plain pytest
 
-Test suite is 708 tests across 47 test files covering the bridge, the parser, every harness, all command handlers, the self-heal path, the singleton lock, and chaos cases (partial JSON, slow drip, hangs, OOM-style exits). Pre-push hook runs the full suite. No CI on the remote — quality gates are local.
+Test suite is 651 tests across 45 test files covering the bridge, the parser, the pi harness, all command handlers, the self-heal handlers, the singleton lock, and chaos cases (partial JSON, slow drip, hangs, OOM-style exits). Pre-push hook runs the full suite. No CI on the remote — quality gates are local.
 
 ## Features
 
@@ -119,7 +132,7 @@ Anyone with a Mac and 30 minutes should be able to follow this end-to-end.
 - macOS (uses launchd for process management)
 - Python 3.13+
 - [uv](https://docs.astral.sh/uv/) for dependency management
-- An agent backend available locally: the Claude Agent SDK (pulled in by `uv sync`), and optionally [pi](https://github.com/badlogicgames/pi) if you want the `pi` harness
+- [pi](https://github.com/badlogicgames/pi) on your `PATH` — the live harness (multi-model via litellm). `uv sync` installs the Python deps.
 
 ### 2. Get a Telegram bot
 
@@ -201,7 +214,7 @@ The bridge is frequently edited by an agent running *through itself*. Five layer
 ## Development
 
 ```bash
-uv run pytest tests/ -q                                 # run tests (708 tests)
+uv run pytest tests/ -q                                 # run tests (651 tests)
 uv run ruff check .                                     # lint
 uv run python validate.py                               # pre-flight smoke tests
 uv run pytest tests/ --cov --cov-report=term-missing    # with coverage
@@ -211,7 +224,7 @@ Pre-push hook runs the full test suite. There is no CI on the remote — quality
 
 ## Related projects
 
-- [model-output-protocol](https://github.com/synodic-studio/model-output-protocol) — output-shaping layer between agent and user. Wired in here as the `cc-sdk-mop` harness for enforcing per-topic reply rules.
+- [model-output-protocol](https://github.com/synodic-studio/model-output-protocol) — output-shaping layer between agent and user. Was wired as the `cc-sdk-mop` harness (removed with the Claude SDK backends); kept as a reference for when a harness needing output filtering returns.
 - [patchbay-url-scheme-wrapper](https://github.com/synodic-studio/patchbay-url-scheme-wrapper) — Cloudflare Worker that rewrites custom URL schemes (`obsidian://`, `x-apple-reminderkit://`, ...) into tappable `https://` links for Telegram. Point the bridge at your deployment with `PATCHBAY_URL_WRAPPER=https://your-domain.example`.
 
 ## License
