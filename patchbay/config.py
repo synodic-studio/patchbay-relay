@@ -180,7 +180,6 @@ PENDING_DIR = BASE_DIR / "pending"
 PENDING_DIR.mkdir(exist_ok=True)
 RESTART_NOTIFY_FILE = BASE_DIR / "restart_notify.json"
 CHAT_PROJECTS_FILE = BASE_DIR / "chat_projects.json"
-FORGE_QUEUE_DIR = Path(PA_PLUGIN_DIR) / "agents" / "dev" / "forge" / "queue"
 ACTIVITY_LOG = BASE_DIR / "activity.jsonl"
 PHOTO_DIR = Path(tempfile.gettempdir()) / "claude-telegram-photos"
 PHOTO_DIR.mkdir(exist_ok=True)

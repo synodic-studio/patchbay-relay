@@ -25,7 +25,7 @@ from typing import Literal, Protocol, Union, runtime_checkable
 # patchbay.self_heal repair-handler keys where possible so dispatch is
 # uniform across CLI and SDK harnesses.
 TurnErrorKind = Literal[
-    "rate_limit",       # quota or rate limit; bridge does Forge handoff
+    "rate_limit",       # quota or rate limit; bridge shows a retry notice
     "oom",              # OOM-shaped exit (137 / -9); bridge retries with trimmed prompt
     "corrupt_session",  # session storage couldn't be read; quarantine + fresh start
     "max_turns",        # hit the turn budget; bridge appends a notice

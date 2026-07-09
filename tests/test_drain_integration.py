@@ -71,7 +71,6 @@ async def test_two_handlers_real_second_call_both_responses_land_in_order():
         patch.object(bridge, "save_pending", return_value="pending-x"),
         patch.object(bridge, "clear_pending"),
         patch.object(bridge, "keep_typing", new=AsyncMock()),
-        patch.object(bridge, "_handoff_to_forge", return_value=False),
     ):
         # Handler A
         update_a = _make_update(text="first message")
@@ -136,7 +135,6 @@ async def test_three_handlers_combined_into_one_drain_batch():
         patch.object(bridge, "save_pending", return_value="pending-x"),
         patch.object(bridge, "clear_pending"),
         patch.object(bridge, "keep_typing", new=AsyncMock()),
-        patch.object(bridge, "_handoff_to_forge", return_value=False),
     ):
         update_a = _make_update(text="msg-A")
         task_a = asyncio.create_task(bridge.handle_message(update_a, ctx))
@@ -175,7 +173,6 @@ async def test_no_lane_leak_after_drain_completes():
         patch.object(bridge, "save_pending", return_value="pending-x"),
         patch.object(bridge, "clear_pending"),
         patch.object(bridge, "keep_typing", new=AsyncMock()),
-        patch.object(bridge, "_handoff_to_forge", return_value=False),
     ):
         await bridge.handle_message(_make_update(text="solo"), ctx)
 

@@ -47,7 +47,7 @@ Agent SDK, pi, codex/cursor, …) behind one interface.
   - `timeout` → "Timed out after N min" message
   - `corrupt_session` → `clear_session()` + recursive retry without resume
   - `oom` → `dispatch_repair("claude_oom_137")` + retry with trimmed prompt
-  - `rate_limit` → `QUOTA_HIT_PREFIX + message` (Forge handoff)
+  - `rate_limit` → `QUOTA_HIT_PREFIX + message` (bridge shows a retry notice)
   - `max_turns` → save session_id + return harness-built notice text
   - `unknown` / `process_died` → surface message verbatim
 - Test fixtures updated to patch
@@ -176,7 +176,7 @@ Implemented in `patchbay/self_heal.py`. Phase 1b adds the new kinds.
 |---|---|---|
 | `oom` | `claude_oom_137` | Retry with trimmed prompt + smaller turn budget |
 | `corrupt_session` | `corrupt_session_json` | Quarantine + retry fresh session |
-| `rate_limit` | (Forge handoff) | `_maybe_handoff_quota` in bridge |
+| `rate_limit` | (retry notice) | `_maybe_quota_notice` in bridge |
 | `max_turns` | (none — surface notice) | Append turn-limit message |
 | `timeout` | (none — surface notice) | "Timed out after N min" |
 | `process_died` | new in 1b | `harness_subprocess_died` — surface stderr, no retry |

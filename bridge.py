@@ -70,7 +70,6 @@ from patchbay.config import (  # noqa: E402
     BOT_TOKEN,
     CHAT_PROJECTS_FILE,
     DEFAULT_HARNESS,
-    FORGE_QUEUE_DIR,  # noqa: F401 — used by tests via bridge.FORGE_QUEUE_DIR
     HEARTBEAT_DELAY,
     HEARTBEAT_INTERVAL,
     MAX_QUEUED_MESSAGES,
@@ -127,7 +126,6 @@ from patchbay.parser import (  # noqa: E402
     parse_claude_response,
 )
 from patchbay.quota import (  # noqa: E402
-    handoff_to_forge as _handoff_to_forge_impl,
     is_quota_error as _is_quota_error_impl,
 )
 from patchbay.activity import log_activity  # noqa: E402
@@ -168,7 +166,6 @@ from patchbay.projects import (  # noqa: E402
 
 # Backward-compatible names for functions that were renamed
 _is_quota_error = _is_quota_error_impl
-_handoff_to_forge = _handoff_to_forge_impl
 _log_activity = log_activity
 
 # Module-level _ANSI_RE for backward compat
@@ -920,32 +917,16 @@ async def replay_pending(bot) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _maybe_handoff_quota(response: str, session_key: str, chat_id: int, thread_id: int | None) -> str:
-    """If `response` is a quota-hit sentinel, hand the original message off
-    to Forge and return a user-facing replacement. Otherwise return the
-    response unchanged. Only message-shaped turns invoke this; photo /
-    document handlers don't because their prompts include local file paths
-    a Forge worker can't reach."""
+def _maybe_quota_notice(response: str, session_key: str, chat_id: int, thread_id: int | None) -> str:
+    """If `response` is a quota-hit sentinel, replace it with a plain
+    user-facing notice; otherwise return the response unchanged.
+
+    (Rate-limited turns used to be handed off to Forge for background resume;
+    Forge is retired, so we just tell the user to retry. If an automatic-resume
+    mechanism returns, it would hook in here.)"""
     if not response.startswith(QUOTA_HIT_PREFIX):
         return response
-    original_msg = response[len(QUOTA_HIT_PREFIX) :]
-    session_id = get_session_id(session_key)
-    chat_cwd = get_chat_working_dir(session_key)
-    handed_off = _handoff_to_forge(
-        session_key=session_key,
-        message=original_msg,
-        chat_id=chat_id,
-        thread_id=thread_id,
-        session_id=session_id,
-        working_dir=chat_cwd,
-    )
-    if handed_off:
-        return (
-            "Hit a quota/rate limit. Handed this off to Forge — "
-            "it'll pick up where this left off and send the response "
-            "back here when done."
-        )
-    return "Hit a quota/rate limit. Tried to hand off to Forge but failed to write the queue file. Try again later."
+    return "Hit a quota/rate limit. Try again in a bit."
 
 
 async def _process_with_claude_turn(
@@ -960,7 +941,7 @@ async def _process_with_claude_turn(
     drop_message: str,  # what to show on "queue full"
     queued_message: str,  # what to show on "queued"
     model: str | None = None,  # per-message override (only "message" uses this today)
-    quota_handoff: bool = False,  # only "message" uses Forge handoff
+    quota_notice: bool = False,  # only "message" turns replace a quota sentinel with a notice
     on_drop: Callable[[], None] | None = None,  # called when queue is full (file cleanup)
     on_finish: Callable[[], None] | None = None,  # called in finally after processing
 ) -> None:
@@ -1034,8 +1015,8 @@ async def _process_with_claude_turn(
             logger.error("Error running claude for %s %s: %s", label, session_key, e)
             response = f"Error: {e}"
 
-        if quota_handoff:
-            response = _maybe_handoff_quota(response, session_key, chat_id, thread_id)
+        if quota_notice:
+            response = _maybe_quota_notice(response, session_key, chat_id, thread_id)
 
         # Delivered flag pattern: only clear the pending file after we've
         # confirmed the send returned without raising. CancelledError (SIGTERM
@@ -1152,7 +1133,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         drop_message=(f"Queue full ({MAX_QUEUED_MESSAGES}) — message dropped. Wait for current response to finish."),
         queued_message="Queued ({depth}) — will send when current response finishes.",
         model=msg_model,
-        quota_handoff=True,
+        quota_notice=True,
     )
 
 

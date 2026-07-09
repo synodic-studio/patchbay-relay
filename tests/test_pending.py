@@ -160,7 +160,6 @@ class TestPendingSurvivesDeliveryDisruption:
             patch.object(bridge, "_send_response", side_effect=boom),
             patch.object(bridge, "_notify_delivery_failure", new=AsyncMock()),
             patch.object(bridge, "keep_typing", new=AsyncMock()),
-            patch.object(bridge, "_handoff_to_forge", return_value=False),
         ):
             await bridge._process_with_claude_turn(
                 update,
@@ -209,7 +208,6 @@ class TestPendingSurvivesDeliveryDisruption:
             patch.object(bridge, "_send_response", side_effect=hang_then_cancel),
             patch.object(bridge, "_notify_delivery_failure", new=AsyncMock()),
             patch.object(bridge, "keep_typing", new=AsyncMock()),
-            patch.object(bridge, "_handoff_to_forge", return_value=False),
         ):
             task = asyncio.create_task(
                 bridge._process_with_claude_turn(

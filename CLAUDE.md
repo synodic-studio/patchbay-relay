@@ -1,6 +1,6 @@
 # Patchbay
 
-Telegram bot bridge that routes messages to Claude Code sessions.
+Telegram bot bridge that routes messages to a coding agent (pi) running on your machine.
 
 ## Principles
 
@@ -19,7 +19,7 @@ The bridge is modularized into a `patchbay/` package with focused modules. `brid
 | `patchbay/config.py` | All configuration: env vars, paths, constants, logging setup |
 | `patchbay/sessions.py` | Session persistence, sanitization, pending message management |
 | `patchbay/parser.py` | Claude CLI output parsing (JSON array, NDJSON, single-object) |
-| `patchbay/quota.py` | Quota/rate-limit detection and Forge handoff |
+| `patchbay/quota.py` | Quota/rate-limit detection (`is_quota_error`) |
 | `patchbay/activity.py` | Structured JSON-lines activity logging |
 | `patchbay/projects.py` | Chat-to-project directory mapping |
 | `patchbay/self_heal.py` | Repair-agent dispatcher — corrupt-session quarantine, stale-poller signal, claude OOM retry. |
@@ -38,7 +38,7 @@ The bridge is modularized into a `patchbay/` package with focused modules. `brid
 
 ### Testing
 
-651 tests across the `tests/` dir. Run with `uv run pytest tests/`. The suite includes property tests (`hypothesis`), a chaos test that materializes a fake agent binary across failure modes, real drain/debounce integration tests synchronized via `threading.Event`, and self-heal dispatcher tests.
+640 tests across the `tests/` dir. Run with `uv run pytest tests/`. The suite includes property tests (`hypothesis`), a chaos test that materializes a fake agent binary across failure modes, real drain/debounce integration tests synchronized via `threading.Event`, and self-heal dispatcher tests.
 
 **Test isolation from production paths.** `tests/conftest.py` ships an autouse fixture (`_isolate_production_paths`) that monkeypatches every production filesystem path (`PENDING_DIR`, `SESSION_DIR`, `ACTIVITY_LOG`, `LOCK_FILE`, `PHOTO_DIR`, `CHAT_PROJECTS_FILE`, `RESTART_NOTIFY_FILE`, etc.) to a per-test tmp dir, across **every** module that imports the constant (`patchbay.config`, `patchbay.sessions`, `patchbay.activity`, `patchbay.singleton`, `bridge`). Without this, `pytest tests/` while the launchd bridge is live can wipe a real user's queued reply, pollute the real `activity.jsonl`, or send SIGTERM to the live bridge via `signal_other_bridge`. When adding new production-path constants, add them to `_PRODUCTION_PATH_GROUPS` in `tests/conftest.py` so every alias resolves to the same tmp path.
 
@@ -102,9 +102,9 @@ All commands are registered in `bridge.py` via `CommandHandler`. Commands silent
 
 Sending a photo triggers `handle_photo`: the image is downloaded, and Claude is asked to read and describe it (or respond to the caption). The file is deleted after the response.
 
-### Quota handoff
+### Rate-limit handling
 
-If Claude hits a quota/rate limit, the message is handed off to Forge (`~/Developer/Fanta/agents/dev/forge/queue/`) so it can be processed in the background and the response sent back to the same topic. Note: Forge is currently on ice (moved to drafts as of 2026-03-15) — the handoff code still writes the queue file but nothing processes it until Forge is reactivated.
+If the agent hits a quota/rate limit (`is_quota_error` in `patchbay/quota.py`), the turn's response is replaced with a plain retry notice ("Hit a quota/rate limit. Try again in a bit.") via `_maybe_quota_notice` in `bridge.py`. There is no background resume: the earlier Forge handoff was removed when Forge was retired. If an automatic-resume mechanism returns, it would hook in at `_maybe_quota_notice`.
 
 ## Python Environment
 

@@ -23,7 +23,7 @@ Concrete examples of work driven from a phone with the workstation in another ro
 - **Long-form drafting on the move.** A topic bound to a research/writing agent reads work history and drafts long-form documents on demand — cover letters, project briefs, design memos — written to a synced markdown vault, ready to review on landing.
 - **Repo work from anywhere.** A topic bound to a project directory accepts plain-language change requests. The agent pulls logs, finds bugs, fixes code, runs tests, commits, deploys, and replies with the diff. The phone never holds a checkout; the workstation does.
 - **Inbox triage on a commute.** A topic bound to an email-triage agent batches overnight inbox into priority buckets, flags items that need a human, drafts replies for the rest. Tap, dictate edits, send.
-- **Self-healing during downtime.** Crash-loop detection runs autonomously. Three crashes within five minutes triggers a self-heal session that reads the traceback, finds the bug, writes the fix, validates it, and restarts. A Telegram message lands with the diff after the fact.
+- **Survives its own bad edits.** Because the bridge is edited from a phone through itself, a broken self-edit can't brick it: pre-flight validation rolls back to a known-good snapshot, and a crash loop backs off and logs the traceback for fix-forward.
 - **Repo provisioning by message.** A single message provisions a new GitHub repo — branch protection, default-branch convention, lint hooks, initial scaffold — all via API. Done in seconds without leaving Telegram.
 
 The unifying property: the phone never holds the work. The workstation does. The phone is just the keyboard.
@@ -54,7 +54,7 @@ patchbay/                 Core package
   parser.py               Agent CLI output parsing (JSON array, NDJSON, single-object)
   models.py               Per-chat pi model mapping (litellm aliases, default "small")
   efforts.py              Per-chat thinking-effort setting
-  quota.py                Quota/rate-limit detection and queue handoff
+  quota.py                Quota/rate-limit detection (is_quota_error)
   activity.py             Structured JSON-lines activity logging
   projects.py             Chat-to-project directory + harness mapping
   self_heal.py            In-process repair handlers (corrupt session, OOM retry)
@@ -94,9 +94,9 @@ A single Telegram chat would force the user to pick "what project am I working o
 
 The bridge does not care which agent runs the turn. The `Harness` protocol (`patchbay/harness/base.py`) is a streaming-event interface that all backends conform to. Today there is exactly one live backend, badlogicgames/pi (`pi`, `patchbay/harness/pi.py`); the earlier Claude Agent SDK backends (`cc-sdk`, `cc-sdk-mop`) were removed when Anthropic ended embedded-subscription SDK use. The protocol is kept deliberately, so a future non-Claude framework can be added by implementing one class. Capabilities (resume, mid-turn push, MCP, tool streaming) are advertised via `HarnessCapabilities` so the bridge can degrade gracefully when a backend doesn't support a feature. Note pi already gives multi-*model* coverage via litellm; the harness seam is for a different *framework*, not a different model.
 
-### Crash-loop self-heal
+### Crash-loop detection + known-good rollback
 
-Patchbay is frequently edited by an agent running *through itself*, which means a bad self-edit could brick the bridge. Three or more crashes in five minutes triggers an autonomous Claude Code session that reads the traceback, diagnoses the bug, writes the fix, validates it, and restarts. Self-heal incidents are logged to `activity.jsonl` so they are visible in the soak-test dashboard.
+Patchbay is frequently edited by an agent running *through itself*, which means a bad self-edit could brick the bridge. The safety net is `validate.py` pre-flight plus rollback to a `.bridge-known-good.py` snapshot (next section), so a broken self-edit can't stop the bridge from running. On top of that, three or more crashes in five minutes is detected as a loop: `run.sh` saves the crash tail to `logs/crash-loop.log`, backs off, and leaves it for fix-forward. (An earlier version spawned an autonomous Claude Code repair session here; that was removed once rollback proved to cover the bricking case, and because it depended on the Claude CLI.) Separately, in-process handlers in `self_heal.py` quarantine corrupt session files and recommend retries on OOM.
 
 ### Pre-flight validation as known-good rollback
 
@@ -106,9 +106,9 @@ Before every bridge start, `validate.py` runs syntax checks, import checks, and 
 
 Two bridge processes polling Telegram's `getUpdates` simultaneously will trigger 409 conflicts, log them 1000 times each, and never exit cleanly. `patchbay/singleton.py` holds an exclusive lock on `.bridge.lock`. If a stale PID is holding it (process is dead), the new bridge steals it and continues. If a live PID holds it, the new bridge waits for it to exit, then takes over. No babysitting required during launchd restarts.
 
-### 651 tests, all in plain pytest
+### 640 tests, all in plain pytest
 
-Test suite is 651 tests across 45 test files covering the bridge, the parser, the pi harness, all command handlers, the self-heal handlers, the singleton lock, and chaos cases (partial JSON, slow drip, hangs, OOM-style exits). Pre-push hook runs the full suite. No CI on the remote — quality gates are local.
+Test suite is 640 tests across 44 test files covering the bridge, the parser, the pi harness, all command handlers, the self-heal handlers, the singleton lock, and chaos cases (partial JSON, slow drip, hangs, OOM-style exits). Pre-push hook runs the full suite. No CI on the remote — quality gates are local.
 
 ## Features
 
@@ -117,7 +117,7 @@ Test suite is 651 tests across 45 test files covering the bridge, the parser, th
 - **Per-topic agent identity** — Topics can load identity files (e.g. `SOUL.md`, `IDENTITY.md`, `AGENTS.md`) into the agent's system prompt to specialize behavior per persona.
 - **Crash-loop detection + known-good rollback** — `validate.py` pre-flight rolls back to a known-good snapshot on a bad self-edit; 3+ crashes in 5 minutes backs off and logs the crash tail for fix-forward. (The old autonomous Claude-repair trigger was removed; rollback already covers the bricking case.)
 - **Pre-flight validation** — `validate.py` checks syntax, imports, and parser behavior before every bridge start. On failure, rolls back to a known-good snapshot.
-- **Quota handoff** — When the agent hits a rate limit, the task is written to a queue file for background processing.
+- **Rate-limit notice** — When the agent hits a quota/rate limit, the turn returns a plain retry notice. (An earlier Forge background-resume handoff was removed with Forge's retirement.)
 - **Rich messaging** — Markdown rendering, code blocks, photo and image handling with captions.
 - **Pending message batching** — messages arriving mid-turn are queued and batched into a single follow-up invocation when the current turn finishes. (Mid-turn push was a `cc-sdk` streaming feature; with pi the debounce queue is the path.)
 - **Remote control** — Start `claude remote-control` sessions from Telegram for direct CLI access.
@@ -207,14 +207,14 @@ The bridge is frequently edited by an agent running *through itself*. Five layer
 
 1. **`validate.py`** — Standalone validation: syntax check, import check, parser smoke tests
 2. **`run.sh` pre-flight** — Runs `validate.py` before starting; rolls back to known-good on failure
-3. **Crash loop detection** — 3+ crashes in 5 minutes triggers an autonomous self-heal session
+3. **Crash-loop detection** — 3+ crashes in 5 minutes backs off and logs the crash tail (`logs/crash-loop.log`) for fix-forward
 4. **`/restart` gate** — Validates before restarting; blocks restart on failure
 5. **`ThrottleInterval: 30`** in launchd — backstop against rapid respawn
 
 ## Development
 
 ```bash
-uv run pytest tests/ -q                                 # run tests (651 tests)
+uv run pytest tests/ -q                                 # run tests (640 tests)
 uv run ruff check .                                     # lint
 uv run python validate.py                               # pre-flight smoke tests
 uv run pytest tests/ --cov --cov-report=term-missing    # with coverage
