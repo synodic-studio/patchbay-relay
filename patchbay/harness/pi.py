@@ -124,6 +124,26 @@ class PiHarness:
 
     # ---- Public API ----
 
+    async def get_context(self, req: TurnRequest):
+        """Report context-window usage for this session.
+
+        pi has no native context query, so read its session transcript: prefer
+        the real token usage pi records per message, and fall back to a
+        client-side estimate when a run's provider didn't report usage. This
+        method is what makes PiHarness a ContextQueryCapableHarness.
+        """
+        from .context_estimate import context_usage_from_count
+        from .pi_session import (
+            DEFAULT_PI_SESSIONS_ROOT,
+            context_usage_from_session,
+            find_session_file,
+        )
+
+        path = find_session_file(DEFAULT_PI_SESSIONS_ROOT, req.resume_session_id)
+        if path is None:
+            return context_usage_from_count(req.model, 0)
+        return context_usage_from_session(path, req.model)
+
     async def run_turn(self, req: TurnRequest) -> AsyncIterator[TurnEvent]:
         cmd = self._build_cmd(req)
         loop = asyncio.get_running_loop()

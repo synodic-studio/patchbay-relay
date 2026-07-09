@@ -47,14 +47,22 @@ def _window(model: str, fallback_window: int) -> int:
     return fallback_window
 
 
+def context_usage_from_count(model: str, used_tokens: int, *, fallback_window: int = 200_000) -> ContextUsage:
+    """Build a ContextUsage from a known token count.
+
+    Used both when the token count is real (reported by the engine) and when
+    it is estimated. Resolves the window via litellm with *fallback_window* and
+    clamps the percentage to 0..100.
+    """
+    mx = _window(model, fallback_window)
+    pct = round(min(100.0, used_tokens / mx * 100), 1) if mx else 0.0
+    return ContextUsage(used_tokens=used_tokens, max_tokens=mx, percentage=pct, model=model)
+
+
 def estimate_context_usage(model: str, transcript: str, *, fallback_window: int = 200_000) -> ContextUsage:
     """Estimate context usage for *transcript* under *model*.
 
     Uses litellm for the token count and window when it knows the model,
-    otherwise a ~4-chars-per-token heuristic and *fallback_window*. Percentage
-    is clamped to 0..100.
+    otherwise a ~4-chars-per-token heuristic and *fallback_window*.
     """
-    used = _count_tokens(model, transcript)
-    mx = _window(model, fallback_window)
-    pct = round(min(100.0, used / mx * 100), 1) if mx else 0.0
-    return ContextUsage(used_tokens=used, max_tokens=mx, percentage=pct, model=model)
+    return context_usage_from_count(model, _count_tokens(model, transcript), fallback_window=fallback_window)

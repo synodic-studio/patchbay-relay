@@ -159,16 +159,41 @@ async def _fallback_compact(
 async def cmd_context(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show current context-window usage for this chat's session.
 
-    Pi doesn't expose a native context query, so this always suggests
-    using /compact instead.
+    Dispatches to the topic's active harness: a harness that implements
+    ContextQueryCapableHarness reports usage, otherwise we say so. pi reports
+    real token usage from its session transcript, estimating when a provider
+    didn't record it.
     """
+    from patchbay.harness import ContextQueryCapableHarness
+
     chat_id = update.effective_chat.id
     thread_id = update.message.message_thread_id
     key = _session_key(chat_id, thread_id)
 
+    harness_name, harness, req = _resolve_harness_for_inquiry(key)
+
+    if not isinstance(harness, ContextQueryCapableHarness):
+        await update.message.reply_text(
+            f"/context isn't supported on {harness_name}. Use /compact instead."
+        )
+        return
+
+    if not req.resume_session_id:
+        await update.message.reply_text(
+            "No active session yet — send a message first to start one."
+        )
+        return
+
+    try:
+        cu = await harness.get_context(req)
+    except Exception as exc:  # noqa: BLE001
+        bridge.logger.exception("/context query failed for %s", key)
+        await update.message.reply_text(f"context check failed: {exc}")
+        return
+
     await update.message.reply_text(
-        f"/context isn't supported on pi (no native context query). "
-        f"Use /compact to get a summary."
+        f"Context: {_fmt_tokens(cu.used_tokens)} / {_fmt_tokens(cu.max_tokens)} "
+        f"({cu.percentage:.0f}%)"
     )
 
 
