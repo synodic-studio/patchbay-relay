@@ -144,6 +144,21 @@ class PiHarness:
             return context_usage_from_count(req.model, 0)
         return context_usage_from_session(path, req.model)
 
+    async def get_usage(self, req: TurnRequest):
+        """Report session cost/token usage (makes PiHarness UsageQueryCapable).
+
+        pi records cost and tokens per turn in its session file; we sum them.
+        Provider-agnostic (works for any litellm model), so this replaces the
+        Claude-Code-specific ccusage view for pi topics.
+        """
+        from .base import SessionUsage
+        from .pi_session import DEFAULT_PI_SESSIONS_ROOT, find_session_file, session_usage
+
+        path = find_session_file(DEFAULT_PI_SESSIONS_ROOT, req.resume_session_id)
+        if path is None:
+            return SessionUsage(cost_usd=0.0, model=req.model)
+        return session_usage(path, req.model)
+
     async def run_turn(self, req: TurnRequest) -> AsyncIterator[TurnEvent]:
         cmd = self._build_cmd(req)
         loop = asyncio.get_running_loop()

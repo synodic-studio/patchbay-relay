@@ -224,6 +224,37 @@ class ContextQueryCapableHarness(Protocol):
         ...
 
 
+@dataclass(frozen=True)
+class SessionUsage:
+    """Cost and token totals for one session, as the engine reported them.
+
+    Provider-agnostic: any harness that runs through a metered backend can
+    fill this. Tokens may be zero when a provider (e.g. a local model) doesn't
+    report them; cost is USD.
+    """
+
+    cost_usd: float
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+    model: str | None = None
+
+
+@runtime_checkable
+class UsageQueryCapableHarness(Protocol):
+    """Optional secondary protocol for harnesses that can report session usage."""
+
+    capabilities: HarnessCapabilities
+
+    async def get_usage(self, req: TurnRequest) -> SessionUsage:
+        """Report cumulative cost/token usage for this session.
+
+        `req` carries the session/cwd/model needed to locate the engine's
+        own usage record for this conversation.
+        """
+        ...
+
+
 @runtime_checkable
 class CompactCapableHarness(Protocol):
     """Optional secondary protocol for harnesses that can compact context."""

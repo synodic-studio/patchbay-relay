@@ -115,7 +115,51 @@ def _safe_count(path: Path, pattern: str) -> int:
 
 
 async def cmd_usage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Show Claude Code quota: 5h block + week, each as a token-bar and time-bar."""
+    """Show usage for this chat's session.
+
+    Dispatches to the topic's harness: a UsageQueryCapableHarness (pi) reports
+    its own cost/token totals, which is provider-agnostic and works for any
+    litellm model. Harnesses without it fall back to the Claude Code quota view
+    via ccusage, parked here for a future cc-sdk harness.
+    """
+    from patchbay.commands.inquiry import resolve_harness_for_inquiry
+    from patchbay.harness import UsageQueryCapableHarness
+    from patchbay.sessions import _session_key
+
+    chat_id = update.effective_chat.id
+    thread_id = update.message.message_thread_id
+    key = _session_key(chat_id, thread_id)
+    harness_name, harness, req = resolve_harness_for_inquiry(key)
+
+    if isinstance(harness, UsageQueryCapableHarness):
+        if not req.resume_session_id:
+            await update.message.reply_text(
+                "No active session yet — send a message first to start one."
+            )
+            return
+        try:
+            u = await harness.get_usage(req)
+        except Exception as exc:  # noqa: BLE001
+            bridge.logger.exception("/usage query failed for %s", key)
+            await update.message.reply_text(f"usage check failed: {exc}")
+            return
+        lines = [f"Session usage ({harness_name}):", f"  cost   ${u.cost_usd:.4f}"]
+        if u.total_tokens:
+            lines.append(
+                f"  tokens {_format_tokens(u.total_tokens)} "
+                f"(in {_format_tokens(u.input_tokens)} / out {_format_tokens(u.output_tokens)})"
+            )
+        if u.model:
+            lines.append(f"  model  {u.model}")
+        await update.message.reply_text("\n".join(lines))
+        return
+
+    await _ccusage_report(update)
+
+
+async def _ccusage_report(update: Update) -> None:
+    """Claude Code quota via ccusage (5h block + week). Parked: reachable only
+    for a Claude-shaped harness, which isn't loaded today — pi uses get_usage."""
     try:
         blocks_proc, weekly_proc = await asyncio.gather(
             asyncio.to_thread(

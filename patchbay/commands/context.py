@@ -8,20 +8,13 @@ to read or compact its context window. Pi uses the two-turn fallback
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 
 from telegram import Update
 from telegram.ext import ContextTypes
 
 import bridge
-from patchbay.config import MAX_TIMEOUT, QUOTA_HIT_PREFIX
-from patchbay.efforts import resolve_effort
-from patchbay.harness import (
-    TurnRequest,
-)
-from patchbay.models import get_chat_model
-from patchbay.projects import get_chat_harness, get_chat_working_dir
-from patchbay.sessions import _session_key, clear_session, get_session_id
+from patchbay.config import QUOTA_HIT_PREFIX
+from patchbay.sessions import _session_key, clear_session
 
 
 _SUMMARIZE_PROMPT = (
@@ -46,35 +39,10 @@ def _fmt_tokens(n: int) -> str:
 
 
 def _resolve_harness_for_inquiry(session_key: str):
-    """Build a harness instance + TurnRequest suitable for one-shot inquiry
-    methods (get_context, compact). Only pi is available, which has no
-    native context query or compact, so this always falls through to
-    the run_claude-based fallback path.
-    """
-    from patchbay.config import DEFAULT_HARNESS, VALID_HARNESSES
-    from patchbay.harness import PiHarness
+    """Back-compat shim; the implementation now lives in commands.inquiry."""
+    from patchbay.commands.inquiry import resolve_harness_for_inquiry
 
-    chat_cwd = get_chat_working_dir(session_key)
-    session_id = get_session_id(session_key)
-    model = get_chat_model(session_key)
-    effort = resolve_effort(session_key)
-
-    harness = PiHarness(max_timeout_seconds=MAX_TIMEOUT)
-
-    req = TurnRequest(
-        prompt="",
-        session_key=session_key,
-        project_dir=Path(chat_cwd),
-        system_prompt="",
-        resume_session_id=session_id,
-        model=model,
-        effort=effort,
-        allowed_tools=None,
-        disallowed_tools=None,
-        max_turns=None,
-        plugin_dir=None,
-    )
-    return DEFAULT_HARNESS, harness, req
+    return resolve_harness_for_inquiry(session_key)
 
 
 def _build_handoff_prompt(summary: str) -> str:

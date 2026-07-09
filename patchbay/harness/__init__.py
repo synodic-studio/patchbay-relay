@@ -15,6 +15,7 @@ from .base import (
     ContextUsage,
     Harness,
     HarnessCapabilities,
+    SessionUsage,
     TextDelta,
     ToolResult,
     ToolUse,
@@ -23,6 +24,7 @@ from .base import (
     TurnEvent,
     TurnFinal,
     TurnRequest,
+    UsageQueryCapableHarness,
 )
 from .pi import PiHarness
 from .pi import _CAPABILITIES as _PI_CAPS
@@ -43,6 +45,7 @@ __all__ = [
     "Harness",
     "HarnessCapabilities",
     "PiHarness",
+    "SessionUsage",
     "TextDelta",
     "ToolResult",
     "ToolUse",
@@ -51,4 +54,5 @@ __all__ = [
     "TurnEvent",
     "TurnFinal",
     "TurnRequest",
+    "UsageQueryCapableHarness",
 ]

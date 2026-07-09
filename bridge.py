@@ -1644,6 +1644,7 @@ from patchbay.commands.context import (  # noqa: E402, F401
 from patchbay.commands.observability import (  # noqa: E402, F401
     _bar,
     _block_time_percent,
+    _ccusage_report,
     _format_bytes,
     _format_tokens,
     _format_uptime,

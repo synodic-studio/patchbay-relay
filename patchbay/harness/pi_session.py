@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .base import ContextUsage
+from .base import ContextUsage, SessionUsage
 from .context_estimate import context_usage_from_count, estimate_context_usage
 
 # pi's default session store (it has no --session-dir override in this bridge).
@@ -84,3 +84,31 @@ def context_usage_from_session(path: Path, model: str, *, fallback_window: int =
     if real is not None:
         return context_usage_from_count(model, real, fallback_window=fallback_window)
     return estimate_context_usage(model, _transcript_text(messages), fallback_window=fallback_window)
+
+
+def session_usage(path: Path, model: str | None = None) -> SessionUsage:
+    """Sum cost and tokens across a pi session's assistant messages.
+
+    pi records `usage.cost.total` (USD) and token counts per assistant
+    message; we sum them for a session total. Tokens may be zero for providers
+    that don't report them, in which case only cost is meaningful.
+    """
+    cost = 0.0
+    inp = out = tot = 0
+    for m in _iter_messages(path):
+        if m.get("role") != "assistant":
+            continue
+        u = m.get("usage") or {}
+        c = (u.get("cost") or {}).get("total")
+        if isinstance(c, (int, float)):
+            cost += float(c)
+        inp += int(u.get("input") or 0)
+        out += int(u.get("output") or 0)
+        tot += int(u.get("totalTokens") or 0)
+    return SessionUsage(
+        cost_usd=round(cost, 4),
+        input_tokens=inp,
+        output_tokens=out,
+        total_tokens=tot,
+        model=model,
+    )

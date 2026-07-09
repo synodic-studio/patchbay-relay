@@ -111,8 +111,43 @@ def _proc(stdout: str):
     return p
 
 
+class TestCmdUsageDispatch:
+    """cmd_usage dispatches to the topic's harness; pi reports session cost."""
+
+    @pytest.mark.asyncio
+    async def test_pi_shows_session_cost(self, monkeypatch):
+        import bridge
+        from patchbay.harness import SessionUsage
+
+        class FakeHarness:
+            capabilities = None
+
+            async def get_usage(self, req):
+                return SessionUsage(
+                    cost_usd=0.0123, input_tokens=100, output_tokens=20,
+                    total_tokens=120, model="small",
+                )
+
+        req = MagicMock()
+        req.resume_session_id = "sid"
+        monkeypatch.setattr(
+            "patchbay.commands.inquiry.resolve_harness_for_inquiry",
+            lambda key: ("pi", FakeHarness(), req),
+        )
+
+        update = MagicMock()
+        update.effective_chat.id = 123
+        update.message.message_thread_id = 456
+        update.message.reply_text = AsyncMock()
+        await bridge.cmd_usage(update, MagicMock())
+        sent = update.message.reply_text.call_args.args[0]
+        assert "Session usage (pi)" in sent
+        assert "$0.0123" in sent
+        assert "120" in sent  # total tokens rendered
+
+
 class TestCmdUsageRendering:
-    """Verify cmd_usage produces the Prototype A shape using mocked ccusage."""
+    """Verify the parked ccusage path produces the Prototype A shape."""
 
     @pytest.mark.asyncio
     async def test_renders_both_bars_and_weekly_cap(self, monkeypatch):
@@ -158,7 +193,7 @@ class TestCmdUsageRendering:
 
         update = MagicMock()
         update.message.reply_text = AsyncMock()
-        await bridge.cmd_usage(update, MagicMock())
+        await bridge._ccusage_report(update)
         sent = update.message.reply_text.call_args.args[0]
 
         # Must contain both sections.
@@ -191,7 +226,7 @@ class TestCmdUsageRendering:
 
         update = MagicMock()
         update.message.reply_text = AsyncMock()
-        await bridge.cmd_usage(update, MagicMock())
+        await bridge._ccusage_report(update)
         sent = update.message.reply_text.call_args.args[0]
         assert "usage check failed" in sent
 
@@ -208,7 +243,7 @@ class TestCmdUsageRendering:
 
         update = MagicMock()
         update.message.reply_text = AsyncMock()
-        await bridge.cmd_usage(update, MagicMock())
+        await bridge._ccusage_report(update)
         sent = update.message.reply_text.call_args.args[0]
         assert "5h block: (none)" in sent
         # Week line still renders with 0 tokens used.

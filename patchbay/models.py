@@ -10,7 +10,6 @@ The default model is `small` — a fast, capable litellm alias.
 import json
 import re
 import subprocess
-from typing import Tuple
 
 from .config import BASE_DIR
 
