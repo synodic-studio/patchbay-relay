@@ -18,7 +18,7 @@ import os
 import time
 from pathlib import Path
 
-from .config import BASE_DIR, atomic_write_text, logger
+from .standalone import BASE_DIR, atomic_write_text, logger
 
 OUTBOUND_DIR = BASE_DIR / "outbound"
 OUTBOUND_DIR.mkdir(exist_ok=True)

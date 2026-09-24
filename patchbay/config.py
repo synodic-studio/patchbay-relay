@@ -9,12 +9,13 @@ import logging
 import os
 import re
 import shutil
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 from dotenv import load_dotenv
+
+from .standalone import BASE_DIR, atomic_write_text as atomic_write_text, load_bot_token
 
 load_dotenv(Path(__file__).parent.parent / ".env")
 
@@ -141,19 +142,7 @@ class _SecretStr:
 
 def _load_bot_token() -> _SecretStr:
     """Load the Telegram bot token from pass (password-store) or env var."""
-    try:
-        result = subprocess.run(
-            ["pass", "show", "telegram-bot-token"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            return _SecretStr(result.stdout.strip())
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        pass
-
-    return _SecretStr(os.environ.get("TELEGRAM_BOT_TOKEN", ""))
+    return _SecretStr(load_bot_token())
 
 
 # --- Bot token ---
@@ -173,7 +162,6 @@ CLAUDE_PATH = _resolve_claude_binary(os.environ.get("CLAUDE_PATH", "~/.local/bin
 WORKING_DIR = _env_existing_path("CLAUDE_WORKING_DIR", "~/Developer", "Claude working directory")
 PA_PLUGIN_DIR = _env_existing_path("PA_PLUGIN_DIR", "~/Developer/Fanta", "Fanta plugin directory")
 
-BASE_DIR = Path(__file__).parent.parent
 SESSION_DIR = BASE_DIR / "sessions"
 SESSION_DIR.mkdir(exist_ok=True)
 PENDING_DIR = BASE_DIR / "pending"
@@ -293,24 +281,6 @@ logger = logging.getLogger("bridge")
 
 # --- Persistence helpers ---
 QUARANTINE_DIR = BASE_DIR / ".quarantine"
-
-
-def atomic_write_text(path: Path, data: str, mode: int = 0o600) -> None:
-    """Atomically write text to path via temp-file + rename.
-
-    Prevents partial writes from poisoning JSON state when the process
-    crashes or the disk fills mid-write. On success the destination has
-    the given mode; on failure the destination is untouched.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
-    try:
-        tmp.write_text(data)
-        os.chmod(tmp, mode)
-        os.replace(tmp, path)
-    except OSError:
-        tmp.unlink(missing_ok=True)
-        raise
 
 
 def quarantine_file(path: Path, reason: str) -> Path | None:
