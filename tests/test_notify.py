@@ -54,6 +54,79 @@ def test_cli_delivers_topic_message_and_logs_after_success(monkeypatch, tmp_path
     assert entry["text"] == "hello"
 
 
+def test_cli_recovers_from_json_scalar_in_existing_log(monkeypatch, tmp_path, capsys):
+    log_path = tmp_path / "-1001_633.jsonl"
+    log_path.write_text('"malformed entry"\n')
+    sends = []
+    monkeypatch.setattr(outbound, "OUTBOUND_DIR", tmp_path)
+    monkeypatch.setattr(notify, "load_bot_token", lambda: "secret")
+
+    def send(request, timeout):
+        sends.append(request)
+        return Response()
+
+    monkeypatch.setattr(notify, "urlopen", send)
+    result = notify.main(
+        ["--chat-id", "-1001", "--thread-id", "633", "--source", "kimmy", "--stdin"],
+        stdin=io.StringIO("hello"),
+    )
+    output = capsys.readouterr()
+    assert result == 0
+    assert len(sends) == 1
+    assert output.err == ""
+    assert [json.loads(line)["text"] for line in log_path.read_text().splitlines()] == ["hello"]
+
+
+def test_cli_exits_zero_with_fixed_warning_after_post_send_log_failure(monkeypatch, capsys):
+    sends = []
+    monkeypatch.setattr(notify, "load_bot_token", lambda: "secret")
+
+    def send(request, timeout):
+        sends.append(request)
+        return Response()
+
+    def fail_log(_session_key, _text, _source):
+        raise AttributeError("secret in audit log exception")
+
+    monkeypatch.setattr(notify, "urlopen", send)
+    monkeypatch.setattr(notify, "log_outbound", fail_log)
+    result = notify.main(
+        ["--chat-id", "-1001", "--thread-id", "633", "--source", "kimmy", "--stdin"],
+        stdin=io.StringIO("hello"),
+    )
+    output = capsys.readouterr()
+    assert result == 0
+    assert len(sends) == 1
+    assert output.err.strip() == "DELIVERED_UNLOGGED"
+    assert "secret" not in output.err
+
+
+def test_cli_warns_when_outbound_write_fails_without_retrying(monkeypatch, tmp_path, capsys, caplog):
+    sends = []
+    monkeypatch.setattr(outbound, "OUTBOUND_DIR", tmp_path)
+    monkeypatch.setattr(notify, "load_bot_token", lambda: "secret")
+
+    def send(request, timeout):
+        sends.append(request)
+        return Response()
+
+    def fail_write(_path, _text):
+        raise OSError("secret in audit write failure")
+
+    monkeypatch.setattr(notify, "urlopen", send)
+    monkeypatch.setattr(outbound, "atomic_write_text", fail_write)
+    result = notify.main(
+        ["--chat-id", "-1001", "--thread-id", "633", "--source", "kimmy", "--stdin"],
+        stdin=io.StringIO("hello"),
+    )
+    output = capsys.readouterr()
+    assert result == 0
+    assert len(sends) == 1
+    assert output.err.strip() == "DELIVERED_UNLOGGED"
+    assert "secret" not in output.err
+    assert "secret" not in caplog.text
+
+
 @pytest.mark.parametrize(
     ("chat_id", "thread_id", "text", "source"),
     [

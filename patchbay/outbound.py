@@ -47,8 +47,8 @@ def _outbound_lock_file(session_key: str) -> Path:
 def _prune_entries(lines: list[str]) -> list[str]:
     """Cap agent-notification and claude-response entries independently.
 
-    Preserves original order within each category. Unparseable lines are
-    dropped silently (they'd fail the reader anyway).
+    Preserves original order within each category. Invalid JSON and JSON
+    values other than objects are dropped silently.
     """
     notifications: list[str] = []
     responses: list[str] = []
@@ -56,6 +56,8 @@ def _prune_entries(lines: list[str]) -> list[str]:
         try:
             entry = json.loads(line)
         except json.JSONDecodeError:
+            continue
+        if not isinstance(entry, dict):
             continue
         if entry.get("source") == _RESPONSE_SOURCE:
             responses.append(line)
@@ -69,15 +71,15 @@ def _prune_entries(lines: list[str]) -> list[str]:
     return combined
 
 
-def _append_with_lock(session_key: str, entry: str, failure_msg: str) -> None:
+def _append_with_lock(session_key: str, entry: str) -> bool:
     path = _outbound_file(session_key)
     lock_path = _outbound_lock_file(session_key)
 
     try:
         fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
-    except OSError as e:
-        logger.warning("Failed to open outbound lock %s: %s", lock_path, e)
-        return
+    except OSError:
+        logger.warning("OUTBOUND_LOG_LOCK_ERROR")
+        return False
 
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
@@ -85,13 +87,16 @@ def _append_with_lock(session_key: str, entry: str, failure_msg: str) -> None:
         if path.exists():
             try:
                 existing = [line for line in path.read_text().splitlines() if line]
-            except OSError as e:
-                logger.warning("Failed to read outbound %s: %s", path, e)
+            except OSError:
+                logger.warning("OUTBOUND_LOG_READ_ERROR")
+                return False
         existing.append(entry)
         existing = _prune_entries(existing)
         atomic_write_text(path, "\n".join(existing) + "\n")
-    except OSError as e:
-        logger.warning("%s %s: %s", failure_msg, session_key, e)
+        return True
+    except OSError:
+        logger.warning("OUTBOUND_LOG_WRITE_ERROR")
+        return False
     finally:
         try:
             fcntl.flock(fd, fcntl.LOCK_UN)
@@ -100,7 +105,7 @@ def _append_with_lock(session_key: str, entry: str, failure_msg: str) -> None:
         os.close(fd)
 
 
-def log_outbound(session_key: str, text: str, source: str) -> None:
+def log_outbound(session_key: str, text: str, source: str) -> bool:
     """Append an outbound notification to the log for a session key.
 
     Args:
@@ -109,6 +114,7 @@ def log_outbound(session_key: str, text: str, source: str) -> None:
         source: Agent name that sent it (e.g. "buddy", "feathers")
 
     Locked + atomic: concurrent writers cannot lose each other's entries.
+    Returns whether the entry was written.
     """
     entry = json.dumps(
         {
@@ -117,7 +123,7 @@ def log_outbound(session_key: str, text: str, source: str) -> None:
             "text": text,
         }
     )
-    _append_with_lock(session_key, entry, "Failed to log outbound for")
+    return _append_with_lock(session_key, entry)
 
 
 def log_outbound_response(
@@ -157,7 +163,7 @@ def log_outbound_response(
             "http_status": status,
         }
     )
-    _append_with_lock(session_key, entry, "Failed to log outbound response for")
+    _append_with_lock(session_key, entry)
 
 
 def get_recent_outbound(session_key: str, max_age: float = 86400.0) -> list[dict]:
@@ -187,6 +193,8 @@ def get_recent_outbound(session_key: str, max_age: float = 86400.0) -> list[dict
             try:
                 entry = json.loads(line)
             except (json.JSONDecodeError, TypeError):
+                continue
+            if not isinstance(entry, dict):
                 continue
             if entry.get("source") == _RESPONSE_SOURCE:
                 continue

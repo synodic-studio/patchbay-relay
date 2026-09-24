@@ -56,7 +56,12 @@ def deliver(request: NotificationRequest, token: str) -> DeliveryResult:
         return DeliveryResult(succeeded=False, code="TELEGRAM_SEND_ERROR")
     if not succeeded:
         return DeliveryResult(succeeded=False, code="TELEGRAM_REJECTED")
-    log_outbound(f"{request.chat_id}_{request.thread_id}", request.text, request.source)
+    try:
+        logged = log_outbound(f"{request.chat_id}_{request.thread_id}", request.text, request.source)
+    except Exception:
+        return DeliveryResult(succeeded=True, code="DELIVERED_UNLOGGED")
+    if logged is False:
+        return DeliveryResult(succeeded=True, code="DELIVERED_UNLOGGED")
     return DeliveryResult(succeeded=True, code="DELIVERED")
 
 
@@ -86,6 +91,8 @@ def main(argv: list[str] | None = None, *, stdin: TextIO | None = None) -> int:
     if not result.succeeded:
         print(result.code, file=sys.stderr)
         return 1
+    if result.code == "DELIVERED_UNLOGGED":
+        print(result.code, file=sys.stderr)
     return 0
 
 

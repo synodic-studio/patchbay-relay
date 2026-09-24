@@ -96,6 +96,13 @@ class TestGetRecentOutbound:
         assert len(results) == 1
         assert results[0]["text"] == "fine"
 
+    def test_ignores_valid_json_non_object_lines(self, clean_outbound):
+        path = clean_outbound / "non_object.jsonl"
+        good = json.dumps({"ts": time.time(), "source": "ok", "text": "fine"})
+        path.write_text('"scalar"\n["list"]\n' + good + "\n")
+        results = get_recent_outbound("non_object")
+        assert [entry["text"] for entry in results] == ["fine"]
+
     def test_excludes_claude_response_entries(self, clean_outbound):
         """get_recent_outbound must not surface claude-response audit
         entries — they'd pollute Claude's context and blow up the
