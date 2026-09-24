@@ -13,6 +13,49 @@ import pytest
 from patchbay import notify, outbound
 
 
+def test_delivered_cli_exits_zero_during_cross_process_audit_contention(tmp_path):
+    lock = tmp_path / ".-1001_633.lock"
+    sent = tmp_path / "sent"
+    holder_code = (
+        "import fcntl,sys; "
+        f"handle=open({str(lock)!r}, 'w'); "
+        "fcntl.flock(handle, fcntl.LOCK_EX); print('locked', flush=True); sys.stdin.read()"
+    )
+    delivery_code = (
+        "from pathlib import Path; from patchbay import notify,outbound; "
+        f"outbound.OUTBOUND_DIR=Path({str(tmp_path)!r}); "
+        "notify.load_bot_token=lambda:'fixture'; "
+        f"notify.send_telegram=lambda *args: Path({str(sent)!r}).write_text('delivered') or True; "
+        "raise SystemExit(notify.main(['--chat-id','-1001','--thread-id','633','--source','kimmy','--stdin']))"
+    )
+    with subprocess.Popen(
+        [sys.executable, "-c", holder_code],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    ) as holder:
+        assert holder.stdout.readline().strip() == "locked"
+        try:
+            try:
+                result = subprocess.run(
+                    [sys.executable, "-c", delivery_code],
+                    input="hello",
+                    capture_output=True,
+                    text=True,
+                    timeout=2,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired:
+                pytest.fail("delivered notification blocked on audit lock")
+            assert sent.read_text() == "delivered"
+            assert result.returncode == 0
+            assert result.stderr.strip() == "DELIVERED_UNLOGGED"
+            assert not (tmp_path / "-1001_633.jsonl").exists()
+        finally:
+            holder.communicate(timeout=5)
+
+
 class Response:
     status = 200
 
@@ -85,7 +128,7 @@ def test_cli_exits_zero_with_fixed_warning_after_post_send_log_failure(monkeypat
         sends.append(request)
         return Response()
 
-    def fail_log(_session_key, _text, _source):
+    def fail_log(_session_key, _text, _source, **_kwargs):
         raise AttributeError("secret in audit log exception")
 
     monkeypatch.setattr(notify, "urlopen", send)

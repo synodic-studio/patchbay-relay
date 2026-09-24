@@ -71,7 +71,7 @@ def _prune_entries(lines: list[str]) -> list[str]:
     return combined
 
 
-def _append_with_lock(session_key: str, entry: str) -> bool:
+def _append_with_lock(session_key: str, entry: str, *, blocking: bool = True) -> bool:
     path = _outbound_file(session_key)
     lock_path = _outbound_lock_file(session_key)
 
@@ -82,7 +82,10 @@ def _append_with_lock(session_key: str, entry: str) -> bool:
         return False
 
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+        except BlockingIOError:
+            return False
         existing: list[str] = []
         if path.exists():
             try:
@@ -105,7 +108,7 @@ def _append_with_lock(session_key: str, entry: str) -> bool:
         os.close(fd)
 
 
-def log_outbound(session_key: str, text: str, source: str) -> bool:
+def log_outbound(session_key: str, text: str, source: str, *, blocking: bool = True) -> bool:
     """Append an outbound notification to the log for a session key.
 
     Args:
@@ -115,6 +118,8 @@ def log_outbound(session_key: str, text: str, source: str) -> bool:
 
     Locked + atomic: concurrent writers cannot lose each other's entries.
     Returns whether the entry was written.
+    Standalone notifications use blocking=False after confirmed delivery so
+    contention cannot outlast the caller's timeout and induce a duplicate send.
     """
     entry = json.dumps(
         {
@@ -123,7 +128,7 @@ def log_outbound(session_key: str, text: str, source: str) -> bool:
             "text": text,
         }
     )
-    return _append_with_lock(session_key, entry)
+    return _append_with_lock(session_key, entry, blocking=blocking)
 
 
 def log_outbound_response(

@@ -57,7 +57,7 @@ def deliver(request: NotificationRequest, token: str) -> DeliveryResult:
     if not succeeded:
         return DeliveryResult(succeeded=False, code="TELEGRAM_REJECTED")
     try:
-        logged = log_outbound(f"{request.chat_id}_{request.thread_id}", request.text, request.source)
+        logged = log_outbound(f"{request.chat_id}_{request.thread_id}", request.text, request.source, blocking=False)
     except Exception:
         return DeliveryResult(succeeded=True, code="DELIVERED_UNLOGGED")
     if logged is False:

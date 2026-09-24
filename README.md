@@ -28,6 +28,14 @@ Concrete examples of work driven from a phone with the workstation in another ro
 
 The unifying property: the phone never holds the work. The workstation does. The phone is just the keyboard.
 
+## Standalone notifications
+
+`python -m patchbay.notify --chat-id ID --thread-id ID --source NAME --stdin` reads the message
+from stdin and returns zero after confirmed Telegram delivery. Its audit lock is nonblocking:
+contention or an audit-write failure reports `DELIVERED_UNLOGGED` without changing the successful
+exit status. Callers must not retry a delivered message because its audit could not be written.
+Normal bridge response auditing retains its blocking lock behavior.
+
 ## Architecture
 
 Each Telegram forum topic maps to an independent agent session. Multiple topics run in parallel, each with its own project directory, harness backend, and session state. Sessions persist across messages and auto-expire after configurable inactivity.
