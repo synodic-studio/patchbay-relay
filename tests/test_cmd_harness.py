@@ -32,7 +32,7 @@ def _make_update(text: str | None, chat_id: int = 11, thread_id: int = 22):
         message=msg,
         effective_chat=SimpleNamespace(id=chat_id),
     )
-    args = (text.split()[1:] if text else [])
+    args = text.split()[1:] if text else []
     context = SimpleNamespace(args=args, bot=MagicMock())
     return update, context
 
@@ -105,9 +105,7 @@ def _bridge_run_claude_deps(monkeypatch):
 
 
 class TestHarnessActivityField:
-    def test_per_chat_pi_dispatches_to_pi_harness(
-        self, _bridge_run_claude_deps
-    ):
+    def test_per_chat_pi_dispatches_to_pi_harness(self, _bridge_run_claude_deps):
         """When the per-chat selection is pi, run_claude instantiates
         `PiHarness` and the activity log records `harness=pi`."""
         from patchbay.harness import TextDelta, TurnFinal

@@ -174,9 +174,7 @@ class TestMarkdownV2:
         assert "parse_mode" not in bot.send_message.call_args.kwargs
 
     @pytest.mark.asyncio
-    async def test_unbalanced_chunk_drops_whole_response_to_plain(
-        self, monkeypatch
-    ):
+    async def test_unbalanced_chunk_drops_whole_response_to_plain(self, monkeypatch):
         """If converted MarkdownV2 contains an unbalanced toggle entity
         (would yield Telegram's `can't find end of bold entity` error), the
         whole response goes plain — no half-formatted output, no rejected
@@ -197,9 +195,7 @@ class TestMarkdownV2:
         assert bot.send_message.call_args.kwargs["text"] == "raw response"
 
     @pytest.mark.asyncio
-    async def test_conversion_failure_logged_to_activity_with_raw_text(
-        self, monkeypatch
-    ):
+    async def test_conversion_failure_logged_to_activity_with_raw_text(self, monkeypatch):
         """When telegramify_markdown raises, the raw text and exception are
         captured to activity.jsonl so we can reproduce converter regressions."""
         import bridge
@@ -280,9 +276,7 @@ class TestMarkdownV2:
         assert f["raw_text_len"] == bridge._MARKDOWN_FAILURE_TEXT_LIMIT + 200
 
     @pytest.mark.asyncio
-    async def test_midresponse_md_send_failure_downgrades_remaining_chunks(
-        self, monkeypatch
-    ):
+    async def test_midresponse_md_send_failure_downgrades_remaining_chunks(self, monkeypatch):
         """If chunk N's MarkdownV2 send fails, chunks N+1, N+2, … are sent
         plain even if their conversion was balanced — preventing a half-
         formatted message past the failure point."""
@@ -296,10 +290,10 @@ class TestMarkdownV2:
 
         bot = MagicMock()
         side_effects = [
-            None,                # chunk 0 markdown OK
-            Exception("bad"),    # chunk 1 markdown fails
-            None,                # chunk 1 plain retry OK
-            None,                # chunk 2 plain (no markdown attempt)
+            None,  # chunk 0 markdown OK
+            Exception("bad"),  # chunk 1 markdown fails
+            None,  # chunk 1 plain retry OK
+            None,  # chunk 2 plain (no markdown attempt)
         ]
         bot.send_message = AsyncMock(side_effect=side_effects)
 
@@ -587,9 +581,7 @@ class TestKeepTyping:
 
         monkeypatch.setenv("PTB_TIMEDELTA", "true")
         bot = MagicMock()
-        bot.send_chat_action = AsyncMock(
-            side_effect=[RetryAfter(timedelta(milliseconds=125)), None]
-        )
+        bot.send_chat_action = AsyncMock(side_effect=[RetryAfter(timedelta(milliseconds=125)), None])
         waits = []
 
         async def capture_wait(awaitable, *, timeout):

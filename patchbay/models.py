@@ -71,9 +71,7 @@ def get_chat_model(session_key: str, *, harness: str = "pi") -> str | None:
     return _load_chat_models().get(key)
 
 
-def set_chat_model(
-    session_key: str, model: str | None, *, harness: str = "pi"
-) -> None:
+def set_chat_model(session_key: str, model: str | None, *, harness: str = "pi") -> None:
     """Set or clear the sticky model for a chat."""
     models = _load_chat_models()
     key = session_key if harness == "pi" else f"{harness}:{session_key}"
@@ -90,9 +88,7 @@ def resolve_model(session_key: str, *, harness: str = "pi") -> str | None:
     return get_chat_model(session_key, harness=harness) or default
 
 
-def extract_model_prefix(
-    message: str, *, harness: str = "pi"
-) -> tuple[str | None, str]:
+def extract_model_prefix(message: str, *, harness: str = "pi") -> tuple[str | None, str]:
     """Check if message starts with a model prefix like !opus or !s.
 
     Returns (model_name, cleaned_message). If no prefix, returns (None, original).

@@ -38,16 +38,17 @@ The bridge is modularized into a `patchbay/` package with focused modules. `brid
 
 ### Testing
 
-640 tests across the `tests/` dir. Run with `uv run pytest tests/`. The suite includes property tests (`hypothesis`), a chaos test that materializes a fake agent binary across failure modes, real drain/debounce integration tests synchronized via `threading.Event`, and self-heal dispatcher tests.
+696 tests across the `tests/` dir. Run with `uv run pytest tests/ -W error`. The suite includes property tests (`hypothesis`), a chaos test that materializes a fake agent binary across failure modes, real drain/debounce integration tests synchronized via `threading.Event`, and self-heal dispatcher tests. Warnings, lint findings, and formatting discrepancies fail the quality gate, including pre-existing findings.
 
 **Test isolation from production paths.** `tests/conftest.py` ships an autouse fixture (`_isolate_production_paths`) that monkeypatches every production filesystem path (`PENDING_DIR`, `SESSION_DIR`, `ACTIVITY_LOG`, `LOCK_FILE`, `PHOTO_DIR`, `CHAT_PROJECTS_FILE`, `RESTART_NOTIFY_FILE`, etc.) to a per-test tmp dir, across **every** module that imports the constant (`patchbay.config`, `patchbay.sessions`, `patchbay.activity`, `patchbay.singleton`, `bridge`). Without this, `pytest tests/` while the launchd bridge is live can wipe a real user's queued reply, pollute the real `activity.jsonl`, or send SIGTERM to the live bridge via `signal_other_bridge`. When adding new production-path constants, add them to `_PRODUCTION_PATH_GROUPS` in `tests/conftest.py` so every alias resolves to the same tmp path.
 
 When patching in tests, use the actual module path (e.g., `patchbay.sessions.SESSION_DIR`, not `bridge.SESSION_DIR`) since functions in `patchbay/` reference their own module's imports.
 
 ```bash
-uv run pytest tests/ -q                    # quick run
+uv run pytest tests/ -q -W error           # quick run; warnings fail the gate
 uv run pytest tests/ --cov --cov-report=term-missing  # with coverage
 uv run ruff check .                         # lint
+uv run ruff format --check .                # formatting
 uv run python validate.py                   # pre-flight smoke tests
 ```
 

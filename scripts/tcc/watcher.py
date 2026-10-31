@@ -63,6 +63,7 @@ def _ssl_ctx() -> ssl.SSLContext:
         candidates.append(override)
     try:
         import certifi
+
         candidates.append(certifi.where())
     except ImportError:
         pass
@@ -82,7 +83,9 @@ def _bot_token() -> str:
     try:
         r = subprocess.run(
             ["pass", "show", "telegram-bot-token"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         if r.returncode == 0:
             return r.stdout.strip().split("\n")[0]
@@ -98,9 +101,7 @@ def _send(text: str, token: str, chat_id: int, thread_id: int | None) -> None:
         body["message_thread_id"] = thread_id
     payload = json.dumps(body).encode()
     try:
-        req = urllib.request.Request(
-            url, data=payload, headers={"Content-Type": "application/json"}
-        )
+        req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=10, context=_ssl_ctx()):
             pass
     except Exception as e:
@@ -110,7 +111,8 @@ def _send(text: str, token: str, chat_id: int, thread_id: int | None) -> None:
 def _binary_name(line: str) -> str:
     m = re.search(
         r"(/[^\s,;\"']+(?:mise|uv|python|brew|ruby|node)[^\s,;\"']*)",
-        line, re.IGNORECASE,
+        line,
+        re.IGNORECASE,
     )
     if m:
         return Path(m.group(1)).name
@@ -134,14 +136,14 @@ def _is_prompt_line(line: str) -> bool:
 def watch() -> None:
     chat_id_str = os.environ.get("TCC_WATCHER_CHAT_ID", "").strip()
     if not chat_id_str:
-        print("[tcc-watcher] ERROR: TCC_WATCHER_CHAT_ID not set — exiting",
-              file=sys.stderr, flush=True)
+        print("[tcc-watcher] ERROR: TCC_WATCHER_CHAT_ID not set — exiting", file=sys.stderr, flush=True)
         sys.exit(1)
     try:
         chat_id = int(chat_id_str)
     except ValueError:
-        print(f"[tcc-watcher] ERROR: TCC_WATCHER_CHAT_ID is not an integer ({chat_id_str!r})",
-              file=sys.stderr, flush=True)
+        print(
+            f"[tcc-watcher] ERROR: TCC_WATCHER_CHAT_ID is not an integer ({chat_id_str!r})", file=sys.stderr, flush=True
+        )
         sys.exit(1)
 
     thread_str = os.environ.get("TCC_WATCHER_THREAD_ID", "").strip()
@@ -150,8 +152,11 @@ def watch() -> None:
         try:
             thread_id = int(thread_str)
         except ValueError:
-            print(f"[tcc-watcher] WARNING: TCC_WATCHER_THREAD_ID is not an integer ({thread_str!r}); ignoring",
-                  file=sys.stderr, flush=True)
+            print(
+                f"[tcc-watcher] WARNING: TCC_WATCHER_THREAD_ID is not an integer ({thread_str!r}); ignoring",
+                file=sys.stderr,
+                flush=True,
+            )
 
     token = _bot_token()
     if not token:

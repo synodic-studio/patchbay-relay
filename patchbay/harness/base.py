@@ -25,13 +25,13 @@ from typing import Literal, Protocol, Union, runtime_checkable
 # patchbay.self_heal repair-handler keys where possible so dispatch is
 # uniform across CLI and SDK harnesses.
 TurnErrorKind = Literal[
-    "rate_limit",       # quota or rate limit; bridge shows a retry notice
-    "oom",              # OOM-shaped exit (137 / -9); bridge retries with trimmed prompt
+    "rate_limit",  # quota or rate limit; bridge shows a retry notice
+    "oom",  # OOM-shaped exit (137 / -9); bridge retries with trimmed prompt
     "corrupt_session",  # session storage couldn't be read; quarantine + fresh start
-    "max_turns",        # hit the turn budget; bridge appends a notice
-    "timeout",          # wall-clock timeout for one turn
-    "process_died",     # subprocess crashed mid-turn (no other classification fits)
-    "unknown",          # something failed; the message is all we know
+    "max_turns",  # hit the turn budget; bridge appends a notice
+    "timeout",  # wall-clock timeout for one turn
+    "process_died",  # subprocess crashed mid-turn (no other classification fits)
+    "unknown",  # something failed; the message is all we know
 ]
 
 
@@ -44,14 +44,14 @@ class HarnessCapabilities:
     cursor) will have several flags False.
     """
 
-    supports_resume: bool          # can resume a previous session by id
+    supports_resume: bool  # can resume a previous session by id
     supports_tool_streaming: bool  # emits ToolUse events mid-turn (vs. only post-hoc)
-    supports_interrupt: bool       # cancel() works without SIGKILL
-    supports_effort: bool          # honors low/medium/high/max effort
-    supports_mcp: bool             # can load MCP servers
-    supports_inflight_push: bool = False    # accepts new user messages mid-turn (channels)
-    supports_context_query: bool = False    # can report current token usage
-    supports_compact: bool = False          # can compact / summarize the running context
+    supports_interrupt: bool  # cancel() works without SIGKILL
+    supports_effort: bool  # honors low/medium/high/max effort
+    supports_mcp: bool  # can load MCP servers
+    supports_inflight_push: bool = False  # accepts new user messages mid-turn (channels)
+    supports_context_query: bool = False  # can report current token usage
+    supports_compact: bool = False  # can compact / summarize the running context
 
 
 @dataclass(frozen=True)
@@ -64,17 +64,17 @@ class TurnRequest:
     """
 
     prompt: str
-    session_key: str               # patchbay's chat:thread key (for logging only)
+    session_key: str  # patchbay's chat:thread key (for logging only)
     project_dir: Path
     system_prompt: str
     resume_session_id: str | None  # None → fresh session
-    model: str | None              # None → harness default
-    effort: str | None             # None → harness default
+    model: str | None  # None → harness default
+    effort: str | None  # None → harness default
     allowed_tools: list[str] | None
     disallowed_tools: list[str] | None
     max_turns: int | None
-    plugin_dir: str | None         # claude-specific; harnesses may ignore
-    extra: dict | None = None      # harness-specific knobs (e.g. {"output_format": "json"})
+    plugin_dir: str | None  # claude-specific; harnesses may ignore
+    extra: dict | None = None  # harness-specific knobs (e.g. {"output_format": "json"})
 
 
 # ---- TurnEvent: tagged union streamed back from the harness ----
@@ -194,8 +194,8 @@ class ContextUsage:
 
     used_tokens: int
     max_tokens: int
-    percentage: float           # 0.0 to 100.0
-    model: str | None = None    # model whose context window is being measured
+    percentage: float  # 0.0 to 100.0
+    model: str | None = None  # model whose context window is being measured
 
 
 @dataclass(frozen=True)
@@ -203,7 +203,7 @@ class CompactResult:
     """Outcome of a `compact()` call."""
 
     succeeded: bool
-    message: str                # human-readable status (e.g. "Context compacted")
+    message: str  # human-readable status (e.g. "Context compacted")
     tokens_before: int | None = None
     tokens_after: int | None = None
 
@@ -261,9 +261,7 @@ class CompactCapableHarness(Protocol):
 
     capabilities: HarnessCapabilities
 
-    async def compact(
-        self, req: TurnRequest, instructions: str | None = None
-    ) -> CompactResult:
+    async def compact(self, req: TurnRequest, instructions: str | None = None) -> CompactResult:
         """Compact the running context, optionally steered by `instructions`.
 
         Mirrors the user-facing /compact slash command in claude code:

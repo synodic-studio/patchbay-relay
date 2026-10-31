@@ -40,13 +40,13 @@ HISTORICAL_FAILURES: list[str] = [
     "Section 2 polished.\n\n> ## The Constraint: No GUI, No Browser, No Terminal\n>\n> If a development task requires opening a browser.",
     "Section 3 fixed.\n\n# Section 4 — Patchbay Relay Architecture (lines 48–66)\n\n> ## Patchbay Relay Architecture\n>\n> Patchbay Relay is a Python application.",
     "# Section 5 — Session Management and Crash Recovery (lines 68–77)\n\n> ### Session Management and Crash Recovery\n>\n> The bridge runs as a launchd service.",
-    '# Section 6 — Multi-Project Routing (lines 79–103)\n\n> ### Multi-Project Routing\n>\n> `chat_projects.json` maps each Telegram topic to a project directory.',
+    "# Section 6 — Multi-Project Routing (lines 79–103)\n\n> ### Multi-Project Routing\n>\n> `chat_projects.json` maps each Telegram topic to a project directory.",
     "# Section 6 — Multi-Project Routing\n\n> ### Multi-Project Routing\n>\n> `chat_projects.json` maps each Telegram topic.",
     "# Section 7 — The go.kj6.dev URL Wrapper (lines 107–122)\n\n> ## The go.kj6.dev URL Wrapper\n>\n> Telegram does not support custom URL schemes.",
     "Shipped. Worker code on stargate develop.\n\n# Section 7 — Tappable Links to Native Apps",
     'Four more sections.\n\n# Section 8 — What "Headless-First" Development Looks Like (lines 122–146)\n\n> ## What "Headless-First" Development Looks Like\n>\n> A typical development session.',
     "Section 8 deleted.\n\n# Section 9 — TCC Monitoring (now lines 122–130)\n\n> ## TCC Monitoring: The Invisible Failure Mode\n>\n> macOS TCC permissions are binary-path-specific.",
-    'Bead created: **Fanta-gy5**.\n\n# Section 9 — Pinning Python to Avoid TCC Outages',
+    "Bead created: **Fanta-gy5**.\n\n# Section 9 — Pinning Python to Avoid TCC Outages",
     "**Re: TCC via CLI** — short answer: no, not really.\n\na. `tccutil` only supports `reset`, never `grant`.",
     '# Section 10 — The Matrix Bridge Alternative (lines 134–145)\n\nReal flag before I edit: the post says **"Patchbay Relay also includes a Matrix bridge"**.',
     "Section 10 deleted.\n\n> Matrix was the runner-up. I prototyped a separate bridge for it.",
@@ -68,8 +68,7 @@ def test_historical_failure_no_longer_produces_bold_blockquote(raw: str) -> None
     md = telegramify_markdown.markdownify(raw)
     bad_matches = _BAD_BOLD_BLOCKQUOTE.findall(md)
     assert not bad_matches, (
-        f"Heading conversion regressed: produced `*>` (bold containing "
-        f"blockquote opener). Output: {md!r}"
+        f"Heading conversion regressed: produced `*>` (bold containing blockquote opener). Output: {md!r}"
     )
 
 
@@ -84,9 +83,7 @@ def test_heading_prefix_is_not_a_markdownv2_special_char() -> None:
     )
 
     md_special = set("_*[]()~`>#+-=|{}.!")
-    for level, prefix in enumerate(
-        [HEAD_LEVEL_1, HEAD_LEVEL_2, HEAD_LEVEL_3, HEAD_LEVEL_4], start=1
-    ):
+    for level, prefix in enumerate([HEAD_LEVEL_1, HEAD_LEVEL_2, HEAD_LEVEL_3, HEAD_LEVEL_4], start=1):
         special_chars_in_prefix = set(prefix) & md_special
         assert not special_chars_in_prefix, (
             f"head_level_{level} = {prefix!r} contains MarkdownV2 special "
@@ -108,7 +105,5 @@ def test_plain_heading_converts_to_balanced_bold() -> None:
 def test_blockquoted_heading_does_not_produce_bold_blockquote() -> None:
     """The combo `> ## Heading` is the most common real-world failure shape
     in the activity log. It must not produce `*>` after conversion."""
-    md = telegramify_markdown.markdownify(
-        "> ## Heading inside quote\n> body line\n> more body"
-    )
+    md = telegramify_markdown.markdownify("> ## Heading inside quote\n> body line\n> more body")
     assert not _BAD_BOLD_BLOCKQUOTE.search(md), f"`*>` pattern present in {md!r}"

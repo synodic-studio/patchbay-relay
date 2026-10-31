@@ -59,6 +59,7 @@ class SecretRedactor(logging.Filter):
             record.args = ()
         return True
 
+
 # Substrings that mark 409 Conflict storm lines from python-telegram-bot.
 CONFLICT_MARKERS = (
     "terminated by other getUpdates request",
@@ -113,8 +114,7 @@ class ConflictAggregator(logging.Filter):
         if now - self._last_summary_ts >= AGGREGATE_INTERVAL:
             elapsed = now - (self._first_ts or now)
             logger.warning(
-                "Telegram 409 Conflict aggregated: %d occurrences over %.0fs "
-                "— another poller is still active.",
+                "Telegram 409 Conflict aggregated: %d occurrences over %.0fs — another poller is still active.",
                 self._count,
                 elapsed,
             )

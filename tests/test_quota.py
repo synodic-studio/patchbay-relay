@@ -79,9 +79,7 @@ class TestIsQuotaErrorShortText:
         events = [
             {
                 "type": "assistant",
-                "message": {
-                    "content": [{"type": "text", "text": "too many requests"}]
-                },
+                "message": {"content": [{"type": "text", "text": "too many requests"}]},
             }
         ]
         assert is_quota_error(events, "") is True
@@ -92,9 +90,7 @@ class TestIsQuotaErrorShortText:
         events = [
             {
                 "type": "assistant",
-                "message": {
-                    "content": [{"type": "text", "text": long_text}]
-                },
+                "message": {"content": [{"type": "text", "text": long_text}]},
             }
         ]
         assert is_quota_error(events, "") is False
@@ -106,9 +102,7 @@ class TestIsQuotaErrorShortText:
         events_under = [
             {
                 "type": "assistant",
-                "message": {
-                    "content": [{"type": "text", "text": text_299}]
-                },
+                "message": {"content": [{"type": "text", "text": text_299}]},
             }
         ]
         assert is_quota_error(events_under, "") is True
@@ -118,9 +112,7 @@ class TestIsQuotaErrorShortText:
         events_at = [
             {
                 "type": "assistant",
-                "message": {
-                    "content": [{"type": "text", "text": text_300}]
-                },
+                "message": {"content": [{"type": "text", "text": text_300}]},
             }
         ]
         assert is_quota_error(events_at, "") is False

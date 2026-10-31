@@ -76,8 +76,13 @@ class TestAggregatorWindow:
     def test_non_conflict_records_pass_through(self):
         agg = ConflictAggregator()
         rec = logging.LogRecord(
-            name="x", level=logging.INFO, pathname=__file__, lineno=0,
-            msg="something else entirely", args=(), exc_info=None,
+            name="x",
+            level=logging.INFO,
+            pathname=__file__,
+            lineno=0,
+            msg="something else entirely",
+            args=(),
+            exc_info=None,
         )
         assert agg.filter(rec) is True
         assert agg.recent_count() == 0
@@ -146,9 +151,7 @@ class TestStormWatcher:
 
         # No reset on this dispatch — the storm continues, but cooldown
         # should hold us back from re-firing in the same poll cycle.
-        mock_dispatch = MagicMock(
-            return_value=RepairResult(fixed=False, kind="stale_telegram_poller", actions=[])
-        )
+        mock_dispatch = MagicMock(return_value=RepairResult(fixed=False, kind="stale_telegram_poller", actions=[]))
         monkeypatch.setattr("patchbay.self_heal.dispatch_repair", mock_dispatch)
 
         task = asyncio.create_task(bridge._conflict_storm_watcher())

@@ -219,10 +219,7 @@ def render_table(buckets: dict[str, dict[str, Any]]) -> str:
     )
     add(
         "empty-on-complete",
-        [
-            fmt_pct(buckets[h]["empty_response"], buckets[h]["completes"])
-            for h in harnesses
-        ],
+        [fmt_pct(buckets[h]["empty_response"], buckets[h]["completes"]) for h in harnesses],
     )
 
     add("", ["" for _ in harnesses])
@@ -237,25 +234,17 @@ def render_table(buckets: dict[str, dict[str, Any]]) -> str:
     add(
         "duration mean",
         [
-            fmt_duration(
-                statistics.fmean(buckets[h]["durations"])
-                if buckets[h]["durations"]
-                else None
-            )
+            fmt_duration(statistics.fmean(buckets[h]["durations"]) if buckets[h]["durations"] else None)
             for h in harnesses
         ],
     )
 
     label_w = max(len(r[0]) for r in rows)
-    col_w = max(
-        max((len(v) for v in row[1]), default=0) for row in rows
-    )
+    col_w = max(max((len(v) for v in row[1]), default=0) for row in rows)
     col_w = max(col_w, max(len(h) for h in harnesses))
 
     def line(label: str, cells: list[str]) -> str:
-        return f"  {label.ljust(label_w)}  " + "  ".join(
-            c.rjust(col_w) for c in cells
-        )
+        return f"  {label.ljust(label_w)}  " + "  ".join(c.rjust(col_w) for c in cells)
 
     header = line("metric", harnesses)
     sep = "  " + "-" * (label_w + 2 + len(harnesses) * (col_w + 2))
@@ -317,9 +306,7 @@ def main() -> int:
                 "empty_response": b["empty_response"],
                 "duration_p50": percentile(b["durations"], 50),
                 "duration_p95": percentile(b["durations"], 95),
-                "duration_mean": (
-                    statistics.fmean(b["durations"]) if b["durations"] else None
-                ),
+                "duration_mean": (statistics.fmean(b["durations"]) if b["durations"] else None),
             }
         json.dump(out, sys.stdout, indent=2, default=str)
         sys.stdout.write("\n")

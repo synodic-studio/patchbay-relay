@@ -1,6 +1,5 @@
 """Tests for patchbay.projects — chat-to-project directory mapping."""
 
-
 import pytest
 
 import patchbay.projects
@@ -103,9 +102,7 @@ class TestGetChatWorkingDir:
         assert result == patchbay.projects.WORKING_DIR
 
     def test_with_dict_entry(self):
-        patchbay.projects._save_chat_projects(
-            {"chat_1": {"path": "patchbay-relay", "agent": "plotter"}}
-        )
+        patchbay.projects._save_chat_projects({"chat_1": {"path": "patchbay-relay", "agent": "plotter"}})
         result = patchbay.projects.get_chat_working_dir("chat_1")
         working = patchbay.projects.WORKING_DIR
         assert result == f"{working}/patchbay-relay"
@@ -118,15 +115,11 @@ class TestGetChatWorkingDir:
 
 class TestGetChatAgent:
     def test_with_agent(self):
-        patchbay.projects._save_chat_projects(
-            {"chat_1": {"path": "Fanta", "agent": "iron-temple"}}
-        )
+        patchbay.projects._save_chat_projects({"chat_1": {"path": "Fanta", "agent": "iron-temple"}})
         assert patchbay.projects.get_chat_agent("chat_1") == "iron-temple"
 
     def test_without_agent_returns_none(self):
-        patchbay.projects._save_chat_projects(
-            {"chat_1": {"path": "Fanta"}}
-        )
+        patchbay.projects._save_chat_projects({"chat_1": {"path": "Fanta"}})
         assert patchbay.projects.get_chat_agent("chat_1") is None
 
     def test_string_entry_returns_none(self):
@@ -210,9 +203,7 @@ class TestChatHarness:
         assert loaded["chat_1"] == {"path": "Fanta", "harness": "pi"}
 
     def test_set_lands_alongside_path_and_agent(self):
-        patchbay.projects._save_chat_projects(
-            {"chat_1": {"path": "Fanta", "agent": "iron-temple"}}
-        )
+        patchbay.projects._save_chat_projects({"chat_1": {"path": "Fanta", "agent": "iron-temple"}})
         patchbay.projects.set_chat_harness("chat_1", "pi")
         loaded = patchbay.projects._load_chat_projects()
         assert loaded["chat_1"] == {
@@ -222,9 +213,7 @@ class TestChatHarness:
         }
 
     def test_set_none_clears_only_harness_key(self):
-        patchbay.projects._save_chat_projects(
-            {"chat_1": {"path": "Fanta", "harness": "pi"}}
-        )
+        patchbay.projects._save_chat_projects({"chat_1": {"path": "Fanta", "harness": "pi"}})
         patchbay.projects.set_chat_harness("chat_1", None)
         loaded = patchbay.projects._load_chat_projects()
         assert loaded["chat_1"] == {"path": "Fanta"}
@@ -260,9 +249,7 @@ class TestChatTitle:
         assert loaded["chat_1"] == {"path": "Fanta", "title": "Iron Temple"}
 
     def test_set_lands_alongside_path_agent_harness(self):
-        patchbay.projects._save_chat_projects(
-            {"chat_1": {"path": "Fanta", "agent": "ernest", "harness": "pi"}}
-        )
+        patchbay.projects._save_chat_projects({"chat_1": {"path": "Fanta", "agent": "ernest", "harness": "pi"}})
         patchbay.projects.set_chat_title("chat_1", "Ernest")
         loaded = patchbay.projects._load_chat_projects()
         assert loaded["chat_1"] == {
@@ -273,9 +260,7 @@ class TestChatTitle:
         }
 
     def test_set_none_clears_only_title_key(self):
-        patchbay.projects._save_chat_projects(
-            {"chat_1": {"path": "Fanta", "title": "Old"}}
-        )
+        patchbay.projects._save_chat_projects({"chat_1": {"path": "Fanta", "title": "Old"}})
         patchbay.projects.set_chat_title("chat_1", None)
         loaded = patchbay.projects._load_chat_projects()
         assert loaded["chat_1"] == {"path": "Fanta"}
@@ -314,9 +299,7 @@ class TestSetChatProjectPreservesSiblings:
         }
 
     def test_clearing_path_removes_entire_entry(self):
-        patchbay.projects._save_chat_projects(
-            {"chat_1": {"path": "Fanta", "title": "Iron Temple"}}
-        )
+        patchbay.projects._save_chat_projects({"chat_1": {"path": "Fanta", "title": "Iron Temple"}})
         patchbay.projects.set_chat_project("chat_1", None)
         loaded = patchbay.projects._load_chat_projects()
         assert "chat_1" not in loaded

@@ -192,17 +192,13 @@ class TestSessionDisplayLabel:
     @pytest.fixture(autouse=True)
     def _isolate(self, tmp_path, monkeypatch):
         projects_file = tmp_path / "chat_projects.json"
-        monkeypatch.setattr(
-            "patchbay.projects.CHAT_PROJECTS_FILE", projects_file
-        )
+        monkeypatch.setattr("patchbay.projects.CHAT_PROJECTS_FILE", projects_file)
         yield
 
     def test_title_wins_over_project_and_agent(self):
         from patchbay.projects import _save_chat_projects
 
-        _save_chat_projects(
-            {"k": {"path": "Fanta", "agent": "ernest", "title": "Ernest 🟢"}}
-        )
+        _save_chat_projects({"k": {"path": "Fanta", "agent": "ernest", "title": "Ernest 🟢"}})
         assert bridge._session_display_label("k") == "Ernest 🟢"
 
     def test_project_with_agent_falls_back_to_arrow_form(self):
@@ -236,9 +232,7 @@ class TestHandleForumTopicEvent:
     @pytest.fixture(autouse=True)
     def _isolate(self, tmp_path, monkeypatch):
         projects_file = tmp_path / "chat_projects.json"
-        monkeypatch.setattr(
-            "patchbay.projects.CHAT_PROJECTS_FILE", projects_file
-        )
+        monkeypatch.setattr("patchbay.projects.CHAT_PROJECTS_FILE", projects_file)
         yield
 
     def _make_update(self, chat_id, thread_id, *, created=None, edited=None):

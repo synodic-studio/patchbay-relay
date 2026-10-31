@@ -256,7 +256,7 @@ async def test_session_cleared_after_processing_completes():
         update = _make_update(text="test")
         await bridge.handle_message(update, ctx)
 
-    assert (key not in bridge._sessions or not bridge._sessions[key].processing)
+    assert key not in bridge._sessions or not bridge._sessions[key].processing
     assert bridge._sessions.get(key) is None or bridge._sessions[key].started_at is None
 
 
@@ -275,7 +275,7 @@ async def test_session_cleared_even_on_error():
         update = _make_update(text="test")
         await bridge.handle_message(update, ctx)
 
-    assert (key not in bridge._sessions or not bridge._sessions[key].processing)
+    assert key not in bridge._sessions or not bridge._sessions[key].processing
 
 
 # ── Non-queued path ───────────────────────────────────────────────
@@ -298,9 +298,6 @@ async def test_message_not_queued_when_session_idle():
 
     assert key not in bridge._sessions or not bridge._sessions[key].queue
     ctx.bot.send_message.assert_called()
-
-
-
 
 
 @pytest.mark.asyncio

@@ -77,20 +77,14 @@ async def _fallback_compact(
 
     await update.message.reply_text("Compacting (fallback): summarizing prior session…")
     try:
-        summary = await loop.run_in_executor(
-            bridge._executor, bridge.run_claude, summarize_prompt, session_key
-        )
+        summary = await loop.run_in_executor(bridge._executor, bridge.run_claude, summarize_prompt, session_key)
     except Exception as exc:  # noqa: BLE001
-        bridge.logger.exception(
-            "/compact fallback summarize failed for %s", session_key
-        )
+        bridge.logger.exception("/compact fallback summarize failed for %s", session_key)
         await update.message.reply_text(f"Compact failed during summarize: {exc}")
         return
 
     if not summary or summary.startswith(QUOTA_HIT_PREFIX):
-        await update.message.reply_text(
-            "Compact aborted — couldn't get a summary. Try again later."
-        )
+        await update.message.reply_text("Compact aborted — couldn't get a summary. Try again later.")
         return
 
     summary = summary.strip()
@@ -104,17 +98,11 @@ async def _fallback_compact(
     )
 
     handoff_prompt = _build_handoff_prompt(summary)
-    await update.message.reply_text(
-        f"Started fresh session. Handing forward summary ({summary_words} words)…"
-    )
+    await update.message.reply_text(f"Started fresh session. Handing forward summary ({summary_words} words)…")
     try:
-        ack = await loop.run_in_executor(
-            bridge._executor, bridge.run_claude, handoff_prompt, session_key
-        )
+        ack = await loop.run_in_executor(bridge._executor, bridge.run_claude, handoff_prompt, session_key)
     except Exception as exc:  # noqa: BLE001
-        bridge.logger.exception(
-            "/compact fallback handoff failed for %s", session_key
-        )
+        bridge.logger.exception("/compact fallback handoff failed for %s", session_key)
         await update.message.reply_text(
             f"Summary captured but handoff failed: {exc}\n\n"
             "Your next message will start a fresh session without context."
@@ -141,15 +129,11 @@ async def cmd_context(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     harness_name, harness, req = _resolve_harness_for_inquiry(key)
 
     if not isinstance(harness, ContextQueryCapableHarness):
-        await update.message.reply_text(
-            f"/context isn't supported on {harness_name}. Use /compact instead."
-        )
+        await update.message.reply_text(f"/context isn't supported on {harness_name}. Use /compact instead.")
         return
 
     if not req.resume_session_id:
-        await update.message.reply_text(
-            "No active session yet — send a message first to start one."
-        )
+        await update.message.reply_text("No active session yet — send a message first to start one.")
         return
 
     try:
@@ -160,8 +144,7 @@ async def cmd_context(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     await update.message.reply_text(
-        f"Context: {_fmt_tokens(cu.used_tokens)} / {_fmt_tokens(cu.max_tokens)} "
-        f"({cu.percentage:.0f}%)"
+        f"Context: {_fmt_tokens(cu.used_tokens)} / {_fmt_tokens(cu.max_tokens)} ({cu.percentage:.0f}%)"
     )
 
 
@@ -186,8 +169,7 @@ async def cmd_compact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     if not req.resume_session_id:
         await update.message.reply_text(
-            "Nothing to compact — no active session in this chat. "
-            "Send a message first to start one."
+            "Nothing to compact — no active session in this chat. Send a message first to start one."
         )
         return
 

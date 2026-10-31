@@ -387,7 +387,6 @@ _shutting_down = False
 _bot_instance = None
 
 
-
 # Captured once at runtime module import time — used by /health to report
 # process uptime. Local alias preserves existing _BRIDGE_STARTED_AT call sites.
 from patchbay.runtime import BRIDGE_STARTED_AT as _BRIDGE_STARTED_AT  # noqa: E402
@@ -569,8 +568,9 @@ def run_claude(
         )
         harness_name = DEFAULT_HARNESS
     effective_harness = harness_name
-    session_id = (get_session_id(session_key, harness=harness_name)
-                  if harness_name != "pi" else get_session_id(session_key))
+    session_id = (
+        get_session_id(session_key, harness=harness_name) if harness_name != "pi" else get_session_id(session_key)
+    )
     if not model:
         model = resolve_model(session_key, harness=harness_name)
     effort = resolve_effort(session_key)

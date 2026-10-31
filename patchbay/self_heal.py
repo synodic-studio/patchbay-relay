@@ -236,5 +236,3 @@ def list_kinds() -> list[str]:
 def reset_handlers() -> None:
     """Wipe the handler registry. Tests use this to inject mocks."""
     _HANDLERS.clear()
-
-

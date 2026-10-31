@@ -47,11 +47,7 @@ def iter_active_sessions() -> list[tuple[str, "SessionState"]]:
     (subprocess harnesses) or `state.harness` is set (SDK harnesses).
     Either signal alone is sufficient.
     """
-    return [
-        (k, s)
-        for k, s in sessions.items()
-        if s.proc is not None or s.harness is not None
-    ]
+    return [(k, s) for k, s in sessions.items() if s.proc is not None or s.harness is not None]
 
 
 async def send_response(bot: Any, chat_id: int, thread_id: int | None, response: str) -> None:

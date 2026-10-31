@@ -116,9 +116,7 @@ class TestCorruptSessionHandler:
         bad = tmp_path / "bad.json"
         bad.write_text("not json {{{")
 
-        result = dispatch_repair(
-            "corrupt_session_json", {"path": bad, "reason": "test corruption"}
-        )
+        result = dispatch_repair("corrupt_session_json", {"path": bad, "reason": "test corruption"})
 
         assert result.fixed is True
         assert not bad.exists()
@@ -129,9 +127,7 @@ class TestCorruptSessionHandler:
         assert moved[0].name.startswith("bad.json.")
 
     def test_missing_file_treated_as_already_fixed(self, tmp_path):
-        result = dispatch_repair(
-            "corrupt_session_json", {"path": tmp_path / "never_existed.json"}
-        )
+        result = dispatch_repair("corrupt_session_json", {"path": tmp_path / "never_existed.json"})
         assert result.fixed is True
         assert "already gone" in result.actions[0]
 
@@ -143,9 +139,7 @@ class TestCorruptSessionHandler:
     def test_path_as_string_accepted(self, tmp_path):
         bad = tmp_path / "stringpath.json"
         bad.write_text("garbage")
-        result = dispatch_repair(
-            "corrupt_session_json", {"path": str(bad), "reason": "x"}
-        )
+        result = dispatch_repair("corrupt_session_json", {"path": str(bad), "reason": "x"})
         assert result.fixed is True
 
 
@@ -181,9 +175,7 @@ class TestStaleTelegramPollerHandler:
 
 class TestClaudeOOMHandler:
     def test_returncode_137_is_fixed(self):
-        result = dispatch_repair(
-            "claude_oom_137", {"session_key": "k1", "returncode": 137}
-        )
+        result = dispatch_repair("claude_oom_137", {"session_key": "k1", "returncode": 137})
         assert result.fixed is True
         assert "k1" in result.actions[0]
         assert str(OOM_RETRY_MAX_TURNS) in result.actions[0]
@@ -191,15 +183,11 @@ class TestClaudeOOMHandler:
 
     def test_returncode_neg9_is_fixed(self):
         """SIGKILL via OOM-killer surfaces as -9 in subprocess."""
-        result = dispatch_repair(
-            "claude_oom_137", {"session_key": "k1", "returncode": -9}
-        )
+        result = dispatch_repair("claude_oom_137", {"session_key": "k1", "returncode": -9})
         assert result.fixed is True
 
     def test_unrelated_returncode_returns_unfixed(self):
-        result = dispatch_repair(
-            "claude_oom_137", {"session_key": "k1", "returncode": 1}
-        )
+        result = dispatch_repair("claude_oom_137", {"session_key": "k1", "returncode": 1})
         assert result.fixed is False
         assert "not OOM-shaped" in (result.error or "")
 

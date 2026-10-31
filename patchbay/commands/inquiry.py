@@ -26,8 +26,9 @@ def resolve_harness_for_inquiry(session_key: str):
 
     chat_cwd = get_chat_working_dir(session_key)
     harness_name = get_chat_harness(session_key) or DEFAULT_HARNESS
-    session_id = (get_session_id(session_key, harness=harness_name)
-                  if harness_name != "pi" else get_session_id(session_key))
+    session_id = (
+        get_session_id(session_key, harness=harness_name) if harness_name != "pi" else get_session_id(session_key)
+    )
     model = resolve_model(session_key, harness=harness_name)
     effort = resolve_effort(session_key)
 

@@ -1,4 +1,5 @@
 """Subscription-authenticated Codex CLI harness with JSONL activity streaming."""
+
 from __future__ import annotations
 
 import asyncio
@@ -37,14 +38,22 @@ class CodexHarness:
 
     name = "codex"
     capabilities = HarnessCapabilities(
-        supports_resume=True, supports_tool_streaming=True, supports_interrupt=False,
-        supports_effort=True, supports_mcp=True,
+        supports_resume=True,
+        supports_tool_streaming=True,
+        supports_interrupt=False,
+        supports_effort=True,
+        supports_mcp=True,
     )
 
-    def __init__(self, *, codex_path: str = CODEX_PATH_DEFAULT, max_timeout_seconds: float = MAX_TIMEOUT,
-                 on_progress: Callable[[], None] | None = None,
-                 proc_setter: Callable[[subprocess.Popen | None], None] | None = None,
-                 env_overrides: dict[str, str] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        codex_path: str = CODEX_PATH_DEFAULT,
+        max_timeout_seconds: float = MAX_TIMEOUT,
+        on_progress: Callable[[], None] | None = None,
+        proc_setter: Callable[[subprocess.Popen | None], None] | None = None,
+        env_overrides: dict[str, str] | None = None,
+    ) -> None:
         self._codex_path = codex_path
         self._max_timeout = max_timeout_seconds
         self._on_progress = on_progress
@@ -59,8 +68,12 @@ class CodexHarness:
         if req.resume_session_id:
             cmd.append("resume")
         cmd += ["--json", "--skip-git-repo-check"]
-        config = {"approval_policy": "never", "sandbox_mode": "danger-full-access",
-                  "forced_login_method": "chatgpt", "model_provider": "openai"}
+        config = {
+            "approval_policy": "never",
+            "sandbox_mode": "danger-full-access",
+            "forced_login_method": "chatgpt",
+            "model_provider": "openai",
+        }
         if req.system_prompt:
             config["developer_instructions"] = req.system_prompt
         if req.effort:
@@ -96,8 +109,12 @@ class CodexHarness:
                     return
                 if isinstance(event, _Exit):
                     error_text = "\n".join(errors) or event.stderr.strip()
-                    metadata = {"session_id": session_id, "exit_code": event.code, "duration": event.duration,
-                                "stderr": event.stderr[:500]}
+                    metadata = {
+                        "session_id": session_id,
+                        "exit_code": event.code,
+                        "duration": event.duration,
+                        "stderr": event.stderr[:500],
+                    }
                     if event.timed_out:
                         yield TurnError("timeout", "Codex turn timed out", True, metadata)
                     elif turn_failed or event.code != 0 or not completed or self._cancelled:
@@ -108,9 +125,15 @@ class CodexHarness:
                             kind = "rate_limit"
                         elif event.code in (137, -9) and not self._cancelled:
                             kind = "oom"
-                        elif req.resume_session_id and any(token in lower for token in (
-                            "no session found", "session not found", "no conversation found", "failed to load session",
-                        )):
+                        elif req.resume_session_id and any(
+                            token in lower
+                            for token in (
+                                "no session found",
+                                "session not found",
+                                "no conversation found",
+                                "failed to load session",
+                            )
+                        ):
                             kind = "corrupt_session"
                         yield TurnError(kind, message[:500], kind in ("rate_limit", "corrupt_session", "oom"), metadata)
                     else:
@@ -186,9 +209,18 @@ class CodexHarness:
         for key in ("OPENAI_API_KEY", "CODEX_API_KEY"):
             env.pop(key, None)
         try:
-            proc = subprocess.Popen(self._build_cmd(req), cwd=str(req.project_dir), env=env,
-                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                    text=True, encoding="utf-8", errors="replace", start_new_session=True)
+            proc = subprocess.Popen(
+                self._build_cmd(req),
+                cwd=str(req.project_dir),
+                env=env,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                start_new_session=True,
+            )
         except (OSError, ValueError) as exc:
             emit(TurnError("process_died", f"Cannot start Codex: {exc}", False))
             return

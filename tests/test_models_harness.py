@@ -83,8 +83,10 @@ async def test_codex_picker_does_not_call_pi(monkeypatch):
 async def test_stale_pi_picker_cannot_apply_alias_to_codex():
     projects.set_chat_harness("11_22", "codex")
     query = SimpleNamespace(
-        answer=AsyncMock(), edit_message_text=AsyncMock(),
-        message=SimpleNamespace(message_thread_id=22), data="model:small",
+        answer=AsyncMock(),
+        edit_message_text=AsyncMock(),
+        message=SimpleNamespace(message_thread_id=22),
+        data="model:small",
     )
     update = SimpleNamespace(callback_query=query, effective_chat=SimpleNamespace(id=11))
     await project.callback_model(update, SimpleNamespace())

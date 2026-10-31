@@ -62,9 +62,7 @@ async def cmd_clearnew(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     harness = get_chat_harness(key) or DEFAULT_HARNESS
     model = resolve_model(key, harness=harness) or default_model_label(harness)
     effort = get_chat_effort(key) or DEFAULT_EFFORT
-    await update.message.reply_text(
-        f"Fresh session started.\nHarness: {harness}\nModel: {model}\nEffort: {effort}"
-    )
+    await update.message.reply_text(f"Fresh session started.\nHarness: {harness}\nModel: {model}\nEffort: {effort}")
     bridge.logger.info("Session cleared for %s", key)
 
 
@@ -89,12 +87,13 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     await bridge._interrupt_session_async(state)
     await bridge._release_processing(state)
-    await update.message.reply_text(
-        "Interrupted. Session preserved — next message resumes."
-    )
+    await update.message.reply_text("Interrupted. Session preserved — next message resumes.")
     bridge.logger.info(
         "User %d cancelled Claude turn for %s (harness=%s, pid=%d)",
-        user_id, key, harness_name, pid,
+        user_id,
+        key,
+        harness_name,
+        pid,
     )
     log_activity(
         "process_cancel",
@@ -127,9 +126,7 @@ async def cmd_kill(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     await bridge._cancel_session_async(state)
     await bridge._release_processing(state)
-    await update.message.reply_text(
-        "Killed active Claude process. Session preserved — next message resumes."
-    )
+    await update.message.reply_text("Killed active Claude process. Session preserved — next message resumes.")
     bridge.logger.info(
         "User %d killed Claude turn for %s (harness=%s, pid=%d)",
         user_id,
@@ -171,9 +168,7 @@ async def cmd_restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             if n_active
             else "Restarting (force)..."
         )
-        bridge.logger.info(
-            "User %d triggered FORCE bridge restart (%d active)", user_id, n_active
-        )
+        bridge.logger.info("User %d triggered FORCE bridge restart (%d active)", user_id, n_active)
     elif n_active == 0:
         await update.message.reply_text("Restarting (no active turns)...")
         bridge.logger.info("User %d triggered bridge restart (no active turns)", user_id)
@@ -209,15 +204,11 @@ async def cmd_restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     for key, proc in bridge._iter_active_procs():
         if proc.poll() is None:
             proc.terminate()
-            bridge.logger.info(
-                "Terminated Claude process for %s (pid %d)", key, proc.pid
-            )
+            bridge.logger.info("Terminated Claude process for %s (pid %d)", key, proc.pid)
 
     if bridge._remote_proc and bridge._remote_proc.poll() is None:
         bridge._remote_proc.terminate()
-        bridge.logger.info(
-            "Terminated remote-control process (pid %d)", bridge._remote_proc.pid
-        )
+        bridge.logger.info("Terminated remote-control process (pid %d)", bridge._remote_proc.pid)
 
     os._exit(1)
 

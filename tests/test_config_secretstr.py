@@ -1,6 +1,5 @@
 """Tests for patchbay.config._SecretStr and other config edge cases."""
 
-
 from patchbay.config import _SecretStr
 
 

@@ -42,9 +42,7 @@ session_keys = st.text(
 efforts_values = st.sampled_from(patchbay.efforts.VALID_EFFORTS)
 
 # Project paths are arbitrary strings; the layer doesn't validate them.
-project_paths = st.text(min_size=1, max_size=40).filter(
-    lambda s: "\x00" not in s and not s.startswith("/")
-)
+project_paths = st.text(min_size=1, max_size=40).filter(lambda s: "\x00" not in s and not s.startswith("/"))
 
 # Session IDs are uuid-like strings in practice, but the layer treats
 # them as opaque text — exercise the full string range.
@@ -66,12 +64,8 @@ _FAST = settings(
 
 @pytest.fixture
 def isolated_efforts(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        patchbay.efforts, "CHAT_EFFORTS_FILE", tmp_path / "chat_efforts.json"
-    )
-    monkeypatch.setattr(
-        patchbay.efforts, "_EFFORTS_LOCK_FILE", tmp_path / ".chat_efforts.lock"
-    )
+    monkeypatch.setattr(patchbay.efforts, "CHAT_EFFORTS_FILE", tmp_path / "chat_efforts.json")
+    monkeypatch.setattr(patchbay.efforts, "_EFFORTS_LOCK_FILE", tmp_path / ".chat_efforts.lock")
     return tmp_path
 
 
@@ -79,9 +73,7 @@ def isolated_efforts(tmp_path, monkeypatch):
 def isolated_projects(tmp_path, monkeypatch):
     projects_file = tmp_path / "chat_projects.json"
     monkeypatch.setattr(patchbay.projects, "CHAT_PROJECTS_FILE", projects_file)
-    monkeypatch.setattr(
-        patchbay.projects, "_PROJECTS_LOCK_FILE", tmp_path / ".chat_projects.lock"
-    )
+    monkeypatch.setattr(patchbay.projects, "_PROJECTS_LOCK_FILE", tmp_path / ".chat_projects.lock")
     monkeypatch.setattr(patchbay.projects, "WORKING_DIR", str(tmp_path))
     return tmp_path
 
@@ -197,9 +189,7 @@ class TestSessionsProperty:
         sid=session_ids,
         garbage=st.text(min_size=0, max_size=200),
     )
-    def test_garbage_in_session_file_is_quarantined(
-        self, isolated_sessions, key, sid, garbage
-    ):
+    def test_garbage_in_session_file_is_quarantined(self, isolated_sessions, key, sid, garbage):
         """A corrupt file should NOT poison the chat: get returns None, file is moved aside."""
         # Plant a session, then overwrite with garbage.
         patchbay.sessions.save_session_id(key, sid)
@@ -252,12 +242,8 @@ class TestOutboundPruneProperty:
             return
 
         lines = [line for line in path.read_text().splitlines() if line]
-        n_count = sum(
-            1 for line in lines if json.loads(line).get("source") != "claude-response"
-        )
-        r_count = sum(
-            1 for line in lines if json.loads(line).get("source") == "claude-response"
-        )
+        n_count = sum(1 for line in lines if json.loads(line).get("source") != "claude-response")
+        r_count = sum(1 for line in lines if json.loads(line).get("source") == "claude-response")
         assert n_count <= patchbay.outbound.MAX_ENTRIES
         assert r_count <= patchbay.outbound.MAX_RESPONSE_ENTRIES
         # And every line round-trips through json.loads
@@ -295,9 +281,7 @@ class TestConcurrentWriters:
                 patchbay.efforts.set_chat_effort(k, "high")
 
         # Split keys across threads
-        threads = [
-            threading.Thread(target=writer, args=(keys[i::4],)) for i in range(4)
-        ]
+        threads = [threading.Thread(target=writer, args=(keys[i::4],)) for i in range(4)]
         for t in threads:
             t.start()
         for t in threads:
@@ -314,9 +298,7 @@ class TestConcurrentWriters:
             for k in my_keys:
                 patchbay.projects.set_chat_project(k, f"path_{k}")
 
-        threads = [
-            threading.Thread(target=writer, args=(keys[i::4],)) for i in range(4)
-        ]
+        threads = [threading.Thread(target=writer, args=(keys[i::4],)) for i in range(4)]
         for t in threads:
             t.start()
         for t in threads:

@@ -105,9 +105,7 @@ class TestParseClaudeResponse:
 
     def test_result_event_with_error_field_returns_error_message(self):
         """Test that result event with error field returns formatted error message."""
-        stdout = (
-            '[{"type":"result","result":"","session_id":"err123","is_error":false,"error":"rate limit exceeded"}]'
-        )
+        stdout = '[{"type":"result","result":"","session_id":"err123","is_error":false,"error":"rate limit exceeded"}]'
         session_key = "test_session"
 
         result = bridge.parse_claude_response(stdout, session_key)

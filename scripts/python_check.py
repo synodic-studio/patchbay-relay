@@ -104,10 +104,7 @@ def scan_changelog(body: str, keywords: list[str]) -> list[str]:
     falsely match 'source' and 'CVE' does not falsely match 'concrete'.
     Useful as a rationale string in the upgrade recommendation.
     """
-    patterns = [
-        (keyword, re.compile(rf"\b{re.escape(keyword)}\b", re.IGNORECASE))
-        for keyword in keywords
-    ]
+    patterns = [(keyword, re.compile(rf"\b{re.escape(keyword)}\b", re.IGNORECASE)) for keyword in keywords]
     hits: list[str] = []
     seen_keywords: set[str] = set()
     for line in body.splitlines():
@@ -209,10 +206,7 @@ def main(argv: list[str] | None = None) -> int:
     recommended, safe_to_ignore = classify_candidates(candidates, keywords)
 
     if not recommended:
-        print(
-            f"Pinned at {pin}. {len(safe_to_ignore)} newer release(s) found, "
-            f"none match the upgrade keywords."
-        )
+        print(f"Pinned at {pin}. {len(safe_to_ignore)} newer release(s) found, none match the upgrade keywords.")
         if args.auto_ignore:
             for version in safe_to_ignore:
                 ignore.add(version_string(version))

@@ -65,13 +65,8 @@ async def cmd_setproject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     args = context.args
     if not args:
         projects = get_all_projects()
-        buttons = [
-            [InlineKeyboardButton(name, callback_data=f"setproject:{name}")]
-            for name in projects
-        ]
-        buttons.append(
-            [InlineKeyboardButton("Clear (use ~/Developer)", callback_data="setproject:__clear__")]
-        )
+        buttons = [[InlineKeyboardButton(name, callback_data=f"setproject:{name}")] for name in projects]
+        buttons.append([InlineKeyboardButton("Clear (use ~/Developer)", callback_data="setproject:__clear__")])
         await update.message.reply_text(
             "Pick a project (A-Z).\nOr type: /setproject <path>",
             reply_markup=InlineKeyboardMarkup(buttons),
@@ -116,9 +111,7 @@ async def callback_setproject(update: Update, context: ContextTypes.DEFAULT_TYPE
     if rel_path == "__clear__":
         set_chat_project(key, None)
         clear_session(key)
-        await query.edit_message_text(
-            "Project cleared. Using default: ~/Developer\nSession reset."
-        )
+        await query.edit_message_text("Project cleared. Using default: ~/Developer\nSession reset.")
         bridge.logger.info("Project cleared for %s", key)
         return
 
@@ -177,22 +170,20 @@ async def cmd_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         choice = args[0].lower()
         if choice == "default":
             set_chat_model(key, None, harness=harness)
-            await update.message.reply_text(
-                f"Model reset to default ({default_label})."
-            )
+            await update.message.reply_text(f"Model reset to default ({default_label}).")
             bridge.logger.info("Model cleared for %s", key)
             return
         if not model_is_valid(choice, harness=harness):
             await update.message.reply_text(
-                ("Invalid Codex model. Use /model <model-id> (gpt-* or o*) or default."
-                 if harness == "codex" else
-                 f"Invalid model. Pick from: {', '.join(VALID_MODELS)}, default")
+                (
+                    "Invalid Codex model. Use /model <model-id> (gpt-* or o*) or default."
+                    if harness == "codex"
+                    else f"Invalid model. Pick from: {', '.join(VALID_MODELS)}, default"
+                )
             )
             return
         set_chat_model(key, choice, harness=harness)
-        await update.message.reply_text(
-            f"Model set to {choice}. Takes effect on next message."
-        )
+        await update.message.reply_text(f"Model set to {choice}. Takes effect on next message.")
         bridge.logger.info("Model set to %s for %s", choice, key)
         return
 
@@ -251,9 +242,7 @@ async def callback_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     set_chat_model(key, choice, harness=harness)
-    await query.edit_message_text(
-        f"Model set to {choice}. Takes effect on next message."
-    )
+    await query.edit_message_text(f"Model set to {choice}. Takes effect on next message.")
     bridge.logger.info("Model set to %s for %s", choice, key)
 
 
@@ -268,29 +257,20 @@ async def cmd_effort(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         choice = args[0].lower()
         if choice == "default":
             set_chat_effort(key, None)
-            await update.message.reply_text(
-                f"Effort reset to default ({DEFAULT_EFFORT})."
-            )
+            await update.message.reply_text(f"Effort reset to default ({DEFAULT_EFFORT}).")
             bridge.logger.info("Effort cleared for %s", key)
             return
         if choice not in VALID_EFFORTS:
-            await update.message.reply_text(
-                f"Invalid effort. Choose: {', '.join(VALID_EFFORTS)}, default"
-            )
+            await update.message.reply_text(f"Invalid effort. Choose: {', '.join(VALID_EFFORTS)}, default")
             return
         set_chat_effort(key, choice)
-        await update.message.reply_text(
-            f"Effort set to {choice}. Takes effect on next message."
-        )
+        await update.message.reply_text(f"Effort set to {choice}. Takes effect on next message.")
         bridge.logger.info("Effort set to %s for %s", choice, key)
         return
 
     current = get_chat_effort(key) or f"default ({DEFAULT_EFFORT})"
     buttons = [
-        [
-            InlineKeyboardButton(level, callback_data=f"effort:{level}")
-            for level in VALID_EFFORTS
-        ],
+        [InlineKeyboardButton(level, callback_data=f"effort:{level}") for level in VALID_EFFORTS],
         [InlineKeyboardButton("default", callback_data="effort:__default__")],
     ]
     await update.message.reply_text(
@@ -319,9 +299,7 @@ async def callback_effort(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     set_chat_effort(key, choice)
-    await query.edit_message_text(
-        f"Effort set to {choice}. Takes effect on next message."
-    )
+    await query.edit_message_text(f"Effort set to {choice}. Takes effect on next message.")
     bridge.logger.info("Effort set to %s for %s", choice, key)
 
 
@@ -336,17 +314,18 @@ async def cmd_harness(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if args:
         choice = args[0].lower()
         if choice != "default" and choice not in VALID_HARNESSES:
-            await update.message.reply_text(
-                f"Invalid harness. Choose: {', '.join(VALID_HARNESSES)}, default"
-            )
+            await update.message.reply_text(f"Invalid harness. Choose: {', '.join(VALID_HARNESSES)}, default")
             return
         selected = DEFAULT_HARNESS if choice == "default" else choice
         set_chat_harness(key, None if choice == "default" else choice)
         switched = selected != current
         if switched:
             clear_session(key)
-        label = (f"Harness reset to default ({selected})." if choice == "default"
-                 else f"Harness set to {selected}. Takes effect on next message.")
+        label = (
+            f"Harness reset to default ({selected})."
+            if choice == "default"
+            else f"Harness set to {selected}. Takes effect on next message."
+        )
         if switched:
             label += " Session reset."
         await update.message.reply_text(label)
@@ -354,8 +333,7 @@ async def cmd_harness(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     await update.message.reply_text(
-        f"Harness: {current}\nAvailable: {', '.join(VALID_HARNESSES)}\n"
-        "Use /harness <name> to switch."
+        f"Harness: {current}\nAvailable: {', '.join(VALID_HARNESSES)}\nUse /harness <name> to switch."
     )
 
 
@@ -388,9 +366,7 @@ async def cmd_remote_control(update: Update, context: ContextTypes.DEFAULT_TYPE)
             bridge._remote_proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             bridge._remote_proc.kill()
-        bridge.logger.info(
-            "Replaced existing remote-control process (pid %d)", bridge._remote_proc.pid
-        )
+        bridge.logger.info("Replaced existing remote-control process (pid %d)", bridge._remote_proc.pid)
 
     chat_cwd = get_chat_working_dir(key)
     await update.message.reply_text(f"Starting remote-control in {chat_cwd}...")
@@ -436,9 +412,7 @@ async def cmd_remote_control(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     if proc.poll() is not None:
         output = "\n".join(lines) if lines else "(no output)"
-        await update.message.reply_text(
-            f"Remote control exited (code {proc.returncode}):\n{output}"
-        )
+        await update.message.reply_text(f"Remote control exited (code {proc.returncode}):\n{output}")
         bridge._remote_proc = None
         bridge._remote_proc_key = None
     else:

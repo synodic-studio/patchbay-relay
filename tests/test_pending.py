@@ -241,8 +241,7 @@ class TestPendingSurvivesDeliveryDisruption:
         state = bridge._get_session_state(session_key)
         state.processing = True
         state.queue = [
-            bridge.QueuedMessage(text=f"q{i}", pending_id=f"pid{i}")
-            for i in range(bridge.MAX_QUEUED_MESSAGES)
+            bridge.QueuedMessage(text=f"q{i}", pending_id=f"pid{i}") for i in range(bridge.MAX_QUEUED_MESSAGES)
         ]
 
         update = MagicMock()
@@ -266,9 +265,7 @@ class TestPendingSurvivesDeliveryDisruption:
         # No pending file left for the dropped message — we said we wouldn't
         # process it, replaying would be a lie.
         files = [
-            f
-            for f in bridge.PENDING_DIR.glob("*.json")
-            if json.loads(f.read_text()).get("text") == "this gets dropped"
+            f for f in bridge.PENDING_DIR.glob("*.json") if json.loads(f.read_text()).get("text") == "this gets dropped"
         ]
         assert files == []
 

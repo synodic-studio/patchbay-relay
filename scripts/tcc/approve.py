@@ -53,10 +53,7 @@ def trigger_apple_events():
     ]
     for name, script in targets:
         try:
-            result = subprocess.run(
-                ["osascript", "-e", script],
-                capture_output=True, text=True, timeout=30
-            )
+            result = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=30)
             if result.returncode == 0:
                 print(f"  {name}: approved")
             else:
@@ -81,9 +78,7 @@ def check_other_binaries():
     """
     print("\nOther binaries that may need separate TCC approval:")
     for name, cmd in [("Node", "node"), ("Claude Code", "claude")]:
-        path = subprocess.run(
-            ["which", cmd], capture_output=True, text=True
-        ).stdout.strip()
+        path = subprocess.run(["which", cmd], capture_output=True, text=True).stdout.strip()
         if path:
             real = os.path.realpath(path)
             print(f"  {name}: {real}")

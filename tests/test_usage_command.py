@@ -124,8 +124,11 @@ class TestCmdUsageDispatch:
 
             async def get_usage(self, req):
                 return SessionUsage(
-                    cost_usd=0.0123, input_tokens=100, output_tokens=20,
-                    total_tokens=120, model="small",
+                    cost_usd=0.0123,
+                    input_tokens=100,
+                    output_tokens=20,
+                    total_tokens=120,
+                    model="small",
                 )
 
         req = MagicMock()

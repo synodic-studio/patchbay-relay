@@ -51,12 +51,7 @@ def test_load_events_handles_missing_file(soak_module, tmp_path):
 
 def test_load_events_skips_garbage_lines(soak_module, tmp_path):
     log = tmp_path / "log.jsonl"
-    log.write_text(
-        '{"ts": 1.0, "event": "x"}\n'
-        "not json\n"
-        '\n'
-        '{"ts": 2.0, "event": "y"}\n'
-    )
+    log.write_text('{"ts": 1.0, "event": "x"}\nnot json\n\n{"ts": 2.0, "event": "y"}\n')
     events = soak_module.load_events(log, None, None)
     assert [e["event"] for e in events] == ["x", "y"]
 
@@ -305,9 +300,7 @@ def test_main_emits_json(soak_module, tmp_path, capsys, monkeypatch):
             }
         ],
     )
-    monkeypatch.setattr(
-        "sys.argv", ["harness_soak.py", "--log", str(log), "--json"]
-    )
+    monkeypatch.setattr("sys.argv", ["harness_soak.py", "--log", str(log), "--json"])
     rc = soak_module.main()
     assert rc == 0
     out = capsys.readouterr().out

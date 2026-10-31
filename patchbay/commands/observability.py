@@ -72,9 +72,7 @@ def _block_time_percent(start_iso: str, end_iso: str) -> float | None:
 def _week_time_percent() -> float:
     """Return percent of the current Mon→Mon week elapsed (local time)."""
     now = datetime.now()
-    monday = (now - timedelta(days=now.weekday())).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
+    monday = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
     next_mon = monday + timedelta(days=7)
     span = (next_mon - monday).total_seconds()
     return max(0.0, min(100.0, (now - monday).total_seconds() / span * 100))
@@ -133,9 +131,7 @@ async def cmd_usage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     if isinstance(harness, UsageQueryCapableHarness):
         if not req.resume_session_id:
-            await update.message.reply_text(
-                "No active session yet — send a message first to start one."
-            )
+            await update.message.reply_text("No active session yet — send a message first to start one.")
             return
         try:
             u = await harness.get_usage(req)
@@ -209,9 +205,7 @@ async def _ccusage_report(update: Update) -> None:
             else:
                 lines.append(f"  tokens  {_format_tokens(used)}")
             if time_pct is not None:
-                lines.append(
-                    f"  time    {_bar(time_pct)} {time_pct:4.1f}%  ({hrs}h{mins:02d}m left)"
-                )
+                lines.append(f"  time    {_bar(time_pct)} {time_pct:4.1f}%  ({hrs}h{mins:02d}m left)")
         else:
             lines.append("5h block: (none)")
     except (json.JSONDecodeError, KeyError, TypeError) as e:
@@ -228,9 +222,7 @@ async def _ccusage_report(update: Update) -> None:
         wk_tok_pct = used / cap * 100 if cap else 0
         wk_time_pct = _week_time_percent()
         lines.append(f"Week (cap {_format_tokens(cap)} est):")
-        lines.append(
-            f"  tokens  {_bar(wk_tok_pct)} {wk_tok_pct:4.1f}%  ({_format_tokens(used)}/{_format_tokens(cap)})"
-        )
+        lines.append(f"  tokens  {_bar(wk_tok_pct)} {wk_tok_pct:4.1f}%  ({_format_tokens(used)}/{_format_tokens(cap)})")
         lines.append(f"  time    {_bar(wk_time_pct)} {wk_time_pct:4.1f}%")
     except (json.JSONDecodeError, KeyError, TypeError) as e:
         lines.append(f"weekly parse error: {e}")
@@ -318,9 +310,7 @@ async def cmd_activity(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     if not matches:
         suffix = f" matching {event_filter!r}" if event_filter else ""
-        await update.message.reply_text(
-            f"No activity entries{suffix} in the last 200 lines."
-        )
+        await update.message.reply_text(f"No activity entries{suffix} in the last 200 lines.")
         return
 
     out_lines = [
@@ -332,8 +322,17 @@ async def cmd_activity(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         # Compact one-line per entry; include up to ~3 informative fields.
         extras = []
         for k in (
-            "session_key", "kind", "fixed", "error", "duration", "elapsed_ms",
-            "turns_used", "exit_code", "depth", "error_type", "actions",
+            "session_key",
+            "kind",
+            "fixed",
+            "error",
+            "duration",
+            "elapsed_ms",
+            "turns_used",
+            "exit_code",
+            "depth",
+            "error_type",
+            "actions",
         ):
             if k in entry and entry[k] not in (None, "", []):
                 v = entry[k]

@@ -60,9 +60,7 @@ async def test_queue_full_returns_full(monkeypatch):
 async def test_concurrent_claims_serialize():
     """The race fix: gather many _claim_or_queue calls; only one wins."""
     state = bridge._get_session_state("k")
-    results = await asyncio.gather(
-        *[bridge._claim_or_queue(state, f"m{i}", f"p{i}") for i in range(10)]
-    )
+    results = await asyncio.gather(*[bridge._claim_or_queue(state, f"m{i}", f"p{i}") for i in range(10)])
     statuses = [r[0] for r in results]
     assert statuses.count("claimed") == 1
     assert statuses.count("queued") == 9

@@ -109,7 +109,7 @@ class TestStallDetector:
             await task
         except asyncio.CancelledError:
             pass
-        assert (bridge._sessions.get("done_key") is None or bridge._sessions["done_key"].last_event_at is None)
+        assert bridge._sessions.get("done_key") is None or bridge._sessions["done_key"].last_event_at is None
 
     @pytest.mark.asyncio
     async def test_kills_stalled_process(self):

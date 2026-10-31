@@ -32,9 +32,7 @@ logger = logging.getLogger(__name__)
 PHOTO_MAX_BYTES = 10 * 1024 * 1024  # 10MB
 DOCUMENT_MAX_BYTES = 50 * 1024 * 1024  # 50MB
 
-_SENTINEL_RE = re.compile(
-    r"\[\[send-file:\s*(?P<path>[^|\]]+?)(?:\s*\|\s*(?P<caption>[^\]]+))?\s*\]\]"
-)
+_SENTINEL_RE = re.compile(r"\[\[send-file:\s*(?P<path>[^|\]]+?)(?:\s*\|\s*(?P<caption>[^\]]+))?\s*\]\]")
 
 # Matches inline code spans (backtick-delimited) and fenced code blocks.
 # Sentinels inside these are examples/documentation, not real file requests.

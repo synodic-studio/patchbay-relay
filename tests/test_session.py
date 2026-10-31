@@ -63,9 +63,7 @@ class TestSessionExpiry:
         get, _, _ = session_fns
         # Write a session file that expired long ago
         session_file = tmp_path / "old_chat.json"
-        session_file.write_text(
-            json.dumps({"session_id": "old-sess", "last_active": time.time() - 999999})
-        )
+        session_file.write_text(json.dumps({"session_id": "old-sess", "last_active": time.time() - 999999}))
         assert get("old_chat") is None
         # Expired file should be cleaned up
         assert not session_file.exists()

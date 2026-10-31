@@ -158,10 +158,7 @@ class TestGravityWellRegression:
         chunks = split_for_telegram(md, 4096)
         assert len(chunks) >= 2, "expected multi-chunk split"
         for chunk in chunks:
-            assert is_markdownv2_balanced(chunk), (
-                f"unbalanced chunk would trigger Telegram rejection:\n"
-                f"{chunk[:200]}…"
-            )
+            assert is_markdownv2_balanced(chunk), f"unbalanced chunk would trigger Telegram rejection:\n{chunk[:200]}…"
 
     def test_minimal_orphan_bold_chunk_caught_by_parity(self):
         """Direct check: if any chunk ends up unbalanced by any code path,

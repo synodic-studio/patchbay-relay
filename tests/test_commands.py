@@ -359,6 +359,7 @@ class TestCmdRestart:
         # Make drain very long so the test would hang if force wasn't honored.
         # Patch all aliases — cmd_restart reads via patchbay.config.
         import patchbay.config as _cfg
+
         monkeypatch.setattr(bridge, "RESTART_DRAIN_TIMEOUT", 9999)
         monkeypatch.setattr(_cfg, "RESTART_DRAIN_TIMEOUT", 9999)
         update = _make_update(text="/restart force")
@@ -381,6 +382,7 @@ class TestCmdRestart:
         # Long drain — test should still finish fast because proc "exits".
         # Patch all aliases — cmd_restart reads via patchbay.config.
         import patchbay.config as _cfg
+
         monkeypatch.setattr(bridge, "RESTART_DRAIN_TIMEOUT", 60)
         monkeypatch.setattr(_cfg, "RESTART_DRAIN_TIMEOUT", 60)
         update = _make_update()

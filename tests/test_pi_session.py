@@ -28,14 +28,21 @@ def test_pi_harness_is_context_query_capable():
 
 def test_prefers_real_token_usage(tmp_path):
     f = tmp_path / "s.jsonl"
-    _write_session(f, [
-        {"type": "session", "id": "abc", "cwd": "/x"},
-        {"type": "message", "message": {"role": "user", "content": "hi"}},
-        {"type": "message", "message": {
-            "role": "assistant", "content": [{"type": "text", "text": "hello"}],
-            "usage": {"input": 1200, "cacheRead": 300, "cacheWrite": 0, "output": 50},
-        }},
-    ])
+    _write_session(
+        f,
+        [
+            {"type": "session", "id": "abc", "cwd": "/x"},
+            {"type": "message", "message": {"role": "user", "content": "hi"}},
+            {
+                "type": "message",
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "hello"}],
+                    "usage": {"input": 1200, "cacheRead": 300, "cacheWrite": 0, "output": 50},
+                },
+            },
+        ],
+    )
     cu = context_usage_from_session(f, "gpt-4o", fallback_window=10_000)
     # input + cacheRead + cacheWrite (not output)
     assert cu.used_tokens == 1500
@@ -45,13 +52,20 @@ def test_prefers_real_token_usage(tmp_path):
 def test_falls_back_to_estimate_when_usage_is_zero(tmp_path):
     # A local model that reports no tokens: estimate from transcript text.
     f = tmp_path / "s.jsonl"
-    _write_session(f, [
-        {"type": "message", "message": {"role": "user", "content": "x" * 400}},
-        {"type": "message", "message": {
-            "role": "assistant", "content": [{"type": "text", "text": "y" * 400}],
-            "usage": {"input": 0, "cacheRead": 0, "cacheWrite": 0, "output": 0},
-        }},
-    ])
+    _write_session(
+        f,
+        [
+            {"type": "message", "message": {"role": "user", "content": "x" * 400}},
+            {
+                "type": "message",
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "y" * 400}],
+                    "usage": {"input": 0, "cacheRead": 0, "cacheWrite": 0, "output": 0},
+                },
+            },
+        ],
+    )
     cu = context_usage_from_session(f, "nope/nope", fallback_window=10_000)
     assert cu.used_tokens > 0  # estimated from the ~800 chars of transcript
 
@@ -62,17 +76,28 @@ def test_pi_harness_is_usage_query_capable():
 
 def test_session_usage_sums_cost_and_tokens(tmp_path):
     f = tmp_path / "s.jsonl"
-    _write_session(f, [
-        {"type": "message", "message": {"role": "user", "content": "hi"}},
-        {"type": "message", "message": {
-            "role": "assistant", "content": "a",
-            "usage": {"input": 100, "output": 20, "totalTokens": 120, "cost": {"total": 0.0012}},
-        }},
-        {"type": "message", "message": {
-            "role": "assistant", "content": "b",
-            "usage": {"input": 200, "output": 30, "totalTokens": 230, "cost": {"total": 0.0034}},
-        }},
-    ])
+    _write_session(
+        f,
+        [
+            {"type": "message", "message": {"role": "user", "content": "hi"}},
+            {
+                "type": "message",
+                "message": {
+                    "role": "assistant",
+                    "content": "a",
+                    "usage": {"input": 100, "output": 20, "totalTokens": 120, "cost": {"total": 0.0012}},
+                },
+            },
+            {
+                "type": "message",
+                "message": {
+                    "role": "assistant",
+                    "content": "b",
+                    "usage": {"input": 200, "output": 30, "totalTokens": 230, "cost": {"total": 0.0034}},
+                },
+            },
+        ],
+    )
     u = session_usage(f, model="gpt-4o")
     assert u.cost_usd == round(0.0012 + 0.0034, 4)
     assert u.input_tokens == 300
