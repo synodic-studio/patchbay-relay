@@ -22,7 +22,7 @@ from patchbay import config as _config
 from patchbay.activity import log_activity
 from patchbay.config import DEFAULT_HARNESS
 from patchbay.efforts import DEFAULT_EFFORT, get_chat_effort
-from patchbay.models import DEFAULT_MODEL, get_chat_model
+from patchbay.models import default_model_label, resolve_model
 from patchbay.projects import get_chat_harness
 from patchbay.sessions import _session_key, clear_session
 
@@ -36,9 +36,9 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/setproject <path> - Set project dir (relative to ~/Developer)\n"
         "/setproject - Clear project binding (use default)\n"
         "/project - Show current project dir\n"
-        "/model - Set model (small/medium/large/gpt/opus/write/…) or prefix with !s !m !l\n"
+        "/model - Set model for the active harness (pi shortcuts: !s !m !l)\n"
         "/effort - Set effort level (low/medium/high/xhigh/max)\n"
-        "/harness - Show or set the agent backend (pi)\n"
+        "/harness - Show or set the agent backend (pi/codex)\n"
         "/remote-control - Start claude remote-control in this topic's project dir\n"
         "/remote-control stop - Stop remote-control\n"
         "/kill - Kill active Claude process\n"
@@ -60,7 +60,7 @@ async def cmd_clearnew(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     key = _session_key(chat_id, thread_id)
     clear_session(key)
     harness = get_chat_harness(key) or DEFAULT_HARNESS
-    model = get_chat_model(key) or DEFAULT_MODEL
+    model = resolve_model(key, harness=harness) or default_model_label(harness)
     effort = get_chat_effort(key) or DEFAULT_EFFORT
     await update.message.reply_text(
         f"Fresh session started.\nHarness: {harness}\nModel: {model}\nEffort: {effort}"

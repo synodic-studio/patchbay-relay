@@ -115,6 +115,7 @@ from patchbay.sessions import (  # noqa: E402
 from patchbay.harness import (  # noqa: E402
     CAPABILITIES_BY_NAME,
     PiHarness,
+    CodexHarness,
     ToolUse,  # noqa: F401 — re-exported for tests
     TurnError,
     TurnFinal,
@@ -266,15 +267,19 @@ async def _interrupt_session_async(state: "SessionState") -> None:
 
 
 async def _cancel_session_async(state: "SessionState") -> None:
-    """Hard cancel — SIGKILL the pi subprocess.
-
-    `state.proc` holds the Popen handle; SIGKILL via `proc.kill()`.
-    Sync, immediate; the harness's drain returns and
-    `_drive_harness_sync` exits naturally.
-
-    Idempotent and silent on error — callers (cmd_kill, stall detector,
-    shutdown) treat this as a fire-and-forget request.
-    """
+    """Cancel through the harness so intentional kills never trigger OOM retry."""
+    harness = state.harness
+    worker_loop = state.worker_loop
+    if harness is not None:
+        try:
+            if worker_loop is not None and worker_loop is not asyncio.get_running_loop():
+                future = asyncio.run_coroutine_threadsafe(harness.cancel(), worker_loop)
+                await asyncio.wrap_future(future)
+            else:
+                await harness.cancel()
+            return
+        except (OSError, RuntimeError):
+            logger.exception("Harness cancellation failed; killing subprocess")
     proc = state.proc
     if proc is not None:
         try:
@@ -408,7 +413,7 @@ def _drive_harness_sync(
 
     When `state` is given, we mirror the harness instance and the
     worker-thread's event loop into it for the duration of the turn.
-    `_cancel_session_async` uses `state.proc.kill()` for cancellation.
+    `_cancel_session_async` schedules cancellation on this worker loop.
     The fields are cleared in `finally`.
     """
     events: list = []
@@ -442,7 +447,7 @@ def run_claude(
     only. Used by the OOM self-heal path (see patchbay/self_heal.py) to
     retry with a tighter turn budget after a kill.
     """
-    session_id = get_session_id(session_key)
+    session_id = None  # resolved after selecting the harness
     chat_cwd = get_chat_working_dir(session_key)
 
     projects = _load_chat_projects()
@@ -550,11 +555,6 @@ def run_claude(
             "headless-safe alternative (swift test, tuist build, unit tests, static analysis)."
         )
 
-    # Resolve model / effort the same way the legacy path did.
-    if not model:
-        model = resolve_model(session_key)
-    effort = resolve_effort(session_key)
-
     # Resolve harness: per-chat override > DEFAULT_HARNESS env. Every
     # supported harness is dispatched directly — selection is logged on
     # every activity entry under `harness=` and `harness_requested=` so
@@ -569,6 +569,11 @@ def run_claude(
         )
         harness_name = DEFAULT_HARNESS
     effective_harness = harness_name
+    session_id = (get_session_id(session_key, harness=harness_name)
+                  if harness_name != "pi" else get_session_id(session_key))
+    if not model:
+        model = resolve_model(session_key, harness=harness_name)
+    effort = resolve_effort(session_key)
 
     if session_id:
         logger.info("Resuming session %s for %s", session_id[:12], session_key)
@@ -608,7 +613,8 @@ def run_claude(
     # Pi (badlogicgames/pi) — multi-model coding agent. Uses its own
     # session storage (~/.pi/agent/sessions). Subprocess-based, so
     # proc_setter mirrors into state.proc for /kill / stall.
-    harness = PiHarness(
+    harness_cls = CodexHarness if harness_name == "codex" else PiHarness
+    harness = harness_cls(
         max_timeout_seconds=MAX_TIMEOUT,
         on_progress=_on_progress,
         proc_setter=_proc_setter,
@@ -734,7 +740,7 @@ def run_claude(
         if final.kind == "max_turns":
             sess_id = final.metadata.get("session_id")
             if sess_id:
-                save_session_id(session_key, sess_id)
+                save_session_id(session_key, sess_id, harness=effective_harness)
             num_turns = final.metadata.get("num_turns")
             _log_activity(
                 "turn_complete",
@@ -771,7 +777,10 @@ def run_claude(
     # Success path — TurnFinal with the aggregated text.
     if isinstance(final, TurnFinal):
         if final.session_id:
-            save_session_id(session_key, final.session_id)
+            if effective_harness == "pi":
+                save_session_id(session_key, final.session_id)
+            else:
+                save_session_id(session_key, final.session_id, harness=effective_harness)
             logger.info("Saved session %s for %s", final.session_id[:12], session_key)
         _log_activity(
             "turn_complete",
@@ -1111,7 +1120,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     logger.info("From %d [%s]: %s", user_id, key, text[:80])
     _log_activity("message", user_id=user_id, session_key=key, text_len=len(text))
 
-    msg_model, clean_text = extract_model_prefix(text)
+    msg_model, clean_text = extract_model_prefix(text, harness=get_chat_harness(key) or DEFAULT_HARNESS)
 
     # Feature 5: inject quoted text when replying to a bot message
     reply_msg = update.message.reply_to_message
@@ -1460,7 +1469,7 @@ async def post_init(app: Application) -> None:
         BotCommand("clearnew", "Start a fresh conversation"),
         BotCommand("setproject", "Set project dir (relative to ~/Developer)"),
         BotCommand("project", "Show current project dir"),
-        BotCommand("harness", "Set agent backend (pi)"),
+        BotCommand("harness", "Set agent backend (pi / codex)"),
         BotCommand("model", "Set model (opus/sonnet/haiku)"),
         BotCommand("effort", "Set effort level (low/medium/high/xhigh/max)"),
         BotCommand("remote_control", "Start/stop claude remote-control in project dir"),

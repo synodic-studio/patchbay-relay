@@ -1,13 +1,15 @@
-"""Chat-to-model mapping and per-message model prefix parsing.
+"""Harness-specific chat models and pi per-message model prefix parsing.
 
 Pi uses litellm under the hood and supports model IDs in `provider/id` format
 (e.g. `openai/gpt-4o`, `anthropic/claude-sonnet-4-20250514`) as well as
 built-in aliases like `small`, `medium`, `large`, `gpt`, `opus`, `write`, etc.
 
-The default model is `small` — a fast, capable litellm alias.
+Pi defaults to `small`. Codex defaults to CODEX_MODEL or its own CLI config.
+Legacy unprefixed chat keys belong to pi; other harnesses use namespaced keys.
 """
 
 import json
+import os
 import re
 import subprocess
 
@@ -39,6 +41,8 @@ _PI_SHORTCUTS: dict[str, str] = {
 # Everything we accept via /\model or prefix
 VALID_MODELS = _PI_LITELLM_ALIASES + tuple(_PI_SHORTCUTS.keys())
 DEFAULT_MODEL = "small"
+# None delegates to the model configured by the subscription-authenticated CLI.
+CODEX_MODEL = os.getenv("CODEX_MODEL", "").strip() or None
 
 # Prefix pattern: message starts with !model_name followed by whitespace
 _PREFIX_RE = re.compile(
@@ -61,38 +65,59 @@ def _save_chat_models(models: dict[str, str]) -> None:
     CHAT_MODELS_FILE.write_text(json.dumps(models, indent=2) + "\n")
 
 
-def get_chat_model(session_key: str) -> str | None:
-    """Return the sticky model alias for a chat, or None for default."""
-    return _load_chat_models().get(session_key)
+def get_chat_model(session_key: str, *, harness: str = "pi") -> str | None:
+    """Return this harness's sticky model for a chat, or None for default."""
+    key = session_key if harness == "pi" else f"{harness}:{session_key}"
+    return _load_chat_models().get(key)
 
 
-def set_chat_model(session_key: str, model: str | None) -> None:
+def set_chat_model(
+    session_key: str, model: str | None, *, harness: str = "pi"
+) -> None:
     """Set or clear the sticky model for a chat."""
     models = _load_chat_models()
+    key = session_key if harness == "pi" else f"{harness}:{session_key}"
     if model is None:
-        models.pop(session_key, None)
+        models.pop(key, None)
     else:
-        models[session_key] = model
+        models[key] = model
     _save_chat_models(models)
 
 
-def resolve_model(session_key: str) -> str:
-    """Resolve the model to use: per-chat override, else DEFAULT_MODEL."""
-    return get_chat_model(session_key) or DEFAULT_MODEL
+def resolve_model(session_key: str, *, harness: str = "pi") -> str | None:
+    """Resolve this harness's override or default; None uses Codex CLI config."""
+    default = CODEX_MODEL if harness == "codex" else DEFAULT_MODEL
+    return get_chat_model(session_key, harness=harness) or default
 
 
-def extract_model_prefix(message: str) -> tuple[str | None, str]:
+def extract_model_prefix(
+    message: str, *, harness: str = "pi"
+) -> tuple[str | None, str]:
     """Check if message starts with a model prefix like !opus or !s.
 
     Returns (model_name, cleaned_message). If no prefix, returns (None, original).
     Shortcuts (s, m, l, g, o, w) are expanded to their full alias.
     """
+    if harness != "pi":
+        return None, message
     m = _PREFIX_RE.match(message)
     if not m:
         return None, message
     tag = m.group(1).lower()
     model = _PI_SHORTCUTS.get(tag, tag)
     return model, message[m.end() :]
+
+
+def model_is_valid(model: str, *, harness: str = "pi") -> bool:
+    """Accept pi aliases or explicit Codex model IDs without shell syntax."""
+    if harness == "codex":
+        return bool(re.fullmatch(r"(?:gpt-[a-z0-9][a-z0-9._-]*|o[1-9][a-z0-9._-]*)", model))
+    return model in VALID_MODELS
+
+
+def default_model_label(harness: str) -> str:
+    """Describe the default including delegation to Codex's own config."""
+    return (CODEX_MODEL or "Codex CLI config") if harness == "codex" else DEFAULT_MODEL
 
 
 def list_available_models() -> list[tuple[str, str]]:

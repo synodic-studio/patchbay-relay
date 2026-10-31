@@ -154,6 +154,11 @@ async def cmd_usage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("\n".join(lines))
         return
 
+    if harness_name == "codex":
+        await update.message.reply_text(
+            "Codex uses your ChatGPT subscription. Subscription limits are not available through this CLI adapter."
+        )
+        return
     await _ccusage_report(update)
 
 

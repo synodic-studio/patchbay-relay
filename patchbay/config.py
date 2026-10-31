@@ -184,7 +184,7 @@ MAX_WORKERS = _env_int("MAX_WORKERS", "4", min_value=1)
 # Pluggable agent backend. pi wraps badlogicgames/pi (multi-model via
 # litellm). Per-chat override lives in chat_projects.json under the
 # "harness" key; this value is the fallback when a topic has no override.
-VALID_HARNESSES = ("pi",)
+VALID_HARNESSES = ("pi", "codex")
 DEFAULT_HARNESS = "pi"
 if DEFAULT_HARNESS not in VALID_HARNESSES:
     raise SystemExit(f"PATCHBAY_DEFAULT_HARNESS={DEFAULT_HARNESS!r} is not one of {VALID_HARNESSES}")

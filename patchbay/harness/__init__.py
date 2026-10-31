@@ -26,12 +26,14 @@ from .base import (
     TurnRequest,
     UsageQueryCapableHarness,
 )
+from .codex import CodexHarness
 from .pi import PiHarness
 from .pi import _CAPABILITIES as _PI_CAPS
 
 
 CAPABILITIES_BY_NAME: dict[str, HarnessCapabilities] = {
     "pi": _PI_CAPS,
+    "codex": CodexHarness.capabilities,
 }
 
 __all__ = [
@@ -40,6 +42,7 @@ __all__ = [
     "ChannelHandle",
     "CompactCapableHarness",
     "CompactResult",
+    "CodexHarness",
     "ContextQueryCapableHarness",
     "ContextUsage",
     "Harness",

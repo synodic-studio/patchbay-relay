@@ -2,7 +2,7 @@
 
 **Run AI coding agents on your computer, from your phone.**
 
-> **Status: alpha, actively developed.** Patchbay has run my studio for months. It is currently **pi-only**: the Claude Agent SDK backends (`cc-sdk`, `cc-sdk-mop`) were removed because Anthropic is ending subscription (Max) coverage for embedded SDK use, so pi (multi-model via litellm) is the viable engine now. The `Harness` protocol is kept as an internal seam for adding a future non-Claude backend, so this stays a harness-agnostic design with one backend live today. MIT-licensed; fork freely.
+> **Status: alpha, actively developed.** Patchbay supports pi (multi-model via litellm) and Codex CLI using a ChatGPT subscription. pi remains the default. The earlier Claude Agent SDK backends were removed. MIT-licensed; fork freely.
 
 Patchbay bridges Telegram to a coding agent running on your own machine — currently [pi](https://github.com/badlogicgames/pi), a multi-model agent — letting you develop software, manage infrastructure, and run autonomous agents from a mobile messaging app while your real workstation does the actual work.
 
@@ -46,11 +46,13 @@ flowchart TD
     BR --> CP["chat_projects.json<br/>topic → directory + model"]
     BR --> H{"harness<br/>(per topic)"}
     H -->|pi| PI["pi<br/>(multi-model via litellm)"]
+    H -->|codex| CX["Codex CLI<br/>(ChatGPT subscription)"]
+    CX --> OUT["response chunking<br/>+ typing indicators"]
     PI --> OUT["response chunking<br/>+ typing indicators"]
     OUT --> SEND["Telegram Bot API<br/>send response"]
 ```
 
-The `Harness` protocol allows other backends, but pi is the only one live today (see the status note above). New harnesses slot in at the `harness` node.
+Both backends implement the `Harness` protocol. Select `/harness codex` or `/harness pi` per topic; switching resets the conversation and preserves each backend's model preference.
 
 ### Module map
 
@@ -83,14 +85,25 @@ patchbay/                 Core package
     context.py            /context, /compact
     heartbeat.py          /heartbeat
     inquiry.py            Shared one-shot harness resolver (/context, /usage)
-  harness/                Pluggable agent backends (pi live; protocol kept as a seam)
+  harness/                Pluggable agent backends (pi and Codex)
     base.py               Protocol + TurnEvent types + capability protocols
-    pi.py                 badlogicgames/pi multi-model agent (the live backend)
+    pi.py                 badlogicgames/pi multi-model agent
+    codex.py              Subscription-authenticated Codex CLI agent
     pi_session.py         Read context/usage from pi session transcripts
     context_estimate.py   Client-side token/context estimator (litellm-backed)
 validate.py               Pre-flight validation (syntax, imports, parser smoke tests)
 run.sh                    Entry point with crash-loop detection + known-good rollback
 ```
+
+### Codex subscription backend
+
+Install Codex CLI and authenticate it with your ChatGPT subscription (`codex login`). The relay uses that existing login and strips OpenAI API-key environment variables from Codex subprocesses to avoid API billing. It forces the OpenAI provider and ChatGPT authentication. Both agents run headlessly with the machine access authorized for the relay.
+
+Use `/harness codex` in a topic, then send a message. `/harness pi` returns to pi, and `/harness default` restores the default (pi). A switch starts a fresh conversation. Session files record their owning backend so an in-flight turn cannot cause a different harness to resume its session.
+
+Codex uses its CLI-configured model by default. Set `CODEX_MODEL` in `.env` to override that fallback, or use `/model <model-id>` for a topic-specific selection and `/model default` to clear it. Codex and pi model preferences are independent. pi message prefixes such as `!dsf` apply only to pi. `/effort` applies to Codex reasoning, with `max` mapped to `xhigh`.
+
+The adapter supports fresh/resumed turns, tool events, cancellation, timeout and quota reporting. Codex does not expose `/context`, `/compact`, or subscription limits through this adapter; these commands report the capability limitation. Subscription turns do not fabricate a dollar cost.
 
 ## Design decisions
 
@@ -100,7 +113,7 @@ A single Telegram chat would force the user to pick "what project am I working o
 
 ### Pluggable harness, single transport
 
-The bridge does not care which agent runs the turn. The `Harness` protocol (`patchbay/harness/base.py`) is a streaming-event interface that all backends conform to. Today there is exactly one live backend, badlogicgames/pi (`pi`, `patchbay/harness/pi.py`); the earlier Claude Agent SDK backends (`cc-sdk`, `cc-sdk-mop`) were removed when Anthropic ended embedded-subscription SDK use. The protocol is kept deliberately, so a future non-Claude framework can be added by implementing one class. Capabilities (resume, mid-turn push, MCP, tool streaming) are advertised via `HarnessCapabilities` so the bridge can degrade gracefully when a backend doesn't support a feature. Note pi already gives multi-*model* coverage via litellm; the harness seam is for a different *framework*, not a different model.
+The bridge does not care which agent runs the turn. The `Harness` protocol (`patchbay/harness/base.py`) is a streaming-event interface that all backends conform to. The live backends are badlogicgames/pi (`pi`, `patchbay/harness/pi.py`) and Codex CLI (`codex`, `patchbay/harness/codex.py`); the earlier Claude Agent SDK backends (`cc-sdk`, `cc-sdk-mop`) were removed when Anthropic ended embedded-subscription SDK use. The protocol is kept deliberately, so a future non-Claude framework can be added by implementing one class. Capabilities (resume, mid-turn push, MCP, tool streaming) are advertised via `HarnessCapabilities` so the bridge can degrade gracefully when a backend doesn't support a feature. Note pi already gives multi-*model* coverage via litellm; the harness seam is for a different *framework*, not a different model.
 
 ### Crash-loop detection + known-good rollback
 
@@ -116,11 +129,11 @@ Two bridge processes polling Telegram's `getUpdates` simultaneously will trigger
 
 ### 640 tests, all in plain pytest
 
-Test suite is 640 tests across 44 test files covering the bridge, the parser, the pi harness, all command handlers, the self-heal handlers, the singleton lock, and chaos cases (partial JSON, slow drip, hangs, OOM-style exits). Pre-push hook runs the full suite. No CI on the remote — quality gates are local.
+The test suite covers the bridge, the parser, the pi harness, all command handlers, the self-heal handlers, the singleton lock, and chaos cases (partial JSON, slow drip, hangs, OOM-style exits). Pre-push hook runs the full suite. No CI on the remote — quality gates are local.
 
 ## Features
 
-- **Harness-agnostic (pi-only today)** — the `Harness` protocol is retained as an internal seam; the one live backend is `pi` (badlogicgames/pi, multi-model via litellm). The `cc-sdk`/`cc-sdk-mop` backends were removed under Anthropic's embedded-subscription change.
+- **Harness-agnostic** — the `Harness` protocol supports `pi` (multi-model via litellm) and `codex` (ChatGPT subscription). The `cc-sdk`/`cc-sdk-mop` backends were removed under Anthropic's embedded-subscription change.
 - **Multi-project routing** — Each Telegram topic binds to a project directory via `chat_projects.json`. Each topic can target a different codebase.
 - **Per-topic agent identity** — Topics can load identity files (e.g. `SOUL.md`, `IDENTITY.md`, `AGENTS.md`) into the agent's system prompt to specialize behavior per persona.
 - **Crash-loop detection + known-good rollback** — `validate.py` pre-flight rolls back to a known-good snapshot on a bad self-edit; 3+ crashes in 5 minutes backs off and logs the crash tail for fix-forward. (The old autonomous Claude-repair trigger was removed; rollback already covers the bricking case.)
@@ -140,7 +153,7 @@ Anyone with a Mac and 30 minutes should be able to follow this end-to-end.
 - macOS (uses launchd for process management)
 - Python 3.13+
 - [uv](https://docs.astral.sh/uv/) for dependency management
-- [pi](https://github.com/badlogicgames/pi) on your `PATH` — the live harness (multi-model via litellm). `uv sync` installs the Python deps.
+- [pi](https://github.com/badlogicgames/pi) on your `PATH` — the default harness (multi-model via litellm). `uv sync` installs the Python deps.
 
 ### 2. Get a Telegram bot
 

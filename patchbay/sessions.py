@@ -38,8 +38,8 @@ def _session_key(chat_id: int, thread_id: int | None) -> str:
     return str(chat_id)
 
 
-def get_session_id(session_key: str) -> str | None:
-    """Load the Claude session ID for a chat. Returns None if expired or missing.
+def get_session_id(session_key: str, *, harness: str = "pi") -> str | None:
+    """Load a session owned by this harness; legacy records belong to pi.
 
     Corrupt or schema-violating session files are quarantined (moved to
     .quarantine/) rather than silently deleted — the self-healing principle.
@@ -65,15 +65,17 @@ def get_session_id(session_key: str) -> str | None:
             pass
         logger.info("Session expired for %s", session_key)
         return None
+    if data.get("harness", "pi") != harness:
+        return None
     return session_id
 
 
-def save_session_id(session_key: str, session_id: str) -> None:
-    """Persist a Claude session ID for a chat. Atomic: crash-safe."""
+def save_session_id(session_key: str, session_id: str, *, harness: str = "pi") -> None:
+    """Persist a session ID and its owning harness. Atomic: crash-safe."""
     session_key = _sanitize_session_key(session_key)
     atomic_write_text(
         SESSION_DIR / f"{session_key}.json",
-        json.dumps({"session_id": session_id, "last_active": time.time()}),
+        json.dumps({"session_id": session_id, "last_active": time.time(), "harness": harness}),
     )
 
 

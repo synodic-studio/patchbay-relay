@@ -38,9 +38,10 @@ from patchbay.efforts import (
     set_chat_effort,
 )
 from patchbay.models import (
-    DEFAULT_MODEL,
     VALID_MODELS,
+    default_model_label,
     get_chat_model,
+    model_is_valid,
     set_chat_model,
 )
 from patchbay.projects import (
@@ -162,39 +163,51 @@ async def cmd_project(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 async def cmd_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Set or show the model for this chat/topic.
 
-    Shows available pi/litellm models. Run `pi --list-models` for the
-    full list of supported aliases.
+    Pi uses its dynamic picker; Codex accepts explicit model IDs and delegates
+    its default to CODEX_MODEL or the CLI configuration.
     """
     chat_id = update.effective_chat.id
     thread_id = update.message.message_thread_id
     key = _session_key(chat_id, thread_id)
 
+    harness = get_chat_harness(key) or DEFAULT_HARNESS
+    default_label = default_model_label(harness)
     args = context.args
     if args:
         choice = args[0].lower()
         if choice == "default":
-            set_chat_model(key, None)
+            set_chat_model(key, None, harness=harness)
             await update.message.reply_text(
-                f"Model reset to default ({DEFAULT_MODEL})."
+                f"Model reset to default ({default_label})."
             )
             bridge.logger.info("Model cleared for %s", key)
             return
-        if choice not in VALID_MODELS:
+        if not model_is_valid(choice, harness=harness):
             await update.message.reply_text(
-                f"Invalid model. Pick from: {', '.join(VALID_MODELS)}, default"
+                ("Invalid Codex model. Use /model <model-id> (gpt-* or o*) or default."
+                 if harness == "codex" else
+                 f"Invalid model. Pick from: {', '.join(VALID_MODELS)}, default")
             )
             return
-        set_chat_model(key, choice)
+        set_chat_model(key, choice, harness=harness)
         await update.message.reply_text(
             f"Model set to {choice}. Takes effect on next message."
         )
         bridge.logger.info("Model set to %s for %s", choice, key)
         return
 
+    if harness == "codex":
+        current = get_chat_model(key, harness=harness) or f"default ({default_label})"
+        await update.message.reply_text(
+            f"Codex model: {current}\nUse /model <model-id> to select a model, "
+            "or /model default to use the configured default."
+        )
+        return
+
     # No args: show dynamic model picker via pi --list-models
     from patchbay.models import list_available_models
 
-    current = get_chat_model(key) or f"default ({DEFAULT_MODEL})"
+    current = get_chat_model(key) or f"default ({default_label})"
     available = list_available_models()
 
     # Build inline keyboard: up to 3 models per row
@@ -225,17 +238,19 @@ async def callback_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     thread_id = query.message.message_thread_id
     key = _session_key(chat_id, thread_id)
 
+    harness = get_chat_harness(key) or DEFAULT_HARNESS
+    default_label = default_model_label(harness)
     choice = query.data.split(":", 1)[1]
     if choice == "__default__":
-        set_chat_model(key, None)
-        await query.edit_message_text(f"Model reset to default ({DEFAULT_MODEL}).")
+        set_chat_model(key, None, harness=harness)
+        await query.edit_message_text(f"Model reset to default ({default_label}).")
         bridge.logger.info("Model cleared for %s", key)
         return
-    if choice not in VALID_MODELS:
+    if not model_is_valid(choice, harness=harness):
         await query.edit_message_text(f"Invalid model: {choice}")
         return
 
-    set_chat_model(key, choice)
+    set_chat_model(key, choice, harness=harness)
     await query.edit_message_text(
         f"Model set to {choice}. Takes effect on next message."
     )
@@ -311,39 +326,36 @@ async def callback_effort(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 async def cmd_harness(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Show the current agent backend harness for this chat/topic.
-
-    Only pi is available. `/harness default` clears the override.
-    """
+    """Show or select this topic's backend, clearing incompatible sessions."""
     chat_id = update.effective_chat.id
     thread_id = update.message.message_thread_id
     key = _session_key(chat_id, thread_id)
+    current = get_chat_harness(key) or DEFAULT_HARNESS
 
     args = context.args
     if args:
         choice = args[0].lower()
-        if choice == "default":
-            set_chat_harness(key, None)
-            await update.message.reply_text(
-                f"Harness reset to default ({DEFAULT_HARNESS})."
-            )
-            bridge.logger.info("Harness cleared for %s", key)
-            return
-        if choice not in VALID_HARNESSES:
+        if choice != "default" and choice not in VALID_HARNESSES:
             await update.message.reply_text(
                 f"Invalid harness. Choose: {', '.join(VALID_HARNESSES)}, default"
             )
             return
-        set_chat_harness(key, choice)
-        await update.message.reply_text(
-            f"Harness set to {choice}. Takes effect on next message."
-        )
-        bridge.logger.info("Harness set to %s for %s", choice, key)
+        selected = DEFAULT_HARNESS if choice == "default" else choice
+        set_chat_harness(key, None if choice == "default" else choice)
+        switched = selected != current
+        if switched:
+            clear_session(key)
+        label = (f"Harness reset to default ({selected})." if choice == "default"
+                 else f"Harness set to {selected}. Takes effect on next message.")
+        if switched:
+            label += " Session reset."
+        await update.message.reply_text(label)
+        bridge.logger.info("Harness set to %s for %s", selected, key)
         return
 
-    current = get_chat_harness(key) or DEFAULT_HARNESS
     await update.message.reply_text(
-        f"Harness: {current}"
+        f"Harness: {current}\nAvailable: {', '.join(VALID_HARNESSES)}\n"
+        "Use /harness <name> to switch."
     )
 
 

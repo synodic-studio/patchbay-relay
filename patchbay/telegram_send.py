@@ -25,6 +25,7 @@ than a per-module logger.
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 import re
 
 from telegram.constants import ParseMode
@@ -110,7 +111,12 @@ async def keep_typing(
             )
             return
         except RetryAfter as exc:
-            wait_seconds = float(getattr(exc, "retry_after", bridge.TYPING_INTERVAL))
+            retry_after = getattr(exc, "retry_after", bridge.TYPING_INTERVAL)
+            wait_seconds = (
+                retry_after.total_seconds()
+                if isinstance(retry_after, timedelta)
+                else float(retry_after)
+            )
             bridge.logger.warning(
                 "keep_typing rate-limited for chat=%s thread=%s; backing off %.1fs",
                 chat_id,

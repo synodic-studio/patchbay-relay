@@ -551,6 +551,7 @@ class TestKeepTyping:
 
         import bridge
 
+        monkeypatch.setenv("PTB_TIMEDELTA", "true")
         monkeypatch.setattr(bridge, "TYPING_MAX_FAILURES", 2)
         monkeypatch.setattr(bridge, "TYPING_INTERVAL", 10.0)  # default would be long
         bot = MagicMock()
@@ -574,6 +575,34 @@ class TestKeepTyping:
         # Would have given up after 2 failures if RetryAfter counted;
         # instead we made more calls and eventually succeeded.
         assert len(call_log) > 2
+
+    @pytest.mark.asyncio
+    async def test_retry_after_timedelta_uses_seconds(self, monkeypatch):
+        """Modern PTB RetryAfter values must back off instead of crashing."""
+        from datetime import timedelta
+
+        from telegram.error import RetryAfter
+
+        import bridge
+
+        monkeypatch.setenv("PTB_TIMEDELTA", "true")
+        bot = MagicMock()
+        bot.send_chat_action = AsyncMock(
+            side_effect=[RetryAfter(timedelta(milliseconds=125)), None]
+        )
+        waits = []
+
+        async def capture_wait(awaitable, *, timeout):
+            awaitable.close()
+            waits.append(timeout)
+            if len(waits) == 1:
+                raise asyncio.TimeoutError
+            return True
+
+        monkeypatch.setattr(asyncio, "wait_for", capture_wait)
+        await bridge.keep_typing(888, None, asyncio.Event(), bot)
+        assert waits[0] == 0.125
+        assert bot.send_chat_action.call_count == 2
 
     @pytest.mark.asyncio
     async def test_success_resets_failure_counter(self, monkeypatch):

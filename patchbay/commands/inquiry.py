@@ -11,26 +11,28 @@ from pathlib import Path
 
 from patchbay.config import MAX_TIMEOUT
 from patchbay.efforts import resolve_effort
-from patchbay.harness import PiHarness, TurnRequest
-from patchbay.models import get_chat_model
-from patchbay.projects import get_chat_working_dir
+from patchbay.harness import CodexHarness, PiHarness, TurnRequest
+from patchbay.models import resolve_model
+from patchbay.projects import get_chat_harness, get_chat_working_dir
 from patchbay.sessions import get_session_id
 
 
 def resolve_harness_for_inquiry(session_key: str):
     """Return (harness_name, harness, req) for a one-shot inquiry on this topic.
 
-    Only pi is live today; when other harnesses return, this is where their
-    instance would be selected per the topic's configured harness.
+    Select the same backend and model as the topic's next message.
     """
     from patchbay.config import DEFAULT_HARNESS
 
     chat_cwd = get_chat_working_dir(session_key)
-    session_id = get_session_id(session_key)
-    model = get_chat_model(session_key)
+    harness_name = get_chat_harness(session_key) or DEFAULT_HARNESS
+    session_id = (get_session_id(session_key, harness=harness_name)
+                  if harness_name != "pi" else get_session_id(session_key))
+    model = resolve_model(session_key, harness=harness_name)
     effort = resolve_effort(session_key)
 
-    harness = PiHarness(max_timeout_seconds=MAX_TIMEOUT)
+    harness_cls = CodexHarness if harness_name == "codex" else PiHarness
+    harness = harness_cls(max_timeout_seconds=MAX_TIMEOUT)
 
     req = TurnRequest(
         prompt="",
@@ -45,4 +47,4 @@ def resolve_harness_for_inquiry(session_key: str):
         max_turns=None,
         plugin_dir=None,
     )
-    return DEFAULT_HARNESS, harness, req
+    return harness_name, harness, req

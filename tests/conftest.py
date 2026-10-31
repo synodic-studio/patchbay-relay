@@ -18,6 +18,7 @@ import pytest
 #
 # kind ∈ {"dir", "file"}: dir paths are pre-created; file paths are not.
 _PRODUCTION_PATH_GROUPS = [
+    ("chat_models_file", "file", [("patchbay.models", "CHAT_MODELS_FILE")]),
     (
         "session_dir",
         "dir",

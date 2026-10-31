@@ -28,7 +28,8 @@ Agent SDK, pi, codex/cursor, …) behind one interface.
 | 5a — Pi harness | ✅ | `patchbay/harness/pi.py` — wraps `pi -p --mode json`. Resume via `--session <id>`, multi-model via `--model PROVIDER/ID`, classified errors from `stopReason==error`. 29 tests + smoke-tested end-to-end with deepseek (cost, session resume, BANANA recall). |
 | 5b — Aider harness | ✅ | `patchbay/harness/aider.py` — wraps `aider --message` with banner stripping. session_id is the chat-history file path under `aider-history/`. Default model `openrouter/deepseek/deepseek-chat`, override via `STARGATE_AIDER_MODEL` env or per-chat `/model`. 24 tests + smoke-tested with deepseek (banner strip + cost parse). |
 | 5c — OpenCode harness | ✅ | `patchbay/harness/opencode.py` — wraps `opencode run --format json --pure --dangerously-skip-permissions`. Sessions are first-class `ses_*` UUIDs, resumed via `--session`. Effort maps to `--variant`. 21 tests + smoke-tested with deepseek (resume across two turns). |
-| 5z — codex/cursor/gemini | future | Lower priority. |
+| Codex CLI | live | Subscription-authenticated `codex exec --json`, fresh/resumed sessions, tool events, cancellation, and effort. pi remains the default. |
+| cursor/gemini | future | Lower priority. |
 
 ## What 1b core delivered
 
@@ -129,7 +130,7 @@ work is the live soak (the original "phase 3" goal):
 | Does SDK share CLI session storage? | Yes. Both use `~/.claude/projects/<encoded-cwd>/<uuid>.jsonl`. Cross-resume works. |
 | How are quota errors surfaced? | SDK has typed `AssistantMessage.error == "rate_limit"`. Backstop on `ProcessError.stderr` + `ResultMessage.errors` for non-typed paths. |
 | SDK failure isolation? | SDK runs CLI as subprocess. Same blast radius as today. OOM kills the child. |
-| Capability gaps for non-Claude backends? | `HarnessCapabilities` flags. `supports_resume=False` is the main one for codex/cursor. |
+| Capability gaps for non-Claude backends? | `HarnessCapabilities` flags. Codex supports resume; context/usage/compact queries and in-flight push remain unsupported by its CLI adapter. |
 
 ## Risks for the remaining phases
 
