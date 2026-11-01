@@ -209,9 +209,12 @@ async def cmd_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     buttons = []
     row = []
+    columns = 2 if harness == "codex" else 3
     for name, label in available:
+        if harness == "codex":
+            label = label.removeprefix("GPT-")
         row.append(InlineKeyboardButton(label, callback_data=f"model:{harness}:{name}"))
-        if len(row) >= 3:
+        if len(row) >= columns:
             buttons.append(row)
             row = []
     if row:

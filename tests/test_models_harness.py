@@ -160,15 +160,25 @@ def make_callback(data):
 
 
 @pytest.mark.asyncio
-async def test_codex_picker_contains_catalog_models_and_scoped_default():
+async def test_codex_picker_contains_catalog_models_and_scoped_default(monkeypatch):
+    catalog = [
+        ("gpt-6-astra", "GPT-6-Astra"),
+        ("gpt-5.6-sol", "GPT-5.6-Sol"),
+        ("gpt-5.6-terra", "GPT-5.6-Terra"),
+        ("gpt-5.6-luna", "GPT-5.6-Luna"),
+    ]
+    monkeypatch.setattr(models.codex_models, "list_codex_models", lambda: catalog)
     projects.set_chat_harness("11_22", "codex")
     update, context = make_update([])
     await project.cmd_model(update, context)
     keyboard = update.message.reply_text.call_args.kwargs["reply_markup"].inline_keyboard
+    assert [len(row) for row in keyboard] == [2, 2, 1]
     buttons = [(button.text, button.callback_data) for row in keyboard for button in row]
     assert buttons == [
-        ("GPT 5.4", "model:codex:gpt-5.4"),
-        ("Codex Mini", "model:codex:codex-mini-latest"),
+        ("6-Astra", "model:codex:gpt-6-astra"),
+        ("5.6-Sol", "model:codex:gpt-5.6-sol"),
+        ("5.6-Terra", "model:codex:gpt-5.6-terra"),
+        ("5.6-Luna", "model:codex:gpt-5.6-luna"),
         ("default", "model:codex:__default__"),
     ]
 
