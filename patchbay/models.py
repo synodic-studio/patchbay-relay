@@ -14,6 +14,7 @@ import re
 import subprocess
 
 from .config import BASE_DIR
+from .harness import codex_models
 
 CHAT_MODELS_FILE = BASE_DIR / "chat_models.json"
 
@@ -105,9 +106,9 @@ def extract_model_prefix(message: str, *, harness: str = "pi") -> tuple[str | No
 
 
 def model_is_valid(model: str, *, harness: str = "pi") -> bool:
-    """Accept pi aliases or explicit Codex model IDs without shell syntax."""
+    """Accept pi aliases or models in the subscription-authenticated Codex catalog."""
     if harness == "codex":
-        return bool(re.fullmatch(r"(?:gpt-[a-z0-9][a-z0-9._-]*|o[1-9][a-z0-9._-]*)", model))
+        return any(model == model_id for model_id, _ in codex_models.list_codex_models())
     return model in VALID_MODELS
 
 

@@ -37,6 +37,7 @@ from patchbay.efforts import (
     get_chat_effort,
     set_chat_effort,
 )
+from patchbay.harness import codex_models
 from patchbay.models import (
     VALID_MODELS,
     default_model_label,
@@ -173,10 +174,15 @@ async def cmd_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await update.message.reply_text(f"Model reset to default ({default_label}).")
             bridge.logger.info("Model cleared for %s", key)
             return
-        if not model_is_valid(choice, harness=harness):
+        try:
+            valid = await asyncio.to_thread(model_is_valid, choice, harness=harness)
+        except codex_models.CodexModelsUnavailable:
+            await update.message.reply_text("Codex models are unavailable right now. Try /model again.")
+            return
+        if not valid:
             await update.message.reply_text(
                 (
-                    "Invalid Codex model. Use /model <model-id> (gpt-* or o*) or default."
+                    "Invalid Codex model. Use /model to pick an available model."
                     if harness == "codex"
                     else f"Invalid model. Pick from: {', '.join(VALID_MODELS)}, default"
                 )
@@ -187,37 +193,31 @@ async def cmd_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         bridge.logger.info("Model set to %s for %s", choice, key)
         return
 
+    current = get_chat_model(key, harness=harness) or f"default ({default_label})"
     if harness == "codex":
-        current = get_chat_model(key, harness=harness) or f"default ({default_label})"
-        await update.message.reply_text(
-            f"Codex model: {current}\nUse /model <model-id> to select a model, "
-            "or /model default to use the configured default."
-        )
-        return
+        try:
+            available = await asyncio.to_thread(codex_models.list_codex_models)
+        except codex_models.CodexModelsUnavailable:
+            await update.message.reply_text("Codex models are unavailable right now. Try /model again.")
+            return
+        heading = f"Codex model: {current}\nPick a model (/model):"
+    else:
+        from patchbay.models import list_available_models
 
-    # No args: show dynamic model picker via pi --list-models
-    from patchbay.models import list_available_models
+        available = [(name, name) for name, _ in list_available_models()]
+        heading = f"Current model: {current}\nPick a model (or prefix with !<shortcut> for one-shot):"
 
-    current = get_chat_model(key) or f"default ({default_label})"
-    available = list_available_models()
-
-    # Build inline keyboard: up to 3 models per row
     buttons = []
     row = []
-    for name, details in available:
-        label = name
-        row.append(InlineKeyboardButton(label, callback_data=f"model:{name}"))
+    for name, label in available:
+        row.append(InlineKeyboardButton(label, callback_data=f"model:{harness}:{name}"))
         if len(row) >= 3:
             buttons.append(row)
             row = []
     if row:
         buttons.append(row)
-    buttons.append([InlineKeyboardButton("default", callback_data="model:__default__")])
-
-    await update.message.reply_text(
-        f"Current model: {current}\nPick a model (or prefix with !<shortcut> for one-shot):",
-        reply_markup=InlineKeyboardMarkup(buttons),
-    )
+    buttons.append([InlineKeyboardButton("default", callback_data=f"model:{harness}:__default__")])
+    await update.message.reply_text(heading, reply_markup=InlineKeyboardMarkup(buttons))
 
 
 async def callback_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -231,13 +231,26 @@ async def callback_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     harness = get_chat_harness(key) or DEFAULT_HARNESS
     default_label = default_model_label(harness)
-    choice = query.data.split(":", 1)[1]
+    payload = query.data.split(":", 1)[1]
+    if ":" in payload:
+        menu_harness, choice = payload.split(":", 1)
+    else:
+        # Model menus predating harness binding were generated for pi.
+        menu_harness, choice = "pi", payload
+    if menu_harness != harness:
+        await query.edit_message_text("This model menu belongs to another harness. Use /model to open a current menu.")
+        return
     if choice == "__default__":
         set_chat_model(key, None, harness=harness)
         await query.edit_message_text(f"Model reset to default ({default_label}).")
         bridge.logger.info("Model cleared for %s", key)
         return
-    if not model_is_valid(choice, harness=harness):
+    try:
+        valid = await asyncio.to_thread(model_is_valid, choice, harness=harness)
+    except codex_models.CodexModelsUnavailable:
+        await query.edit_message_text("Codex models are unavailable right now. Try /model again.")
+        return
+    if not valid:
         await query.edit_message_text(f"Invalid model: {choice}")
         return
 

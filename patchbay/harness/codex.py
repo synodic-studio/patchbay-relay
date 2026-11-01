@@ -20,6 +20,37 @@ CODEX_PATH_DEFAULT = shutil.which("codex") or "/opt/homebrew/bin/codex"
 _RATE_LIMIT_TOKENS = ("rate limit", "rate_limit", "quota", "too many requests", "429", "usage limit", "limit reached")
 
 
+def _normalize_diagnostic(value: object, depth: int = 0) -> str:
+    """Unwrap CLI/API error envelopes before showing or classifying them."""
+    if depth >= 16:
+        return "Codex returned an unreadable error."
+    if isinstance(value, str):
+        text = value.strip()
+        try:
+            decoded = json.loads(text)
+        except json.JSONDecodeError:
+            lines = text.splitlines()
+            if len(lines) > 1:
+                return _normalize_diagnostic(lines, depth + 1)
+            return text
+        if isinstance(decoded, (dict, list, str)):
+            return _normalize_diagnostic(decoded, depth + 1)
+        return text
+    if isinstance(value, dict):
+        code = value.get("code")
+        if code == "model_not_found":
+            return (
+                "This model is unavailable with your Codex subscription login. Use /model to choose an available model."
+            )
+        detail = value.get("error") or value.get("message") or value.get("detail")
+        message = _normalize_diagnostic(detail, depth + 1) if detail else "Codex turn failed"
+        return f"{message} ({code})" if isinstance(code, str) and code else message
+    if isinstance(value, list):
+        messages = [_normalize_diagnostic(item, depth + 1) for item in value]
+        return "\n".join(dict.fromkeys(message for message in messages if message))
+    return str(value) if value is not None else "Codex turn failed"
+
+
 @dataclass
 class _Exit:
     code: int
@@ -108,7 +139,7 @@ class CodexHarness:
                     yield event
                     return
                 if isinstance(event, _Exit):
-                    error_text = "\n".join(errors) or event.stderr.strip()
+                    error_text = "\n".join(errors) or _normalize_diagnostic(event.stderr)
                     metadata = {
                         "session_id": session_id,
                         "exit_code": event.code,
@@ -150,7 +181,9 @@ class CodexHarness:
                     if event_type == "turn.failed":
                         turn_failed = True
                     error = event.get("error") or event.get("message") or "Codex turn failed"
-                    errors.append(str(error.get("message", error)) if isinstance(error, dict) else str(error))
+                    diagnostic = _normalize_diagnostic(error)
+                    if diagnostic not in errors:
+                        errors.append(diagnostic)
                 elif event_type in ("item.started", "item.completed"):
                     item = event.get("item")
                     if not isinstance(item, dict):

@@ -89,6 +89,7 @@ patchbay/                 Core package
     base.py               Protocol + TurnEvent types + capability protocols
     pi.py                 badlogicgames/pi multi-model agent
     codex.py              Subscription-authenticated Codex CLI agent
+    codex_models.py       Authenticated model discovery for the Telegram picker
     pi_session.py         Read context/usage from pi session transcripts
     context_estimate.py   Client-side token/context estimator (litellm-backed)
 validate.py               Pre-flight validation (syntax, imports, parser smoke tests)
@@ -101,7 +102,7 @@ Install Codex CLI and authenticate it with your ChatGPT subscription (`codex log
 
 Use `/harness codex` in a topic, then send a message. `/harness pi` returns to pi, and `/harness default` restores the default (pi). A switch starts a fresh conversation. Session files record their owning backend so an in-flight turn cannot cause a different harness to resume its session.
 
-Codex uses its CLI-configured model by default. Set `CODEX_MODEL` in `.env` to override that fallback, or use `/model <model-id>` for a topic-specific selection and `/model default` to clear it. Codex and pi model preferences are independent. pi message prefixes such as `!dsf` apply only to pi. `/effort` applies to Codex reasoning, with `max` mapped to `xhigh`.
+Codex uses its CLI-configured model by default. Set `CODEX_MODEL` in `.env` to override that fallback. `/model` opens an in-chat menu populated by the logged-in account's visible Codex model catalog (`model/list` through app-server); hidden models are excluded. Both button selections and typed `/model <model-id>` choices are checked against that catalog, with no guessed fallback if discovery fails. `/model default` clears the topic override. Codex and pi model preferences are independent. pi message prefixes such as `!dsf` apply only to pi. `/effort` applies to Codex reasoning, with `max` mapped to `xhigh`.
 
 The adapter supports fresh/resumed turns, tool events, cancellation, timeout and quota reporting. Codex does not expose `/context`, `/compact`, or subscription limits through this adapter; these commands report the capability limitation. Subscription turns do not fabricate a dollar cost.
 

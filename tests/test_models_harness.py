@@ -15,6 +15,13 @@ def isolate_models(tmp_path, monkeypatch):
     monkeypatch.setattr(models, "CHAT_MODELS_FILE", tmp_path / "chat_models.json")
     monkeypatch.setattr(projects, "CHAT_PROJECTS_FILE", tmp_path / "chat_projects.json")
     monkeypatch.setattr(models, "CODEX_MODEL", None, raising=False)
+    from patchbay.harness import codex_models
+
+    monkeypatch.setattr(
+        codex_models,
+        "list_codex_models",
+        lambda: [("gpt-5.4", "GPT 5.4"), ("codex-mini-latest", "Codex Mini")],
+    )
 
 
 def test_model_preferences_are_independent_for_each_harness():
@@ -91,7 +98,7 @@ async def test_stale_pi_picker_cannot_apply_alias_to_codex():
     update = SimpleNamespace(callback_query=query, effective_chat=SimpleNamespace(id=11))
     await project.callback_model(update, SimpleNamespace())
     assert models.get_chat_model("11_22", harness="codex") is None
-    assert "Invalid" in query.edit_message_text.call_args.args[0]
+    assert "/model" in query.edit_message_text.call_args.args[0]
 
 
 @pytest.mark.asyncio
@@ -140,3 +147,117 @@ async def test_fresh_codex_session_reports_codex_model():
     text = update.message.reply_text.call_args.args[0]
     assert "gpt-5.4" in text
     assert "dsf" not in text
+
+
+def make_callback(data):
+    query = SimpleNamespace(
+        answer=AsyncMock(),
+        edit_message_text=AsyncMock(),
+        message=SimpleNamespace(message_thread_id=22),
+        data=data,
+    )
+    return SimpleNamespace(callback_query=query, effective_chat=SimpleNamespace(id=11))
+
+
+@pytest.mark.asyncio
+async def test_codex_picker_contains_catalog_models_and_scoped_default():
+    projects.set_chat_harness("11_22", "codex")
+    update, context = make_update([])
+    await project.cmd_model(update, context)
+    keyboard = update.message.reply_text.call_args.kwargs["reply_markup"].inline_keyboard
+    buttons = [(button.text, button.callback_data) for row in keyboard for button in row]
+    assert buttons == [
+        ("GPT 5.4", "model:codex:gpt-5.4"),
+        ("Codex Mini", "model:codex:codex-mini-latest"),
+        ("default", "model:codex:__default__"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_codex_model_callback_stores_catalog_model():
+    projects.set_chat_harness("11_22", "codex")
+    update = make_callback("model:codex:codex-mini-latest")
+    await project.callback_model(update, SimpleNamespace())
+    assert models.get_chat_model("11_22", harness="codex") == "codex-mini-latest"
+
+
+@pytest.mark.asyncio
+async def test_codex_typed_unsupported_model_is_rejected():
+    projects.set_chat_harness("11_22", "codex")
+    update, context = make_update(["gpt-99-made-up"])
+    await project.cmd_model(update, context)
+    assert models.get_chat_model("11_22", harness="codex") is None
+    assert "Invalid" in update.message.reply_text.call_args.args[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("choice", ["gpt-5.4", "__default__"])
+async def test_stale_codex_menu_preserves_pi_choice(choice):
+    models.set_chat_model("11_22", "dsf")
+    update = make_callback(f"model:codex:{choice}")
+    await project.callback_model(update, SimpleNamespace())
+    assert models.get_chat_model("11_22") == "dsf"
+    assert "/model" in update.callback_query.edit_message_text.call_args.args[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("data", ["model:__default__", "model:pi:__default__"])
+async def test_stale_pi_default_cannot_clear_codex_choice(data):
+    projects.set_chat_harness("11_22", "codex")
+    models.set_chat_model("11_22", "gpt-5.4", harness="codex")
+    update = make_callback(data)
+    await project.callback_model(update, SimpleNamespace())
+    assert models.get_chat_model("11_22", harness="codex") == "gpt-5.4"
+    assert "/model" in update.callback_query.edit_message_text.call_args.args[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["menu", "typed", "callback"])
+async def test_codex_catalog_failure_explains_retry_without_writing(monkeypatch, mode):
+    from patchbay.harness import codex_models
+
+    projects.set_chat_harness("11_22", "codex")
+
+    def unavailable():
+        raise codex_models.CodexModelsUnavailable("unreachable")
+
+    monkeypatch.setattr(codex_models, "list_codex_models", unavailable)
+    if mode == "callback":
+        update = make_callback("model:codex:gpt-5.4")
+        await project.callback_model(update, SimpleNamespace())
+        sent = update.callback_query.edit_message_text.call_args.args[0]
+    else:
+        update, context = make_update([] if mode == "menu" else ["gpt-5.4"])
+        await project.cmd_model(update, context)
+        sent = update.message.reply_text.call_args.args[0]
+    assert "unavailable" in sent.lower()
+    assert "/model" in sent
+    assert models.get_chat_model("11_22", harness="codex") is None
+
+
+@pytest.mark.asyncio
+async def test_codex_callback_rejects_unsupported_model():
+    projects.set_chat_harness("11_22", "codex")
+    update = make_callback("model:codex:gpt-99-made-up")
+    await project.callback_model(update, SimpleNamespace())
+    assert models.get_chat_model("11_22", harness="codex") is None
+    assert "Invalid" in update.callback_query.edit_message_text.call_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_codex_default_callback_resets_only_codex():
+    projects.set_chat_harness("11_22", "codex")
+    models.set_chat_model("11_22", "dsf")
+    models.set_chat_model("11_22", "gpt-5.4", harness="codex")
+    update = make_callback("model:codex:__default__")
+    await project.callback_model(update, SimpleNamespace())
+    assert models.get_chat_model("11_22", harness="codex") is None
+    assert models.get_chat_model("11_22") == "dsf"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("data", ["model:dsf", "model:pi:dsf"])
+async def test_pi_legacy_and_scoped_callbacks_work(data):
+    update = make_callback(data)
+    await project.callback_model(update, SimpleNamespace())
+    assert models.get_chat_model("11_22") == "dsf"

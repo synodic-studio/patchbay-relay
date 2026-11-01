@@ -234,3 +234,49 @@ async def test_turn_failed_remains_terminal_even_with_later_completion(tmp_path)
     events = await collect(CodexHarness(codex_path=path), request(tmp_path))
     assert isinstance(events[-1], TurnError)
     assert "Model unavailable" in events[-1].message
+
+
+async def test_repeated_nested_model_error_is_readable_and_actionable(tmp_path):
+    diagnostic = {
+        "type": "error",
+        "status": 400,
+        "error": {
+            "type": "invalid_request_error",
+            "message": "The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account.",
+            "code": "model_not_found",
+        },
+    }
+    path = fake_codex(
+        tmp_path,
+        f"""
+        diagnostic = {json.dumps(diagnostic)!r}
+        print(json.dumps({{"type":"error", "message":diagnostic}}))
+        print(json.dumps({{"type":"error", "message":diagnostic}}))
+        print(json.dumps({{"type":"turn.failed", "error":{{"message":diagnostic}}}}))
+        sys.exit(1)
+    """,
+    )
+    events = await collect(CodexHarness(codex_path=path), request(tmp_path, model="gpt-6.1-sol"))
+    error = events[-1]
+    assert isinstance(error, TurnError) and error.kind == "process_died"
+    assert "/model" in error.message and "subscription login" in error.message
+    assert "{" not in error.message and '\\"' not in error.message
+    assert len(error.message.splitlines()) == 1
+    assert error.message.count("/model") == 1
+    assert not error.retryable
+
+
+async def test_nested_non_model_errors_keep_message_code_and_classification(tmp_path):
+    diagnostic = json.dumps(
+        {"error": {"message": json.dumps({"message": "Please retry later", "code": "rate_limit_exceeded"})}}
+    )
+    path = fake_codex(
+        tmp_path,
+        f"""
+        print(json.dumps({{"type":"error", "message":{diagnostic!r}}}))
+        print(json.dumps({{"type":"turn.failed", "error":{{"message":{diagnostic!r}}}}}))
+    """,
+    )
+    events = await collect(CodexHarness(codex_path=path), request(tmp_path))
+    assert isinstance(events[-1], TurnError) and events[-1].kind == "rate_limit"
+    assert events[-1].message == "Please retry later (rate_limit_exceeded)"
